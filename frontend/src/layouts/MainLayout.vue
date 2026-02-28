@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Menu as MenuIcon,
@@ -10,65 +10,87 @@ import {
   UserFilled,
   Promotion,
   Setting,
+  Search,
+  Bell
 } from '@element-plus/icons-vue'
-
-const collapsed = ref(false)
 
 const router = useRouter()
 const route = useRoute()
 
+// 响应式状态控制
+const collapsed = ref(false)
+const drawerVisible = ref(false)
+const windowWidth = ref(window.innerWidth)
+
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta?.title || '管理平台')
 
+// 计算当前屏幕断点
+const isMobile = computed(() => windowWidth.value < 768)
+const isTablet = computed(() => windowWidth.value >= 768 && windowWidth.value < 1024)
+
+// 监听屏幕尺寸变化的核心逻辑
+const handleResize = () => {
+  windowWidth.value = window.innerWidth
+  if (isMobile.value) {
+    collapsed.value = false 
+  } else if (isTablet.value) {
+    collapsed.value = true 
+    drawerVisible.value = false
+  } else {
+    collapsed.value = false 
+    drawerVisible.value = false
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+  handleResize()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
+
 const handleMenuSelect = (index) => {
   router.push(index)
+  if (isMobile.value) {
+    drawerVisible.value = false 
+  }
 }
 </script>
 
 <template>
   <el-container class="layout-root">
-    <el-aside :width="collapsed ? '64px' : '220px'" class="layout-aside">
+    
+    <el-aside v-if="!isMobile" :width="collapsed ? 'var(--sidebar-collapsed-width)' : 'var(--sidebar-width)'" class="layout-aside hidden-on-mobile">
       <div class="logo-area">
         <span class="logo-mark">E</span>
-        <span v-if="!collapsed" class="logo-text">E-Charge 管理平台</span>
+        <span v-show="!collapsed" class="logo-text">E-Charge 平台</span>
       </div>
-      <el-menu
-        :default-active="activeMenu"
-        class="menu"
-        :collapse="collapsed"
-        :collapse-transition="false"
-        @select="handleMenuSelect"
-      >
+      <el-menu :default-active="activeMenu" class="custom-menu" :collapse="collapsed" :collapse-transition="false" background-color="var(--sidebar-bg)" text-color="#a6adb4" active-text-color="#ffffff" @select="handleMenuSelect">
+        
         <el-menu-item index="/overview">
           <el-icon><Histogram /></el-icon>
-          <span>概览</span>
+          <template #title><span>概览</span></template>
         </el-menu-item>
 
         <el-sub-menu index="/orders">
-          <template #title>
-            <el-icon><Tickets /></el-icon>
-            <span>订单管理</span>
-          </template>
+          <template #title><el-icon><Tickets /></el-icon><span>订单管理</span></template>
           <el-menu-item index="/orders/history">历史订单</el-menu-item>
           <el-menu-item index="/orders/realtime">实时订单</el-menu-item>
           <el-menu-item index="/orders/abnormal">异常订单</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="/finance">
-          <template #title>
-            <el-icon><Wallet /></el-icon>
-            <span>财务管理</span>
-          </template>
+          <template #title><el-icon><Wallet /></el-icon><span>财务管理</span></template>
           <el-menu-item index="/finance/cards">绑卡管理</el-menu-item>
           <el-menu-item index="/finance/settlement">收益对账</el-menu-item>
-          <el-menu-item index="/finance/invoice">開票管理</el-menu-item>
+          <el-menu-item index="/finance/invoice">开票管理</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="/stations">
-          <template #title>
-            <el-icon><OfficeBuilding /></el-icon>
-            <span>电站电桩管理</span>
-          </template>
+          <template #title><el-icon><OfficeBuilding /></el-icon><span>电站电桩管理</span></template>
           <el-menu-item index="/stations/list">电站列表</el-menu-item>
           <el-menu-item index="/stations/piles">电桩管理</el-menu-item>
           <el-menu-item index="/stations/pricing">电价设置</el-menu-item>
@@ -76,29 +98,76 @@ const handleMenuSelect = (index) => {
         </el-sub-menu>
 
         <el-sub-menu index="/organizations">
-          <template #title>
-            <el-icon><OfficeBuilding /></el-icon>
-            <span>机构管理</span>
-          </template>
+          <template #title><el-icon><OfficeBuilding /></el-icon><span>机构管理</span></template>
           <el-menu-item index="/organizations/operators">运营商资料</el-menu-item>
           <el-menu-item index="/organizations/exclusive">专属机构</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="/users">
-          <template #title>
-            <el-icon><UserFilled /></el-icon>
-            <span>用户管理</span>
-          </template>
+          <template #title><el-icon><UserFilled /></el-icon><span>用户管理</span></template>
           <el-menu-item index="/users/exclusive">专属用户</el-menu-item>
           <el-menu-item index="/users/fleet">车队管理</el-menu-item>
           <el-menu-item index="/users/whitelist">白名单管理</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="/marketing">
-          <template #title>
-            <el-icon><Promotion /></el-icon>
-            <span>营销管理</span>
-          </template>
+          <template #title><el-icon><Promotion /></el-icon><span>营销管理</span></template>
+          <el-menu-item index="/marketing/tags">标签管理</el-menu-item>
+          <el-menu-item index="/marketing/discounts">折扣管理</el-menu-item>
+        </el-sub-menu>
+
+        <el-menu-item index="/settings">
+          <el-icon><Setting /></el-icon>
+          <template #title><span>系统设置</span></template>
+        </el-menu-item>
+      </el-menu>
+    </el-aside>
+
+    <el-drawer v-model="drawerVisible" direction="ltr" :size="240" :with-header="false" custom-class="mobile-drawer">
+      <div class="logo-area mobile-logo">
+        <span class="logo-mark">E</span>
+        <span class="logo-text">E-Charge 平台</span>
+      </div>
+      <el-menu :default-active="activeMenu" class="custom-menu" background-color="var(--sidebar-bg)" text-color="#a6adb4" active-text-color="#ffffff" @select="handleMenuSelect">
+        <el-menu-item index="/overview"><el-icon><Histogram /></el-icon><span>概览</span></el-menu-item>
+        
+        <el-sub-menu index="/orders">
+          <template #title><el-icon><Tickets /></el-icon><span>订单管理</span></template>
+          <el-menu-item index="/orders/history">历史订单</el-menu-item>
+          <el-menu-item index="/orders/realtime">实时订单</el-menu-item>
+          <el-menu-item index="/orders/abnormal">异常订单</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="/finance">
+          <template #title><el-icon><Wallet /></el-icon><span>财务管理</span></template>
+          <el-menu-item index="/finance/cards">绑卡管理</el-menu-item>
+          <el-menu-item index="/finance/settlement">收益对账</el-menu-item>
+          <el-menu-item index="/finance/invoice">开票管理</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="/stations">
+          <template #title><el-icon><OfficeBuilding /></el-icon><span>电站电桩管理</span></template>
+          <el-menu-item index="/stations/list">电站列表</el-menu-item>
+          <el-menu-item index="/stations/piles">电桩管理</el-menu-item>
+          <el-menu-item index="/stations/pricing">电价设置</el-menu-item>
+          <el-menu-item index="/stations/review">审核管理</el-menu-item>
+        </el-sub-menu>
+        
+        <el-sub-menu index="/organizations">
+          <template #title><el-icon><OfficeBuilding /></el-icon><span>机构管理</span></template>
+          <el-menu-item index="/organizations/operators">运营商资料</el-menu-item>
+          <el-menu-item index="/organizations/exclusive">专属机构</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="/users">
+          <template #title><el-icon><UserFilled /></el-icon><span>用户管理</span></template>
+          <el-menu-item index="/users/exclusive">专属用户</el-menu-item>
+          <el-menu-item index="/users/fleet">车队管理</el-menu-item>
+          <el-menu-item index="/users/whitelist">白名单管理</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="/marketing">
+          <template #title><el-icon><Promotion /></el-icon><span>营销管理</span></template>
           <el-menu-item index="/marketing/tags">标签管理</el-menu-item>
           <el-menu-item index="/marketing/discounts">折扣管理</el-menu-item>
         </el-sub-menu>
@@ -108,18 +177,66 @@ const handleMenuSelect = (index) => {
           <span>系统设置</span>
         </el-menu-item>
       </el-menu>
-    </el-aside>
+    </el-drawer>
 
-    <el-container>
+    <el-container class="main-container">
       <el-header class="layout-header">
         <div class="header-left">
-          <el-button text :icon="MenuIcon" @click="collapsed = !collapsed" />
-          <span class="header-title">{{ pageTitle }}</span>
+          <el-icon class="toggle-btn" @click="isMobile ? (drawerVisible = true) : (collapsed = !collapsed)">
+            <MenuIcon />
+          </el-icon>
+          <span v-if="!isMobile" class="header-title">{{ pageTitle }}</span>
         </div>
+
         <div class="header-right">
-          <span class="header-role">运营商管理员</span>
-          <el-divider direction="vertical" />
-          <span class="header-email">admin@echarge.com</span>
+          <div class="search-box">
+            <el-input v-if="!isMobile" placeholder="搜索订单号、电站名称..." :prefix-icon="Search" class="search-input" />
+            <el-button v-else circle :icon="Search" />
+          </div>
+
+          <el-divider direction="vertical" class="hidden-on-mobile" />
+          
+          <el-popover placement="bottom-end" :width="300" trigger="click" popper-class="notify-popover">
+            <template #reference>
+              <el-badge :is-dot="true" class="notify-badge">
+                <el-icon class="notify-icon"><Bell /></el-icon>
+              </el-badge>
+            </template>
+            <div class="notify-panel">
+              <div class="notify-header">
+                <span style="font-weight: 600;">系统通知 (2)</span>
+                <el-button link type="primary" size="small">全部已读</el-button>
+              </div>
+              <el-divider style="margin: 8px 0" />
+              <div class="notify-list">
+                <div class="notify-item">
+                  <div class="notify-title"><el-tag size="small" type="danger" style="margin-right: 8px;">报警</el-tag>A区01号直流桩发生离线故障</div>
+                  <div class="notify-time">10 分钟前</div>
+                </div>
+                <div class="notify-item">
+                  <div class="notify-title"><el-tag size="small" type="success" style="margin-right: 8px;">财务</el-tag>昨日收益 T+1 清分已完成</div>
+                  <div class="notify-time">2 小时前</div>
+                </div>
+              </div>
+              <el-divider style="margin: 8px 0" />
+              <div class="notify-footer">
+                <el-button link style="width: 100%;">查看全部通知</el-button>
+              </div>
+            </div>
+          </el-popover>
+
+          <el-dropdown trigger="click" style="margin-left: 16px;">
+            <span class="user-info">
+              <el-avatar :size="32" class="avatar">Admin</el-avatar>
+              <span class="hidden-on-mobile user-email">admin@echarge.com</span>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item>个人中心</el-dropdown-item>
+                <el-dropdown-item divided>退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 
@@ -127,94 +244,49 @@ const handleMenuSelect = (index) => {
         <router-view />
       </el-main>
     </el-container>
+
   </el-container>
 </template>
 
 <style scoped>
-.layout-root {
-  height: 100vh;
-}
+/* 保持上一版的样式不变 */
+.layout-root { height: 100vh; width: 100vw; overflow: hidden; }
+.main-container { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.layout-aside { background-color: var(--sidebar-bg); transition: width 0.3s cubic-bezier(0.2, 0, 0, 1) 0s; display: flex; flex-direction: column; z-index: 10; }
+.logo-area { height: 60px; display: flex; align-items: center; padding: 0 16px; overflow: hidden; color: #fff; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+.logo-mark { min-width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #1890ff, #36d1dc); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 18px; margin-right: 12px; }
+.logo-text { font-size: 16px; font-weight: 600; white-space: nowrap; }
+.custom-menu { border-right: none; flex: 1; overflow-y: auto; }
+.layout-header { height: 60px; background-color: var(--bg-card); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+.header-left { display: flex; align-items: center; gap: 16px; }
+.toggle-btn { font-size: 20px; cursor: pointer; color: var(--text-regular); transition: color 0.2s; }
+.toggle-btn:hover { color: #1890ff; }
+.header-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.header-right { display: flex; align-items: center; gap: 16px; }
+.search-box { display: flex; align-items: center; }
+.search-input { width: 240px; }
+.notify-icon { font-size: 20px; cursor: pointer; color: var(--text-regular); margin-top: 4px; outline: none; }
+.notify-icon:hover { color: #1890ff; }
+.notify-badge { cursor: pointer; }
+.user-info { display: flex; align-items: center; gap: 8px; cursor: pointer; outline: none; }
+.avatar { background-color: #1890ff; font-size: 12px; }
+.user-email { font-size: 14px; color: var(--text-regular); }
+.layout-main { background-color: var(--bg-main); padding: 20px; flex: 1; overflow-y: auto; }
+.mobile-logo { background-color: var(--sidebar-bg); }
 
-.layout-aside {
-  border-right: 1px solid #ebeef5;
-  background-color: #001529;
-  color: #fff;
-  display: flex;
-  flex-direction: column;
-}
+/* 通知面板内的样式 */
+.notify-panel { padding: 4px; }
+.notify-header { display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }
+.notify-list { max-height: 240px; overflow-y: auto; }
+.notify-item { padding: 12px 8px; border-radius: 6px; cursor: pointer; transition: background 0.2s; }
+.notify-item:hover { background-color: #f5f7fa; }
+.notify-title { font-size: 14px; color: var(--text-primary); margin-bottom: 4px; line-height: 1.4; display: flex; align-items: flex-start; }
+.notify-time { font-size: 12px; color: #909399; margin-left: 42px; }
+.notify-footer { text-align: center; padding-top: 4px; }
 
-.logo-area {
-  height: 56px;
-  display: flex;
-  align-items: center;
-  padding: 0 16px;
-  font-weight: 600;
-  font-size: 16px;
-  color: #fff;
-  box-sizing: border-box;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-.logo-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #409eff, #36d1dc);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 8px;
-  font-size: 18px;
-}
-
-.logo-text {
-  white-space: nowrap;
-}
-
-.menu {
-  border-right: none;
-  flex: 1;
-}
-
-.layout-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
-  box-sizing: border-box;
-  background-color: #ffffff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.header-title {
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  font-size: 14px;
-  color: #606266;
-}
-
-.header-role {
-  margin-right: 4px;
-}
-
-.header-email {
-  font-weight: 500;
-}
-
-.layout-main {
-  padding: 20px 24px 24px;
-  background-color: #f5f7fa;
+@media (max-width: 768px) {
+  .hidden-on-mobile { display: none !important; }
+  .layout-header { padding: 0 12px; }
+  .layout-main { padding: 12px; }
 }
 </style>
-
