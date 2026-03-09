@@ -18,7 +18,34 @@ const routes = [
   {
     path: '/orders',
     name: 'Orders',
-    component: () => import('../views/PlaceholderPage.vue'),
+    component: () => import('../views/orders/OrdersLayout.vue'),
+    redirect: '/orders/history',
+    children: [
+      {
+        path: 'history',
+        name: 'HistoryOrders',
+        component: () => import('../views/orders/HistoryOrders.vue'),
+        meta: {
+          title: '历史订单',
+        },
+      },
+      {
+        path: 'realtime',
+        name: 'RealtimeOrders',
+        component: () => import('../views/orders/RealtimeOrders.vue'),
+        meta: {
+          title: '实时订单',
+        },
+      },
+      {
+        path: 'abnormal',
+        name: 'AbnormalOrders',
+        component: () => import('../views/orders/AbnormalOrders.vue'),
+        meta: {
+          title: '异常订单',
+        },
+      },
+    ],
     meta: {
       title: '订单管理',
     },
