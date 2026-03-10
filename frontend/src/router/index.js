@@ -82,9 +82,36 @@ const routes = [
   {
     path: '/stations',
     name: 'Stations',
-    component: () => import('../views/PlaceholderPage.vue'),
+    component: () => import('../views/stations/StationsLayout.vue'),
+    redirect: '/stations/list',
+    children: [
+      {
+        path: 'list',
+        name: 'StationList',
+        component: () => import('../views/stations/StationList.vue'),
+        meta: { title: '电站列表' }
+      },
+      {
+        path: 'piles',
+        name: 'PileManagement',
+        component: () => import('../views/stations/PileManagement.vue'),
+        meta: { title: '电桩管理' }
+      },
+      {
+        path: 'pricing',
+        name: 'PricingSettings',
+        component: () => import('../views/stations/PricingSettings.vue'),
+        meta: { title: '电价设置' }
+      },
+      {
+        path: 'review',
+        name: 'ReviewManagement',
+        component: () => import('../views/stations/ReviewManagement.vue'),
+        meta: { title: '审核管理' }
+      },
+    ],
     meta: {
-      title: '电站电桩管理',
+      title: '电桩电站管理',
     },
   },
   {
