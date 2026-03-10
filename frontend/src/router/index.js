@@ -44,7 +44,7 @@ const routes = [
         meta: {
           title: '异常订单',
         },
-      },
+      }
     ],
     meta: {
       title: '订单管理',
@@ -53,7 +53,28 @@ const routes = [
   {
     path: '/finance',
     name: 'Finance',
-    component: () => import('../views/PlaceholderPage.vue'),
+    component: () => import('../views/finance/FinanceLayout.vue'),
+    redirect: '/finance/cards',
+    children: [
+     {
+        path: 'cards',
+        name: 'CardManagement',
+        component: () => import('../views/finance/CardManagement.vue'),
+        meta: { title: '绑卡管理' }
+      },
+      {
+        path: 'settlement',
+        name: 'Settlement',
+        component: () => import('../views/finance/Settlement.vue'),
+        meta: { title: '收益对账' }
+      },
+      {
+        path: 'invoice',
+        name: 'InvoiceManagement',
+        component: () => import('../views/finance/InvoiceManagement.vue'),
+        meta: { title: '开票管理' }
+      }
+      ],
     meta: {
       title: '财务管理',
     },
