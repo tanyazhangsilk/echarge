@@ -1,10 +1,11 @@
 # backend/seed_data.py
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, date, time, timedelta
 from faker import Faker
 from app.db.database import SessionLocal, engine
-from app.models.models import Base, User, Operator, Station, Charger, Order
+from app.models.models import Base, User, Operator, Station, Charger, Order, SettlementRecord
+from app.services.settlement_service import settle_t_plus_1
 
 fake = Faker('zh_CN') # 使用中文生成器
 
@@ -124,5 +125,73 @@ def generate_seed_data():
     finally:
         db.close()
 
+def generate_wealth_data():
+    db = SessionLocal()
+    # 1. 明确目标日期：昨天
+    yesterday = date.today() - timedelta(days=1)
+    
+    print(f"💰 正在为 {yesterday} 批量制造 500 笔‘暴富’订单...")
+    
+    try:
+        users = db.query(User).all()
+        chargers = db.query(Charger).all()
+        
+        if not users or not chargers:
+            print("❌ 错误：数据库中没有用户或电桩，请先运行基础生成脚本！")
+            return
+
+        # 2. 循环生成 100 笔订单
+        for i in range(100):
+            user = random.choice(users)
+            charger = random.choice(chargers)
+            
+            # 随机生成昨天的具体时间点
+            random_hour = random.randint(0, 23)
+            random_minute = random.randint(0, 59)
+            start_time = datetime.combine(yesterday, time(random_hour, random_minute))
+            
+            # 设置一个体面的金额：每笔 30-150 元不等
+            kwh = round(random.uniform(20.0, 80.0), 2)
+            ele_fee = round(kwh * 1.2, 2)    # 电费
+            service_fee = round(kwh * 0.6, 2) # 服务费
+            total_fee = ele_fee + service_fee
+            
+            new_order = Order(
+                order_no=f"E{yesterday.strftime('%Y%m%d')}{i:04d}{random.randint(10, 99)}",
+                user_id=user.id,
+                charger_id=charger.id,
+                operator_id=charger.station.operator_id,
+                start_time=start_time,
+                end_time=start_time + timedelta(minutes=random.randint(30, 90)),    
+                total_kwh=kwh,
+                ele_fee=ele_fee,
+                service_fee=service_fee,
+                total_fee=total_fee,
+                status=1,        # 状态：已完成
+                settle_status=0  # 状态：未结算
+            )
+            db.add(new_order)
+        
+        db.commit()
+        print(f"✅ 成功！昨天的 100 笔订单已入库。")
+        print(f"📈 预计总流水：约 {100 * 80} 元（这波稳了！）")
+
+        processed = settle_t_plus_1(yesterday, db=db)
+        record = db.query(SettlementRecord).filter(SettlementRecord.settle_date == yesterday).first()
+        print(f"🧾 清分已执行：处理 {processed} 笔订单")
+        if record:
+            print(
+                f"🧾 结算记录已生成：date={record.settle_date}, "
+                f"order_count={record.order_count}, total_amount={record.total_amount}, "
+                f"platform_fee={record.platform_fee}, settle_amount={record.settle_amount}"
+            )
+
+    except Exception as e:
+        db.rollback()
+        print(f"❌ 生成失败: {e}")
+    finally:
+        db.close()
+
 if __name__ == "__main__":
     generate_seed_data()
+    generate_wealth_data()
