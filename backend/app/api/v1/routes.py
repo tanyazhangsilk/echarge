@@ -1,12 +1,17 @@
+import logging
+from datetime import date, datetime, timedelta
+
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from backend.app.db.database import get_db
-from backend.app.models.models import Order, Station, Charger, User
-from datetime import datetime, timedelta
+from app.db.database import get_db
+from app.models.models import Order, Charger, User
+from app.services.settlement_service import settle_t_plus_1
 
 
 api_router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @api_router.get("/health", tags=["system"])
@@ -94,4 +99,19 @@ async def get_realtime_orders(db: Session = Depends(get_db)) -> list[dict]:
         })
         
     return result
+
+
+class ManualSettleRequest(BaseModel):
+    date: date
+
+
+@api_router.post("/settlements/manual_settle", tags=["settlements"])
+async def manual_settle(payload: ManualSettleRequest, db: Session = Depends(get_db)) -> dict:
+    try:
+        processed = settle_t_plus_1(payload.date, db=db)
+        logger.info("manual_settle", extra={"date": str(payload.date), "processed": processed})
+        return {"code": 0, "processed": processed}
+    except Exception as e:
+        logger.exception("manual_settle_failed", extra={"date": str(payload.date)})
+        return {"code": 1, "processed": 0, "message": str(e)}
 

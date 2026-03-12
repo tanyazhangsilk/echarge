@@ -6,6 +6,7 @@ from sqlalchemy import (
     create_engine,
     Table,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -290,3 +291,24 @@ class UserCoupon(Base, BaseModel):
 
     def __repr__(self) -> str:
         return f"<UserCoupon(id={self.id}, user_id={self.user_id}, status={self.status})>"
+
+
+class SettlementRecord(Base):
+    """
+    清分结算流水表 (trade_settlements)
+    用于记录 T+1 日生成的 T 日清分账单
+    """
+    __tablename__ = "trade_settlements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
+    settle_date: Mapped[datetime.date] = mapped_column(Date, nullable=False, index=True, unique=True, comment="结算日期 (即 T 日)")
+    order_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="包含的订单笔数")
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False, comment="订单总额 (元)")
+    platform_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False, comment="平台抽成 (元)")
+    settle_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False, comment="应结算金额 (元)")
+    status: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="打款状态 (0-待打款, 1-已打款)")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now(), comment="最后更新时间")
+
+    def __repr__(self) -> str:
+        return f"<SettlementRecord(id={self.id}, date='{self.settle_date}', amount={self.settle_amount})>"
