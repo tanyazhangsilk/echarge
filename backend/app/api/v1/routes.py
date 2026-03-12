@@ -81,7 +81,7 @@ async def get_realtime_orders(db: Session = Depends(get_db)) -> list[dict]:
     """
     # 1. 告诉数据库：去 Order 表里找，条件是 status == 0 (进行中)
     # 并且把关联的 user 和 charger(及其所在的 station) 一起带出来
-    realtime_orders = db.query(Order).filter(Order.status == 0).limit(10).all()
+    realtime_orders = db.query(Order).filter(Order.status == 0).limit(5).all()
     
     # 2. 把数据库查询出来的复杂对象，转换成前端 Vue 能看懂的简单字典
     result = []

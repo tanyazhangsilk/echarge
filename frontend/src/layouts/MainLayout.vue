@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { IconMoonStars, IconSun } from '@tabler/icons-vue'
 import {
   Menu as MenuIcon,
   Histogram,
@@ -21,6 +22,7 @@ const route = useRoute()
 const collapsed = ref(false)
 const drawerVisible = ref(false)
 const windowWidth = ref(window.innerWidth)
+const theme = ref(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
 
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta?.title || '管理平台')
@@ -57,6 +59,13 @@ const handleMenuSelect = (index) => {
   if (isMobile.value) {
     drawerVisible.value = false 
   }
+}
+
+const toggleTheme = () => {
+  theme.value = theme.value === 'dark' ? 'light' : 'dark'
+  document.documentElement.dataset.theme = theme.value
+  localStorage.setItem('theme', theme.value)
+  window.dispatchEvent(new Event('themechange'))
 }
 </script>
 
@@ -190,11 +199,21 @@ const handleMenuSelect = (index) => {
 
         <div class="header-right">
           <div class="search-box">
-            <el-input v-if="!isMobile" placeholder="搜索订单号、电站名称..." :prefix-icon="Search" class="search-input" />
-            <el-button v-else circle :icon="Search" />
+            <el-input v-if="!isMobile" aria-label="全局搜索" placeholder="搜索订单号、电站名称..." :prefix-icon="Search" class="search-input" />
+            <el-button v-else circle :icon="Search" aria-label="打开搜索" />
           </div>
 
           <el-divider direction="vertical" class="hidden-on-mobile" />
+
+          <el-button
+            circle
+            class="theme-toggle"
+            :aria-label="theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'"
+            @click="toggleTheme"
+          >
+            <IconSun v-if="theme === 'dark'" :size="20" />
+            <IconMoonStars v-else :size="20" />
+          </el-button>
           
           <el-popover placement="bottom-end" :width="300" trigger="click" popper-class="notify-popover">
             <template #reference>
@@ -225,7 +244,7 @@ const handleMenuSelect = (index) => {
             </div>
           </el-popover>
 
-          <el-dropdown trigger="click" style="margin-left: 16px;">
+          <el-dropdown trigger="click" style="margin-left: 12px;">
             <span class="user-info">
               <el-avatar :size="32" class="avatar">Admin</el-avatar>
               <span class="hidden-on-mobile user-email">admin@echarge.com</span>
@@ -265,6 +284,7 @@ const handleMenuSelect = (index) => {
 .header-right { display: flex; align-items: center; gap: 16px; }
 .search-box { display: flex; align-items: center; }
 .search-input { width: 240px; }
+.theme-toggle { border: 1px solid var(--border-color); background: var(--bg-card); }
 .notify-icon { font-size: 20px; cursor: pointer; color: var(--text-regular); margin-top: 4px; outline: none; }
 .notify-icon:hover { color: #1890ff; }
 .notify-badge { cursor: pointer; }
