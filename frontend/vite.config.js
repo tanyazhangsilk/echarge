@@ -13,7 +13,7 @@ export default defineConfig({
     proxy: {
       // 将 /api 前缀的请求代理到 FastAPI 后端，避免浏览器 CORS
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:8001',
         changeOrigin: true,
       },
     },

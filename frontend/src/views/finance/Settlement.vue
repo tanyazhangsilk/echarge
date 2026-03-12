@@ -1,130 +1,113 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { onMounted, onUnmounted, reactive, ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Download, Lightning, Money, Tickets, Wallet } from '@element-plus/icons-vue'
+import axios from 'axios'
 
-import http from '../../api/http'
+const api = axios.create({
+  baseURL: '/api/v1',
+  timeout: 10000,
+})
+
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    const msg =
+      err?.response?.data?.message ||
+      err?.response?.data?.detail ||
+      err?.response?.data?.msg ||
+      err?.message ||
+      '请求失败'
+    err._uiMessage = msg
+    return Promise.reject(err)
+  }
+)
 
 const dateRange = ref([])
 const loading = ref(false)
 const currentPage = ref(1)
 const pageSize = ref(20)
+const tableData = ref([])
+const summary = reactive({ total_amount: 0, platform_fee: 0, settle_amount: 0 })
 
-const tableData = ref(
-  [
-    {
-      id: 1005,
-      settle_date: '2026-03-05',
-      order_count: 150,
-      total_amount: 13150.0,
-      platform_fee: 1315.0,
-      settle_amount: 11835.0,
-      status: 0,
-      created_at: '2026-03-06 00:01:12',
-      updated_at: '2026-03-06 00:01:12',
-    },
-    {
-      id: 1004,
-      settle_date: '2026-03-04',
-      order_count: 162,
-      total_amount: 14200.0,
-      platform_fee: 1420.0,
-      settle_amount: 12780.0,
-      status: 0,
-      created_at: '2026-03-05 00:01:08',
-      updated_at: '2026-03-05 00:01:08',
-    },
-    {
-      id: 1003,
-      settle_date: '2026-03-03',
-      order_count: 138,
-      total_amount: 11850.0,
-      platform_fee: 1185.0,
-      settle_amount: 10665.0,
-      status: 1,
-      created_at: '2026-03-04 00:00:56',
-      updated_at: '2026-03-04 09:30:10',
-    },
-    {
-      id: 1002,
-      settle_date: '2026-03-02',
-      order_count: 156,
-      total_amount: 13620.5,
-      platform_fee: 1362.05,
-      settle_amount: 12258.45,
-      status: 1,
-      created_at: '2026-03-03 00:00:44',
-      updated_at: '2026-03-03 10:15:22',
-    },
-    {
-      id: 1001,
-      settle_date: '2026-03-01',
-      order_count: 145,
-      total_amount: 12580.0,
-      platform_fee: 1258.0,
-      settle_amount: 11322.0,
-      status: 1,
-      created_at: '2026-03-02 00:00:31',
-      updated_at: '2026-03-02 08:20:05',
-    },
-  ].sort((a, b) => b.settle_date.localeCompare(a.settle_date)),
-)
+let abortController
 
 const formatMoney = (amount) => {
   const num = Number(amount || 0)
   return num.toLocaleString('zh-CN', { minimumFractionDigits: 2 })
 }
 
-const summary = computed(() => {
-  return tableData.value.reduce((acc, curr) => {
-    acc.total_amount += Number(curr.total_amount || 0)
-    acc.platform_fee += Number(curr.platform_fee || 0)
-    acc.settle_amount += Number(curr.settle_amount || 0)
-    return acc
-  }, { total_amount: 0, platform_fee: 0, settle_amount: 0 })
-})
+const resetSummary = () => {
+  summary.total_amount = 0
+  summary.platform_fee = 0
+  summary.settle_amount = 0
+}
+
+const loadData = async () => {
+  try {
+    loading.value = true
+    abortController?.abort()
+    abortController = new AbortController()
+    const res = await api.get('/finance/settlements', { signal: abortController.signal })
+    const rows = Array.isArray(res?.data?.data) ? res.data.data : []
+    tableData.value = rows
+      .map((r) => ({
+        ...r,
+        total_amount: Number(r.total_amount || 0),
+        platform_fee: Number(r.platform_fee || 0),
+        settle_amount: Number(r.settle_amount || 0),
+      }))
+      .sort((a, b) => String(b.settle_date).localeCompare(String(a.settle_date)))
+    resetSummary()
+    for (const r of tableData.value) {
+      summary.total_amount += Number(r.total_amount || 0) || 0
+      summary.platform_fee += Number(r.platform_fee || 0) || 0
+      summary.settle_amount += Number(r.settle_amount || 0) || 0
+    }
+    loading.value = false
+  } catch (e) {
+    loading.value = false
+    const msg = e?._uiMessage || e?.message || '请求失败'
+    ElMessage.error(`获取结算列表失败：${msg}`)
+    tableData.value = []
+    resetSummary()
+  }
+}
 
 const handleExport = () => {
-  console.log('导出报表')
+  ElMessage.success('已开始导出对账单')
 }
 
-const getStatusType = (status) => {
-  return status === 1 ? 'success' : 'warning'
-}
-
-const getStatusText = (status) => {
-  return status === 1 ? '已打款' : '待打款'
-}
+const getStatusType = (status) => (status === 1 ? 'success' : 'warning')
+const getStatusText = (status) => (status === 1 ? '已打款' : '待打款')
 
 const pagedData = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return tableData.value.slice(start, start + pageSize.value)
 })
 
-const handleManualSettle = () => {
-  const now = new Date()
-  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-  const yyyy = yesterday.getFullYear()
-  const mm = String(yesterday.getMonth() + 1).padStart(2, '0')
-  const dd = String(yesterday.getDate()).padStart(2, '0')
-  const dateStr = `${yyyy}-${mm}-${dd}`
-
-  loading.value = true
-  http
-    .post('/settlements/manual_settle', { date: dateStr })
-    .then((res) => {
-      const processed = res?.data?.processed ?? 0
-      ElMessage.success(`清分指令已下发，成功处理 ${processed}  笔订单`)
-    })
-    .catch(() => {
-      ElMessage.error('清分指令下发失败，请稍后重试')
-    })
-    .finally(() => {
-      setTimeout(() => {
-        loading.value = false
-      }, 300)
-    })
+const handleManualSettle = async () => {
+  try {
+    loading.value = true
+    const res = await api.post('/finance/settle')
+    const msg = res?.data?.message || '清分请求已完成'
+    ElMessage.success(msg)
+    await loadData()
+    loading.value = false
+  } catch (e) {
+    loading.value = false
+    const msg = e?._uiMessage || e?.message || '清分请求失败'
+    ElMessage.error(`清分请求失败：${msg}`)
+  }
 }
+
+onMounted(() => {
+  loadData()
+})
+
+onUnmounted(() => {
+  abortController?.abort()
+})
 </script>
 
 <template>
@@ -162,7 +145,7 @@ const handleManualSettle = () => {
       </el-col>
     </el-row>
 
-    <el-card shadow="never" class="base-card">
+    <el-card shadow="never" class="base-card" v-loading="loading">
       <el-row type="flex" justify="space-between" align="middle" class="action-bar">
         <el-date-picker
           v-model="dateRange"

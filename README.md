@@ -12,19 +12,20 @@
 
 ```text
 .
-├── backend/                 # 后端代码根目录
-│   └── app/
-│       ├── api/
-│       │   └── v1/
-│       │       ├── __init__.py
-│       │       └── routes.py          # v1 API 路由与假数据（对应概览页）
-│       ├── core/
-│       │   └── config.py              # 环境配置与 MySQL 连接字符串生成
-│       ├── db/
-│       │   └── session.py             # SQLAlchemy Engine / Session 工厂与 get_db 依赖
-│       ├── models/                    # SQLAlchemy 模型（待逐步扩展）
-│       ├── schemas/                   # Pydantic Schema（待逐步扩展）
-│       └── app.py                     # FastAPI app 实例与路由挂载
+├── app/                     # 后端应用包（导入根）
+│   ├── api/
+│   │   └── v1/
+│   │       ├── __init__.py
+│   │       └── routes.py              # v1 API 路由
+│   ├── core/
+│   │   └── config.py                  # 环境配置与 MySQL 连接字符串生成
+│   ├── db/
+│   │   └── database.py                # SQLAlchemy Engine / Session 工厂与 get_db 依赖
+│   ├── models/                        # SQLAlchemy 模型
+│   ├── schemas/                       # Pydantic Schema
+│   └── app.py                         # FastAPI app 实例与路由挂载
+│
+├── backend/                 # 后端杂项（迁移、脚本、历史文件）
 │
 ├── frontend/               # 前端 Vue 3 + Vite 项目
 │   ├── src/
@@ -42,7 +43,7 @@
 │   │   └── main.js                   # Vue 入口，挂载 Element Plus / Router / Pinia
 │   └── ...                           # Vite 默认文件（package.json、vite.config.js 等）
 │
-├── main.py                # Uvicorn 入口：导出 backend.app.app.app
+├── main.py                # Uvicorn 入口：导出 app.app.app
 ├── requirements.txt       # Python 依赖
 └── README.md
 ```
@@ -75,7 +76,7 @@ MYSQL_DB=e_charge
 # SQLALCHEMY_DATABASE_URI=mysql+pymysql://user:password@host:3306/dbname
 ```
 
-`backend/app/core/config.py` 会根据这些变量生成 `mysql+pymysql://...` 连接字符串，供 SQLAlchemy 使用。
+`app/core/config.py` 会根据这些变量生成 `mysql+pymysql://...` 连接字符串，供 SQLAlchemy 使用。
 
 ### 3. 启动后端服务
 
@@ -136,13 +137,13 @@ npm run dev
   - 两块图表区域（目前保留为“预留图表区”，后续可接入 ECharts / AntV 等）
   - “实时充电订单”表格，数据来自后端假数据 API
 
-后续你可以在 `views/` 目录下为每个二级菜单建立独立页面，并对应到后端 `backend/app/api/v1/` 中的具体业务路由与数据模型。
+后续你可以在 `views/` 目录下为每个二级菜单建立独立页面，并对应到后端 `app/api/v1/` 中的具体业务路由与数据模型。
 
 ---
 
 ## 下一步建议
 
-- 在 `backend/app/models/` 定义核心实体（电站、电桩、订单、用户、运营商等）并建立 Alembic 迁移。
-- 在 `backend/app/api/v1/` 按业务模块拆分路由文件（如 `orders.py`、`stations.py` 等）。
+- 在 `app/models/` 定义核心实体（电站、电桩、订单、用户、运营商等）并建立 Alembic 迁移。
+- 在 `app/api/v1/` 按业务模块拆分路由文件（如 `orders.py`、`stations.py` 等）。
 - 在前端 `views/` 下，逐步将 `PlaceholderPage.vue` 替换为真实的功能页面。
 

@@ -3,15 +3,15 @@ import sys
 from pathlib import Path
 from sqlalchemy import create_engine, text
 
-# 将 app 目录添加到 Python 路径中，以便导入配置
-sys.path.append(str(Path(__file__).parent / "app"))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
-    from core.config import settings
+    from app.core.config import settings
     print("✅ 成功导入数据库配置。")
 except ImportError as e:
     print(f"❌ 导入配置失败: {e}")
-    print("请确保此脚本位于 'backend' 目录下，并且 'backend/app/core/config.py' 文件存在。")
+    print("请确保项目根目录下存在 'app/core/config.py'。")
     sys.exit(1)
 
 def test_connection():
@@ -35,7 +35,7 @@ def test_connection():
         
     except ImportError:
         print("❌ 未能导入 SQLAlchemy。请确保已在虚拟环境中安装所有依赖项。")
-        print("   运行: .\.venv\Scripts\pip install -r requirements.txt")
+        print(r"   运行: .\.venv\Scripts\pip install -r requirements.txt")
     except Exception as e:
         print(f"❌ 数据库连接失败: {e}")
         print("\n--- 故障排查建议 ---")
