@@ -67,7 +67,7 @@ const routes = [
       {
         path: 'global-settle',
         name: 'GlobalSettle',
-        component: () => import('../views/PlaceholderPage.vue'),
+        component: () => import('../views/admin/GlobalSettle.vue'),
         meta: { title: '平台清分执行', moduleCode: MODULES.FINANCE_GLOBAL_SETTLE },
       },
       {
@@ -105,9 +105,13 @@ const routes = [
       },
       {
         path: 'review',
-        name: 'ReviewManagement',
-        component: () => import('../views/stations/ReviewManagement.vue'),
-        meta: { title: '审核管理', moduleCode: MODULES.STATION_REVIEW },
+        name: 'StationReview',
+        component: () => import('../views/admin/todo/StationAudit.vue'),
+        meta: { title: '电站上线审核', moduleCode: MODULES.STATION_REVIEW },
+      },
+      {
+        path: 'audit',
+        redirect: '/stations/review',
       },
     ],
     meta: { title: '电桩电站管理' },
@@ -160,6 +164,7 @@ const routes = [
     component: () => import('../views/PlaceholderPage.vue'),
     meta: { title: '系统设置', moduleCode: MODULES.SETTINGS },
   },
+  
 ]
 
 const router = createRouter({

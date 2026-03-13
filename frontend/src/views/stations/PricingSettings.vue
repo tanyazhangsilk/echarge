@@ -149,7 +149,7 @@ const submitStationApply = () => {
       <div style="margin-bottom: 16px; color: #606266;">
         当前选中模板：<strong style="color: #409EFF;">{{ templates.find(t => t.id === activeTab)?.name }}</strong>
       </div>
-      <el-table :data="stationData" @selection-change="(val) => selectedStations = val" border height="300">
+      <el-table :data="stationData" @selection-change="(val) => (selectedStations.value = val)" border height="300">
         <el-table-column type="selection" width="55" />
         <el-table-column prop="name" label="电站名称" />
         <el-table-column prop="region" label="所在大区" width="120" />

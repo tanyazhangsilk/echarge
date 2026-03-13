@@ -201,3 +201,100 @@ async def process_invoice(invoice_id: int, payload: dict, db: Session = Depends(
         
     db.commit()
     return {"code": 200, "message": "处理成功"}
+
+@api_router.get("/admin/finance/settlements", tags=["admin"])
+async def admin_get_settlements(db: Session = Depends(get_db)):
+    """管理员获取全网历史清分记录"""
+    from app.models.models import SettlementRecord
+    
+    # 按照清分日期倒序排列
+    records = db.query(SettlementRecord).order_by(SettlementRecord.settle_date.desc()).all()
+    
+    return {
+        "code": 200,
+        "data": [
+            {
+                "id": r.id,
+                "settle_date": str(r.settle_date),
+                "order_count": r.order_count,
+                "total_amount": float(r.total_amount),
+                "platform_fee": float(r.platform_fee),
+                "settle_amount": float(r.settle_amount),
+                "status": r.status
+            } for r in records
+        ]
+    }
+
+@api_router.post("/admin/finance/settle", tags=["admin"])
+async def admin_trigger_settle(payload: dict, db: Session = Depends(get_db)):
+    """管理员手动触发某日的全局清分"""
+    from app.services.settlement_service import settle_t_plus_1
+    from datetime import datetime, timedelta
+    
+    target_date_str = payload.get("date")
+    if target_date_str:
+        target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+    else:
+        # 默认清分昨天
+        target_date = datetime.now().date() - timedelta(days=1)
+        
+    try:
+        # 调用你之前写好的真实清分引擎
+        processed = settle_t_plus_1(target_date, db=db)
+        if processed == 0:
+            return {"code": 200, "message": f"{target_date} 没有需要清分的已完成订单", "processed": 0}
+            
+        return {"code": 200, "message": f"清分成功！共处理全网 {processed} 笔订单", "processed": processed}
+    except Exception as e:
+        return {"code": 500, "message": f"清分引擎执行失败: {str(e)}"}
+
+
+@api_router.get("/admin/audit/stations", tags=["admin"])
+async def get_station_audits(db: Session = Depends(get_db)):
+    """获取待审核与已驳回的电站列表"""
+    from sqlalchemy.orm import joinedload
+    from app.models.models import Station
+    import random
+    
+    # 查询状态为 3(待审核) 和 4(已驳回) 的电站
+    stations = db.query(Station).options(joinedload(Station.operator)).filter(
+        Station.status.in_([3, 4])
+    ).order_by(Station.created_at.desc()).all()
+    
+    return {
+        "code": 200,
+        "data": [{
+            "id": s.id,
+            "operator_name": s.operator.name if s.operator else "未知运营商",
+            "station_name": s.name,
+            "lng": float(s.longitude),
+            "lat": float(s.latitude),
+            "status": s.status,
+            "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "",
+            # 以下为丰富前端展示的模拟扩展字段 (现实中应该存在 Station 扩展表里)
+            "planned_piles": (s.id % 20) + 5,
+            "total_power": ((s.id % 20) + 5) * 120,
+            "address": f"深圳市某某区{s.name}附近"
+        } for s in stations]
+    }
+
+@api_router.post("/admin/audit/stations/{station_id}/process", tags=["admin"])
+async def process_station_audit(station_id: int, payload: dict, db: Session = Depends(get_db)):
+    """处理电站审核 (通过/驳回)"""
+    from app.models.models import Station
+    
+    action = payload.get("action") # 'approve' or 'reject'
+    remark = payload.get("remark", "")
+    
+    station = db.query(Station).filter(Station.id == station_id).first()
+    if not station:
+        return {"code": 404, "message": "电站不存在"}
+        
+    if action == "approve":
+        station.status = 0 # 0 表示正式运营中
+        station.visibility = "public" # 审核通过，对 C 端公开可见
+    elif action == "reject":
+        station.status = 4 # 4 表示被驳回
+        
+    db.commit()
+    return {"code": 200, "message": "电站审核处理成功"}

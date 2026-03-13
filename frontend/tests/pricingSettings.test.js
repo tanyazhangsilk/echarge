@@ -4,12 +4,6 @@ import ElementPlus from 'element-plus'
 
 import PricingSettings from '../src/views/stations/PricingSettings.vue'
 
-vi.mock('sortablejs', () => ({
-  default: {
-    create: () => ({ destroy: () => {} }),
-  },
-}))
-
 vi.mock('element-plus', async () => {
   const actual = await vi.importActual('element-plus')
   return {
@@ -32,12 +26,14 @@ describe('PricingSettings', () => {
     const wrapper = mount(PricingSettings, { global: { plugins: [ElementPlus] } })
     const vm = wrapper.vm
 
-    vm.openApplyDialog()
-    expect(vm.applyDialogVisible).toBe(true)
+    vm.openStationDialog(vm.templates[0])
+    expect(vm.dialogVisible).toBe(true)
 
-    vm.handleStationSelectionChange([{ id: 'st-001', name: '南山科技园充电站' }])
-    await vm.confirmApplyStations()
+    vm.selectedStations = [{ id: 101, name: '南山区高新园超级超充站', region: '南山区' }]
+    vm.submitStationApply()
 
-    expect(vm.currentTemplate.stationIds).toEqual(['st-001'])
+    const { ElMessage } = await import('element-plus')
+    expect(ElMessage.success).toHaveBeenCalled()
+    expect(vm.dialogVisible).toBe(false)
   })
 })
