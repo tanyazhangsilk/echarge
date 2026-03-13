@@ -4,16 +4,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { IconMoonStars, IconSun } from '@tabler/icons-vue'
 import {
   Menu as MenuIcon,
-  Histogram,
-  Tickets,
-  Wallet,
-  OfficeBuilding,
-  UserFilled,
-  Promotion,
-  Setting,
   Search,
   Bell
 } from '@element-plus/icons-vue'
+import { buildMenuByRole, ROLE_DEFAULT_ROUTE } from '../config/permissions'
 
 const router = useRouter()
 const route = useRoute()
@@ -28,117 +22,7 @@ const currentRole = ref(localStorage.getItem('userRole') || 'operator')
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta?.title || '管理平台')
 
-const iconMap = {
-  Histogram,
-  Tickets,
-  Wallet,
-  OfficeBuilding,
-  UserFilled,
-  Promotion,
-  Setting,
-}
-
-const allMenus = [
-  { index: '/overview', icon: 'Histogram', title: '概览', roles: ['admin', 'operator'] },
-  {
-    index: '/orders',
-    icon: 'Tickets',
-    title: '订单管理',
-    roles: ['admin', 'operator'],
-    children: [
-      { index: '/orders/history', title: '历史订单' },
-      { index: '/orders/realtime', title: '实时订单' },
-      { index: '/orders/abnormal', title: '异常订单' },
-    ],
-  },
-  {
-    index: '/finance',
-    icon: 'Wallet',
-    title: '财务管理',
-    roles: ['admin', 'operator'],
-    children: [
-      { index: '/finance/cards', title: '资质与绑卡', roles: ['operator'] },
-      { index: '/finance/settlement', title: '收益对账', roles: ['operator'] },
-      { index: '/finance/global-settle', title: '全局清分执行', roles: ['admin'] },
-      { index: '/finance/invoice', title: '开票管理', roles: ['admin', 'operator'] },
-    ],
-  },
-  {
-    index: '/stations',
-    icon: 'OfficeBuilding',
-    title: '电站管理',
-    roles: ['admin', 'operator'],
-    children: [
-      { index: '/stations/list', title: '电站列表', roles: ['operator'] },
-      { index: '/stations/piles', title: '电桩管理', roles: ['operator'] },
-      { index: '/stations/pricing', title: '电价设置', roles: ['operator'] },
-      { index: '/stations/review', title: '电站审核', roles: ['admin'] },
-    ],
-  },
-  {
-    index: '/organizations',
-    icon: 'OfficeBuilding',
-    title: '机构管理',
-    roles: ['admin'],
-    children: [
-      { index: '/organizations/operators', title: '运营商入驻审核' },
-      { index: '/organizations/exclusive', title: '专属机构' },
-    ],
-  },
-  {
-    index: '/users',
-    icon: 'UserFilled',
-    title: '用户运营',
-    roles: ['operator'],
-    children: [
-      { index: '/users/fleet', title: '车队管理' },
-      { index: '/users/whitelist', title: '白名单管理' },
-    ],
-  },
-  {
-    index: '/marketing',
-    icon: 'Promotion',
-    title: '营销管理',
-    roles: ['operator'],
-    children: [
-      { index: '/marketing/tags', title: '标签管理' },
-      { index: '/marketing/discounts', title: '折扣活动' },
-    ],
-  },
-  { index: '/settings', icon: 'Setting', title: '系统设置', roles: ['admin', 'operator'] },
-]
-
-const visibleMenus = computed(() => {
-  const role = currentRole.value
-
-  const isAllowed = (roles) => !Array.isArray(roles) || roles.includes(role)
-
-  const mapMenu = (menu, inheritedRoles) => {
-    const menuRoles = menu.roles ?? inheritedRoles
-    if (!isAllowed(menuRoles)) return null
-
-    if (Array.isArray(menu.children)) {
-      const children = menu.children
-        .map((child) => mapMenu(child, menuRoles))
-        .filter(Boolean)
-
-      if (children.length === 0) return null
-
-      return {
-        ...menu,
-        icon: menu.icon ? iconMap[menu.icon] : undefined,
-        children,
-      }
-    }
-
-    return {
-      ...menu,
-      icon: menu.icon ? iconMap[menu.icon] : undefined,
-    }
-  }
-
-  return allMenus.map((m) => mapMenu(m, null)).filter(Boolean)
-})
+const visibleMenus = computed(() => buildMenuByRole(currentRole.value))
 
 // 计算当前屏幕断点
 const isMobile = computed(() => windowWidth.value < 768)
@@ -184,7 +68,7 @@ const toggleTheme = () => {
 const handleRoleSwitch = (val) => {
   currentRole.value = val
   localStorage.setItem('userRole', val)
-  router.push('/')
+  router.push(ROLE_DEFAULT_ROUTE[val] || '/')
   if (isMobile.value) drawerVisible.value = false
 }
 </script>
