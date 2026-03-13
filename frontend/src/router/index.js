@@ -1,6 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-import DashboardView from '../views/Dashboard.vue'
 import { MODULES, ROLE_DEFAULT_ROUTE, hasModuleAccess } from '../config/permissions'
 
 const getCurrentRole = () => localStorage.getItem('userRole') || 'operator'
@@ -8,156 +7,104 @@ const getCurrentRole = () => localStorage.getItem('userRole') || 'operator'
 const routes = [
   {
     path: '/',
-    redirect: () => ROLE_DEFAULT_ROUTE[getCurrentRole()] || '/overview',
+    redirect: () => (getCurrentRole() === 'admin' ? '/admin/dashboard' : '/operator/dashboard'),
   },
   {
-    path: '/overview',
-    name: 'Overview',
-    component: DashboardView,
-    meta: {
-      title: '概览',
-      moduleCode: MODULES.OVERVIEW,
-    },
-  },
-  {
-    path: '/orders',
-    name: 'Orders',
-    component: () => import('../views/orders/OrdersLayout.vue'),
-    redirect: '/orders/history',
+    path: '/admin',
+    component: () => import('../layouts/MainLayout.vue'),
+    redirect: '/admin/dashboard',
     children: [
       {
-        path: 'history',
-        name: 'HistoryOrders',
-        component: () => import('../views/orders/HistoryOrders.vue'),
-        meta: { title: '历史订单', moduleCode: MODULES.ORDERS },
+        path: 'dashboard',
+        name: 'AdminDashboard',
+        component: () => import('../views/shared/PlaceholderPage.vue'),
+        meta: { title: '管理员概览', moduleCode: MODULES.OVERVIEW },
       },
       {
-        path: 'realtime',
-        name: 'RealtimeOrders',
-        component: () => import('../views/orders/RealtimeOrders.vue'),
-        meta: { title: '实时订单', moduleCode: MODULES.ORDERS },
+        path: 'todo/stations',
+        name: 'StationAudit',
+        component: () => import('../views/admin/todo/StationAudit.vue'),
+        meta: { title: '电站审核', moduleCode: MODULES.STATION_REVIEW },
       },
       {
-        path: 'abnormal',
+        path: 'todo/abnormal',
         name: 'AbnormalOrders',
-        component: () => import('../views/orders/AbnormalOrders.vue'),
-        meta: { title: '异常订单', moduleCode: MODULES.ORDERS },
-      },
-    ],
-    meta: { title: '订单管理', moduleCode: MODULES.ORDERS },
-  },
-  {
-    path: '/finance',
-    name: 'Finance',
-    component: () => import('../views/finance/FinanceLayout.vue'),
-    redirect: '/finance/cards',
-    children: [
-      {
-        path: 'cards',
-        name: 'CardManagement',
-        component: () => import('../views/finance/CardManagement.vue'),
-        meta: { title: '资质与绑卡', moduleCode: MODULES.FINANCE_CARD },
+        component: () => import('../views/admin/todo/AbnormalOrders.vue'),
+        meta: { title: '异常订单干预', moduleCode: MODULES.ORDERS },
       },
       {
-        path: 'settlement',
-        name: 'Settlement',
-        component: () => import('../views/finance/Settlement.vue'),
-        meta: { title: '收益对账', moduleCode: MODULES.FINANCE_SETTLEMENT },
-      },
-      {
-        path: 'global-settle',
-        name: 'GlobalSettle',
-        component: () => import('../views/PlaceholderPage.vue'),
-        meta: { title: '平台清分执行', moduleCode: MODULES.FINANCE_GLOBAL_SETTLE },
-      },
-      {
-        path: 'invoice',
+        path: 'todo/invoice',
         name: 'InvoiceManagement',
-        component: () => import('../views/finance/InvoiceManagement.vue'),
+        component: () => import('../views/admin/todo/InvoiceManagement.vue'),
         meta: { title: '开票管理', moduleCode: MODULES.FINANCE_INVOICE },
       },
     ],
-    meta: { title: '财务管理' },
   },
   {
-    path: '/stations',
-    name: 'Stations',
-    component: () => import('../views/stations/StationsLayout.vue'),
-    redirect: '/stations/list',
+    path: '/operator',
+    component: () => import('../layouts/MainLayout.vue'),
+    redirect: '/operator/dashboard',
     children: [
       {
-        path: 'list',
-        name: 'StationList',
-        component: () => import('../views/stations/StationList.vue'),
-        meta: { title: '电站列表', moduleCode: MODULES.STATION_ASSET },
+        path: 'dashboard',
+        name: 'OperatorDashboard',
+        component: () => import('../views/operator/dashboard/Index.vue'),
+        meta: { title: '运营概览', moduleCode: MODULES.OVERVIEW },
       },
       {
-        path: 'piles',
+        path: 'assets/stations',
+        name: 'StationList',
+        component: () => import('../views/operator/assets/StationList.vue'),
+        meta: { title: '电站管理', moduleCode: MODULES.STATION_ASSET },
+      },
+      {
+        path: 'assets/piles',
         name: 'PileManagement',
-        component: () => import('../views/stations/PileManagement.vue'),
-        meta: { title: '电桩管理', moduleCode: MODULES.STATION_ASSET },
+        component: () => import('../views/operator/assets/PileManagement.vue'),
+        meta: { title: '设备实时监控', moduleCode: MODULES.STATION_ASSET },
       },
       {
         path: 'pricing',
         name: 'PricingSettings',
-        component: () => import('../views/stations/PricingSettings.vue'),
-        meta: { title: '电价设置', moduleCode: MODULES.STATION_PRICING },
+        component: () => import('../views/operator/pricing/PricingSettings.vue'),
+        meta: { title: '分时电价设置', moduleCode: MODULES.STATION_PRICING },
       },
       {
-        path: 'review',
-        name: 'ReviewManagement',
-        component: () => import('../views/stations/ReviewManagement.vue'),
-        meta: { title: '审核管理', moduleCode: MODULES.STATION_REVIEW },
+        path: 'orders/history',
+        name: 'HistoryOrders',
+        component: () => import('../views/operator/orders/HistoryOrders.vue'),
+        meta: { title: '历史订单', moduleCode: MODULES.ORDERS },
+      },
+      {
+        path: 'orders/realtime',
+        name: 'RealtimeOrders',
+        component: () => import('../views/operator/orders/RealtimeOrders.vue'),
+        meta: { title: '实时订单', moduleCode: MODULES.ORDERS },
+      },
+      {
+        path: 'finance/settlement',
+        name: 'Settlement',
+        component: () => import('../views/operator/finance/Settlement.vue'),
+        meta: { title: '收益对账', moduleCode: MODULES.FINANCE_SETTLEMENT },
+      },
+      {
+        path: 'finance/cards',
+        name: 'CardManagement',
+        component: () => import('../views/operator/finance/CardManagement.vue'),
+        meta: { title: '资质与绑卡', moduleCode: MODULES.FINANCE_CARD },
       },
     ],
-    meta: { title: '电桩电站管理' },
-  },
-  {
-    path: '/organizations/operators',
-    name: 'OrganizationOperators',
-    component: () => import('../views/PlaceholderPage.vue'),
-    meta: { title: '运营商入驻审核', moduleCode: MODULES.ORG_OPERATOR_AUDIT },
-  },
-  {
-    path: '/organizations/exclusive',
-    name: 'OrganizationExclusive',
-    component: () => import('../views/PlaceholderPage.vue'),
-    meta: { title: '专属机构', moduleCode: MODULES.ORG_EXCLUSIVE },
-  },
-  {
-    path: '/users/fleet',
-    name: 'UserFleet',
-    component: () => import('../views/PlaceholderPage.vue'),
-    meta: { title: '车队管理', moduleCode: MODULES.USER_FLEET },
-  },
-  {
-    path: '/users/whitelist',
-    name: 'UserWhitelist',
-    component: () => import('../views/PlaceholderPage.vue'),
-    meta: { title: '白名单管理', moduleCode: MODULES.USER_WHITELIST },
-  },
-  {
-    path: '/marketing/tags',
-    name: 'MarketingTags',
-    component: () => import('../views/PlaceholderPage.vue'),
-    meta: { title: '标签管理', moduleCode: MODULES.MARKETING },
-  },
-  {
-    path: '/marketing/discounts',
-    name: 'MarketingDiscounts',
-    component: () => import('../views/PlaceholderPage.vue'),
-    meta: { title: '折扣活动', moduleCode: MODULES.MARKETING },
   },
   {
     path: '/role-blueprint',
     name: 'RoleBlueprint',
-    component: () => import('../views/RoleBlueprint.vue'),
+    component: () => import('../views/shared/RoleBlueprint.vue'),
     meta: { title: '职责蓝图', moduleCode: MODULES.BLUEPRINT },
   },
   {
     path: '/settings',
     name: 'Settings',
-    component: () => import('../views/PlaceholderPage.vue'),
+    component: () => import('../views/shared/PlaceholderPage.vue'),
     meta: { title: '系统设置', moduleCode: MODULES.SETTINGS },
   },
 ]
@@ -177,7 +124,7 @@ router.beforeEach((to) => {
     return true
   }
 
-  return ROLE_DEFAULT_ROUTE[role] || '/overview'
+  return ROLE_DEFAULT_ROUTE[role] || '/operator/dashboard'
 })
 
 export default router

@@ -3,7 +3,7 @@ import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { IconArrowUpRight, IconBolt, IconCurrencyYuan, IconPlugConnected, IconUsers, IconExternalLink } from '@tabler/icons-vue'
 
-import { fetchOverviewSummary, fetchRealtimeOrders } from '../api/overview'
+import { fetchOverviewSummary, fetchRealtimeOrders } from '../../../api/overview'
 
 const loading = ref(false)
 const summary = ref({
