@@ -23,9 +23,122 @@ const collapsed = ref(false)
 const drawerVisible = ref(false)
 const windowWidth = ref(window.innerWidth)
 const theme = ref(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
+const currentRole = ref(localStorage.getItem('userRole') || 'operator')
 
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta?.title || '管理平台')
+
+const iconMap = {
+  Histogram,
+  Tickets,
+  Wallet,
+  OfficeBuilding,
+  UserFilled,
+  Promotion,
+  Setting,
+}
+
+const allMenus = [
+  { index: '/overview', icon: 'Histogram', title: '概览', roles: ['admin', 'operator'] },
+  {
+    index: '/orders',
+    icon: 'Tickets',
+    title: '订单管理',
+    roles: ['admin', 'operator'],
+    children: [
+      { index: '/orders/history', title: '历史订单' },
+      { index: '/orders/realtime', title: '实时订单' },
+      { index: '/orders/abnormal', title: '异常订单' },
+    ],
+  },
+  {
+    index: '/finance',
+    icon: 'Wallet',
+    title: '财务管理',
+    roles: ['admin', 'operator'],
+    children: [
+      { index: '/finance/cards', title: '资质与绑卡', roles: ['operator'] },
+      { index: '/finance/settlement', title: '收益对账', roles: ['operator'] },
+      { index: '/finance/global-settle', title: '全局清分执行', roles: ['admin'] },
+      { index: '/finance/invoice', title: '开票管理', roles: ['admin', 'operator'] },
+    ],
+  },
+  {
+    index: '/stations',
+    icon: 'OfficeBuilding',
+    title: '电站管理',
+    roles: ['admin', 'operator'],
+    children: [
+      { index: '/stations/list', title: '电站列表', roles: ['operator'] },
+      { index: '/stations/piles', title: '电桩管理', roles: ['operator'] },
+      { index: '/stations/pricing', title: '电价设置', roles: ['operator'] },
+      { index: '/stations/review', title: '电站审核', roles: ['admin'] },
+    ],
+  },
+  {
+    index: '/organizations',
+    icon: 'OfficeBuilding',
+    title: '机构管理',
+    roles: ['admin'],
+    children: [
+      { index: '/organizations/operators', title: '运营商入驻审核' },
+      { index: '/organizations/exclusive', title: '专属机构' },
+    ],
+  },
+  {
+    index: '/users',
+    icon: 'UserFilled',
+    title: '用户运营',
+    roles: ['operator'],
+    children: [
+      { index: '/users/fleet', title: '车队管理' },
+      { index: '/users/whitelist', title: '白名单管理' },
+    ],
+  },
+  {
+    index: '/marketing',
+    icon: 'Promotion',
+    title: '营销管理',
+    roles: ['operator'],
+    children: [
+      { index: '/marketing/tags', title: '标签管理' },
+      { index: '/marketing/discounts', title: '折扣活动' },
+    ],
+  },
+  { index: '/settings', icon: 'Setting', title: '系统设置', roles: ['admin', 'operator'] },
+]
+
+const visibleMenus = computed(() => {
+  const role = currentRole.value
+
+  const isAllowed = (roles) => !Array.isArray(roles) || roles.includes(role)
+
+  const mapMenu = (menu, inheritedRoles) => {
+    const menuRoles = menu.roles ?? inheritedRoles
+    if (!isAllowed(menuRoles)) return null
+
+    if (Array.isArray(menu.children)) {
+      const children = menu.children
+        .map((child) => mapMenu(child, menuRoles))
+        .filter(Boolean)
+
+      if (children.length === 0) return null
+
+      return {
+        ...menu,
+        icon: menu.icon ? iconMap[menu.icon] : undefined,
+        children,
+      }
+    }
+
+    return {
+      ...menu,
+      icon: menu.icon ? iconMap[menu.icon] : undefined,
+    }
+  }
+
+  return allMenus.map((m) => mapMenu(m, null)).filter(Boolean)
+})
 
 // 计算当前屏幕断点
 const isMobile = computed(() => windowWidth.value < 768)
@@ -67,6 +180,13 @@ const toggleTheme = () => {
   localStorage.setItem('theme', theme.value)
   window.dispatchEvent(new Event('themechange'))
 }
+
+const handleRoleSwitch = (val) => {
+  currentRole.value = val
+  localStorage.setItem('userRole', val)
+  router.push('/')
+  if (isMobile.value) drawerVisible.value = false
+}
 </script>
 
 <template>
@@ -78,57 +198,21 @@ const toggleTheme = () => {
         <span v-show="!collapsed" class="logo-text">E-Charge 平台</span>
       </div>
       <el-menu :default-active="activeMenu" class="custom-menu" :collapse="collapsed" :collapse-transition="false" background-color="var(--sidebar-bg)" text-color="#a6adb4" active-text-color="#ffffff" @select="handleMenuSelect">
-        
-        <el-menu-item index="/overview">
-          <el-icon><Histogram /></el-icon>
-          <template #title><span>概览</span></template>
-        </el-menu-item>
-
-        <el-sub-menu index="/orders">
-          <template #title><el-icon><Tickets /></el-icon><span>订单管理</span></template>
-          <el-menu-item index="/orders/history">历史订单</el-menu-item>
-          <el-menu-item index="/orders/realtime">实时订单</el-menu-item>
-          <el-menu-item index="/orders/abnormal">异常订单</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="/finance">
-          <template #title><el-icon><Wallet /></el-icon><span>财务管理</span></template>
-          <el-menu-item index="/finance/cards">绑卡管理</el-menu-item>
-          <el-menu-item index="/finance/settlement">收益对账</el-menu-item>
-          <el-menu-item index="/finance/invoice">开票管理</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="/stations">
-          <template #title><el-icon><OfficeBuilding /></el-icon><span>电站电桩管理</span></template>
-          <el-menu-item index="/stations/list">电站列表</el-menu-item>
-          <el-menu-item index="/stations/piles">电桩管理</el-menu-item>
-          <el-menu-item index="/stations/pricing">电价设置</el-menu-item>
-          <el-menu-item index="/stations/review">审核管理</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="/organizations">
-          <template #title><el-icon><OfficeBuilding /></el-icon><span>机构管理</span></template>
-          <el-menu-item index="/organizations/operators">运营商资料</el-menu-item>
-          <el-menu-item index="/organizations/exclusive">专属机构</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="/users">
-          <template #title><el-icon><UserFilled /></el-icon><span>用户管理</span></template>
-          <el-menu-item index="/users/exclusive">专属用户</el-menu-item>
-          <el-menu-item index="/users/fleet">车队管理</el-menu-item>
-          <el-menu-item index="/users/whitelist">白名单管理</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="/marketing">
-          <template #title><el-icon><Promotion /></el-icon><span>营销管理</span></template>
-          <el-menu-item index="/marketing/tags">标签管理</el-menu-item>
-          <el-menu-item index="/marketing/discounts">折扣管理</el-menu-item>
-        </el-sub-menu>
-
-        <el-menu-item index="/settings">
-          <el-icon><Setting /></el-icon>
-          <template #title><span>系统设置</span></template>
-        </el-menu-item>
+        <template v-for="item in visibleMenus" :key="item.index">
+          <el-sub-menu v-if="item.children" :index="item.index">
+            <template #title>
+              <el-icon><component :is="item.icon" /></el-icon>
+              <span>{{ item.title }}</span>
+            </template>
+            <el-menu-item v-for="child in item.children" :key="child.index" :index="child.index">
+              {{ child.title }}
+            </el-menu-item>
+          </el-sub-menu>
+          <el-menu-item v-else :index="item.index">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <template #title><span>{{ item.title }}</span></template>
+          </el-menu-item>
+        </template>
       </el-menu>
     </el-aside>
 
@@ -138,53 +222,21 @@ const toggleTheme = () => {
         <span class="logo-text">E-Charge 平台</span>
       </div>
       <el-menu :default-active="activeMenu" class="custom-menu" background-color="var(--sidebar-bg)" text-color="#a6adb4" active-text-color="#ffffff" @select="handleMenuSelect">
-        <el-menu-item index="/overview"><el-icon><Histogram /></el-icon><span>概览</span></el-menu-item>
-        
-        <el-sub-menu index="/orders">
-          <template #title><el-icon><Tickets /></el-icon><span>订单管理</span></template>
-          <el-menu-item index="/orders/history">历史订单</el-menu-item>
-          <el-menu-item index="/orders/realtime">实时订单</el-menu-item>
-          <el-menu-item index="/orders/abnormal">异常订单</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="/finance">
-          <template #title><el-icon><Wallet /></el-icon><span>财务管理</span></template>
-          <el-menu-item index="/finance/cards">绑卡管理</el-menu-item>
-          <el-menu-item index="/finance/settlement">收益对账</el-menu-item>
-          <el-menu-item index="/finance/invoice">开票管理</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="/stations">
-          <template #title><el-icon><OfficeBuilding /></el-icon><span>电站电桩管理</span></template>
-          <el-menu-item index="/stations/list">电站列表</el-menu-item>
-          <el-menu-item index="/stations/piles">电桩管理</el-menu-item>
-          <el-menu-item index="/stations/pricing">电价设置</el-menu-item>
-          <el-menu-item index="/stations/review">审核管理</el-menu-item>
-        </el-sub-menu>
-        
-        <el-sub-menu index="/organizations">
-          <template #title><el-icon><OfficeBuilding /></el-icon><span>机构管理</span></template>
-          <el-menu-item index="/organizations/operators">运营商资料</el-menu-item>
-          <el-menu-item index="/organizations/exclusive">专属机构</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="/users">
-          <template #title><el-icon><UserFilled /></el-icon><span>用户管理</span></template>
-          <el-menu-item index="/users/exclusive">专属用户</el-menu-item>
-          <el-menu-item index="/users/fleet">车队管理</el-menu-item>
-          <el-menu-item index="/users/whitelist">白名单管理</el-menu-item>
-        </el-sub-menu>
-
-        <el-sub-menu index="/marketing">
-          <template #title><el-icon><Promotion /></el-icon><span>营销管理</span></template>
-          <el-menu-item index="/marketing/tags">标签管理</el-menu-item>
-          <el-menu-item index="/marketing/discounts">折扣管理</el-menu-item>
-        </el-sub-menu>
-
-        <el-menu-item index="/settings">
-          <el-icon><Setting /></el-icon>
-          <span>系统设置</span>
-        </el-menu-item>
+        <template v-for="item in visibleMenus" :key="item.index">
+          <el-sub-menu v-if="item.children" :index="item.index">
+            <template #title>
+              <el-icon><component :is="item.icon" /></el-icon>
+              <span>{{ item.title }}</span>
+            </template>
+            <el-menu-item v-for="child in item.children" :key="child.index" :index="child.index">
+              {{ child.title }}
+            </el-menu-item>
+          </el-sub-menu>
+          <el-menu-item v-else :index="item.index">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <span>{{ item.title }}</span>
+          </el-menu-item>
+        </template>
       </el-menu>
     </el-drawer>
 
@@ -243,6 +295,20 @@ const toggleTheme = () => {
               </div>
             </div>
           </el-popover>
+
+          <el-dropdown trigger="click" @command="handleRoleSwitch" style="margin-right: 16px;">
+            <span class="el-dropdown-link" style="cursor: pointer; display: flex; align-items: center; color: var(--text-primary);">
+              <el-tag :type="currentRole === 'admin' ? 'danger' : 'success'" size="small" style="margin-right: 8px;">
+                {{ currentRole === 'admin' ? '管理员模式' : '运营商模式' }}
+              </el-tag>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="admin">切换至: 管理员</el-dropdown-item>
+                <el-dropdown-item command="operator">切换至: 运营商</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
 
           <el-dropdown trigger="click" style="margin-left: 12px;">
             <span class="user-info">

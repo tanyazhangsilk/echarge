@@ -69,6 +69,12 @@ const routes = [
         meta: { title: '收益对账' }
       },
       {
+        path: 'global-settle',
+        name: 'GlobalSettle',
+        component: () => import('../views/PlaceholderPage.vue'),
+        meta: { title: '全局清分执行' }
+      },
+      {
         path: 'invoice',
         name: 'InvoiceManagement',
         component: () => import('../views/finance/InvoiceManagement.vue'),
@@ -123,11 +129,43 @@ const routes = [
     },
   },
   {
+    path: '/organizations/operators',
+    name: 'OrganizationOperators',
+    component: () => import('../views/PlaceholderPage.vue'),
+    meta: {
+      title: '运营商入驻审核',
+    },
+  },
+  {
+    path: '/organizations/exclusive',
+    name: 'OrganizationExclusive',
+    component: () => import('../views/PlaceholderPage.vue'),
+    meta: {
+      title: '专属机构',
+    },
+  },
+  {
     path: '/users',
     name: 'Users',
     component: () => import('../views/PlaceholderPage.vue'),
     meta: {
       title: '用户管理',
+    },
+  },
+  {
+    path: '/users/fleet',
+    name: 'UserFleet',
+    component: () => import('../views/PlaceholderPage.vue'),
+    meta: {
+      title: '车队管理',
+    },
+  },
+  {
+    path: '/users/whitelist',
+    name: 'UserWhitelist',
+    component: () => import('../views/PlaceholderPage.vue'),
+    meta: {
+      title: '白名单管理',
     },
   },
   {
@@ -139,11 +177,35 @@ const routes = [
     },
   },
   {
+    path: '/marketing/tags',
+    name: 'MarketingTags',
+    component: () => import('../views/PlaceholderPage.vue'),
+    meta: {
+      title: '标签管理',
+    },
+  },
+  {
+    path: '/marketing/discounts',
+    name: 'MarketingDiscounts',
+    component: () => import('../views/PlaceholderPage.vue'),
+    meta: {
+      title: '折扣活动',
+    },
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: () => import('../views/PlaceholderPage.vue'),
     meta: {
       title: '系统设置',
+    },
+  },
+  {
+    path: '/placeholder',
+    name: 'OperatorAudit',
+    component: () => import('../views/PlaceholderPage.vue'),
+    meta: {
+      title: '运营商审核',
     },
   },
 ]
