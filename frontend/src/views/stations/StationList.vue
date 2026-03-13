@@ -1,305 +1,149 @@
 <script setup>
-import { reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
+import { ref } from 'vue'
+import { Search, Plus, OfficeBuilding, CircleCheck, Connection, Money } from '@element-plus/icons-vue'
 
-// 搜索表单 / Search form state
-const searchForm = reactive({
-  name: '',
-  status: '',
-})
+// 顶部高级统计数据 (加入副标题指标)
+const statCards = [
+  { title: '电站总数', value: '12', unit: '座', desc: '较上周新增 1 座', icon: OfficeBuilding, color: '#409EFF', bgColor: '#ecf5ff' },
+  { title: '运营中电站', value: '10', unit: '座', desc: '当前在线率 83.3%', icon: CircleCheck, color: '#67C23A', bgColor: '#f0f9eb' },
+  { title: '总充电桩', value: '156', unit: '个', desc: '综合使用率 45.2%', icon: Connection, color: '#E6A23C', bgColor: '#fdf6ec' },
+  { title: '今日总收益', value: '12,580.00', unit: '元', desc: '较昨日同时段 +12%', icon: Money, color: '#F56C6C', bgColor: '#fef0f0' }
+]
 
-// 表格数据 / Table data
+// 丰富的搜索表单
+const searchQuery = ref({ name: '', status: '', region: '', type: '' })
+
+// 模拟表格数据 (增加评分和站点类型)
 const tableData = ref([
-  {
-    id: 1,
-    name: '南山科技园充电站',
-    region: '深圳市南山区',
-    fast: 10,
-    slow: 5,
-    totalPower: 750.5,
-    todayIncome: 3280.0,
-    status: 'open',
-  },
-  {
-    id: 2,
-    name: '福田市民中心充电站',
-    region: '深圳市福田区',
-    fast: 18,
-    slow: 12,
-    totalPower: 1280.0,
-    todayIncome: 5126.4,
-    status: 'open',
-  },
-  {
-    id: 3,
-    name: '宝安国际机场快充站',
-    region: '深圳市宝安区',
-    fast: 36,
-    slow: 8,
-    totalPower: 2400.8,
-    todayIncome: 9635.2,
-    status: 'open',
-  },
-  {
-    id: 4,
-    name: '龙岗大运中心充电站',
-    region: '深圳市龙岗区',
-    fast: 12,
-    slow: 20,
-    totalPower: 980.0,
-    todayIncome: 1840.5,
-    status: 'building',
-  },
-  {
-    id: 5,
-    name: '罗湖口岸公共充电站',
-    region: '深圳市罗湖区',
-    fast: 8,
-    slow: 16,
-    totalPower: 620.5,
-    todayIncome: 970.0,
-    status: 'open',
-  },
-  {
-    id: 6,
-    name: '前海自贸区示范站',
-    region: '深圳市南山区',
-    fast: 20,
-    slow: 10,
-    totalPower: 1600.2,
-    todayIncome: 0,
-    status: 'building',
-  },
-  {
-    id: 7,
-    name: '盐田港物流园充电站',
-    region: '深圳市盐田区',
-    fast: 14,
-    slow: 6,
-    totalPower: 900.0,
-    todayIncome: 365.8,
-    status: 'closed',
-  },
-  {
-    id: 8,
-    name: '光明科学城综合站',
-    region: '深圳市光明区',
-    fast: 16,
-    slow: 24,
-    totalPower: 1450.3,
-    todayIncome: 2260.0,
-    status: 'open',
-  },
+  { id: 1, name: '南山区高新园超级超充站', region: '南山区', type: '公共超充', piles: '20/5', power: '2400', revenue: '3450.50', status: '营业中', rating: 4.8 },
+  { id: 2, name: '福田区科创大厦充电站', region: '福田区', type: '公共快充', piles: '10/2', power: '1200', revenue: '1890.00', status: '营业中', rating: 4.5 },
+  { id: 3, name: '宝安中心区地下场站', region: '宝安区', type: '商超配套', piles: '15/0', power: '1800', revenue: '2100.80', status: '营业中', rating: 4.6 },
+  { id: 4, name: '龙华区壹方城示范站', region: '龙华区', type: '综合场站', piles: '30/10', power: '4200', revenue: '5600.20', status: '建设中', rating: 0 },
+  { id: 5, name: '罗湖区国贸大厦超充站', region: '罗湖区', type: '写字楼配套', piles: '8/2', power: '960', revenue: '1200.00', status: '营业中', rating: 4.2 },
+  { id: 6, name: '光明区高铁站枢纽站', region: '光明区', type: '交通枢纽', piles: '40/10', power: '6000', revenue: '0.00', status: '停业整顿', rating: 3.5 }
 ])
-
-// 分页状态 / Pagination state
-const currentPage = ref(1)
-const pageSize = ref(10)
-const total = ref(tableData.value.length)
-
-// 搜索操作 / Search actions
-const handleSearch = () => {
-  ElMessage.info('功能开发中')
-}
-
-const handleReset = () => {
-  ElMessage.info('功能开发中')
-}
-
-// 业务操作 / Business actions
-const handleAdd = () => {
-  ElMessage.info('功能开发中')
-}
-
-const handleEdit = () => {
-  ElMessage.info('功能开发中')
-}
-
-const handlePrice = () => {
-  ElMessage.info('功能开发中')
-}
-
-const handlePiles = () => {
-  ElMessage.info('功能开发中')
-}
-
-// 分页事件 / Pagination events
-const handleSizeChange = (val) => {
-  pageSize.value = val
-  ElMessage.info('功能开发中')
-}
-
-const handleCurrentChange = (val) => {
-  currentPage.value = val
-  ElMessage.info('功能开发中')
-}
-
-const formatPower = (val) => {
-  const num = Number(val)
-  if (Number.isNaN(num)) return '-'
-  return num.toFixed(1)
-}
-
-const formatMoney = (val) => {
-  const num = Number(val)
-  if (Number.isNaN(num)) return '￥ 0.00'
-  return `￥ ${num.toFixed(2)}`
-}
-
-const getStatusTagType = (status) => {
-  const map = {
-    open: 'success',
-    building: 'warning',
-    closed: 'info',
-  }
-  return map[status] || 'info'
-}
-
-const getStatusText = (status) => {
-  const map = {
-    open: '营业中',
-    building: '建设中',
-    closed: '停业',
-  }
-  return map[status] || '未知'
-}
 </script>
 
 <template>
-  <div class="station-page">
-    <el-card shadow="never" class="action-card">
-      <el-row :gutter="12" align="middle">
-        <el-col :xs="24" :sm="16" :md="18">
-          <div class="action-left">
-            <el-input
-              v-model="searchForm.name"
-              size="default"
-              clearable
-              :prefix-icon="Search"
-              placeholder="电站名称"
-              style="width: 220px"
-            />
-            <el-select
-              v-model="searchForm.status"
-              size="default"
-              clearable
-              placeholder="运营状态"
-              style="width: 160px"
-            >
-              <el-option label="营业中" value="open" />
-              <el-option label="建设中" value="building" />
-              <el-option label="停业" value="closed" />
-            </el-select>
-            <el-button type="primary" size="default" :icon="Search" @click="handleSearch">查询</el-button>
-            <el-button size="default" @click="handleReset">重置</el-button>
+  <div class="page-container">
+    <el-row :gutter="20" class="stat-row">
+      <el-col :span="6" v-for="(card, index) in statCards" :key="index">
+        <el-card shadow="hover" class="stat-card">
+          <div class="stat-content">
+            <div class="stat-info">
+              <div class="stat-title">{{ card.title }}</div>
+              <div class="stat-value" :style="{ color: card.color }">
+                <span v-if="card.unit === '元'" class="currency">￥</span>{{ card.value }} 
+                <span class="unit" v-if="card.unit !== '元'">{{ card.unit }}</span>
+              </div>
+              <div class="stat-desc">{{ card.desc }}</div>
+            </div>
+            <div class="stat-icon-wrapper" :style="{ backgroundColor: card.bgColor, color: card.color }">
+              <el-icon :size="24"><component :is="card.icon" /></el-icon>
+            </div>
           </div>
-        </el-col>
-        <el-col :xs="24" :sm="8" :md="6">
-          <div class="action-right">
-            <el-button type="primary" size="default" class="btn-add" @click="handleAdd">+ 新增电站</el-button>
-          </div>
-        </el-col>
-      </el-row>
-    </el-card>
+        </el-card>
+      </el-col>
+    </el-row>
 
-    <el-card shadow="never" class="table-card">
-      <el-table :data="tableData" stripe :border="false" fit highlight-current-row class="station-table">
-        <el-table-column prop="name" label="电站名称" width="180" align="left" show-overflow-tooltip />
-        <el-table-column prop="region" label="所在地区" width="160" align="left" />
-        <el-table-column label="快充/慢充桩数量" width="140" align="right" class-name="col-number">
-          <template #default="{ row }">{{ row.fast }}/{{ row.slow }}</template>
-        </el-table-column>
-        <el-table-column prop="totalPower" label="总功率(kW)" width="120" align="right" class-name="col-number">
-          <template #default="{ row }">{{ formatPower(row.totalPower) }}</template>
-        </el-table-column>
-        <el-table-column prop="todayIncome" label="今日收益(元)" width="130" align="right" class-name="col-number">
-          <template #default="{ row }">{{ formatMoney(row.todayIncome) }}</template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag :type="getStatusTagType(row.status)">{{ getStatusText(row.status) }}</el-tag>
+    <el-card shadow="never" class="list-card">
+      <template #header>
+        <div class="card-header">
+          <span class="header-title">充电站管理</span>
+        </div>
+      </template>
+
+      <div class="action-bar">
+        <div class="filter-group">
+          <el-input v-model="searchQuery.name" placeholder="搜索电站名称..." :prefix-icon="Search" class="filter-item input-name" />
+          <el-select v-model="searchQuery.region" placeholder="所在大区" class="filter-item">
+            <el-option label="全部分区" value="" />
+            <el-option label="南山区" value="南山区" />
+            <el-option label="福田区" value="福田区" />
+            <el-option label="宝安区" value="宝安区" />
+          </el-select>
+          <el-select v-model="searchQuery.type" placeholder="站点类型" class="filter-item">
+            <el-option label="全部类型" value="" />
+            <el-option label="公共超充" value="公共超充" />
+            <el-option label="商超配套" value="商超配套" />
+            <el-option label="交通枢纽" value="交通枢纽" />
+          </el-select>
+          <el-select v-model="searchQuery.status" placeholder="运营状态" class="filter-item">
+            <el-option label="全部状态" value="" />
+            <el-option label="营业中" value="营业中" />
+            <el-option label="建设中" value="建设中" />
+            <el-option label="停业" value="停业" />
+          </el-select>
+          <el-button type="primary" plain>查询</el-button>
+          <el-button plain>重置</el-button>
+        </div>
+        <el-button type="primary" :icon="Plus">新增电站</el-button>
+      </div>
+
+      <el-table :data="tableData" stripe style="width: 100%" :header-cell-style="{ background: '#f5f7fa', color: '#606266' }">
+        <el-table-column prop="name" label="电站名称" min-width="200">
+          <template #default="scope">
+            <div style="font-weight: 600; color: #303133;">{{ scope.row.name }}</div>
+            <el-tag size="small" type="info" style="margin-top: 4px;">{{ scope.row.type }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column prop="region" label="所在地区" width="120" />
+        <el-table-column prop="piles" label="快/慢充桩" width="100" />
+        <el-table-column prop="rating" label="用户评分" width="160">
           <template #default="scope">
-            <el-button link class="action-link" @click="handleEdit(scope.row)">编辑</el-button>
-            <el-button link class="action-link" @click="handlePrice(scope.row)">配置电价</el-button>
-            <el-button link class="action-link" @click="handlePiles(scope.row)">查看电桩</el-button>
+            <el-rate v-if="scope.row.rating > 0" v-model="scope.row.rating" disabled show-score text-color="#ff9900" score-template="{value}" />
+            <span v-else style="color: #909399; font-size: 13px;">暂无评分</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="power" label="总功率(kW)" width="100" align="right" />
+        <el-table-column prop="revenue" label="今日收益(元)" width="140" align="right">
+          <template #default="scope">
+            <span style="font-weight: bold;" :style="{ color: scope.row.revenue !== '0.00' ? '#F56C6C' : '#606266' }">{{ scope.row.revenue }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="100" align="center">
+          <template #default="scope">
+            <el-tag :type="scope.row.status === '营业中' ? 'success' : (scope.row.status === '建设中' ? 'warning' : 'danger')">
+              {{ scope.row.status }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="220" fixed="right">
+          <template #default>
+            <el-button link type="primary" size="small">编辑</el-button>
+            <el-button link type="success" size="small">配置电价</el-button>
+            <el-button link type="info" size="small">查看电桩</el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <div class="pager">
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          :page-sizes="[10, 20, 50]"
-          layout="total, sizes, prev, pager, next, jumper"
-          background
-          :total="total"
-          @size-change="handleSizeChange"
-          @current-change="handleCurrentChange"
-        />
+      <div class="pagination-wrapper">
+        <el-pagination background layout="total, sizes, prev, pager, next, jumper" :total="45" :page-size="10" />
       </div>
     </el-card>
   </div>
 </template>
 
 <style scoped>
-.station-page {
-  min-height: calc(100vh - 60px);
-  background: #f5f7fa;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
+.page-container { padding: 0; }
+.stat-row { margin-bottom: 24px; }
+.stat-card { border: none; border-radius: 8px; }
+.stat-content { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+.stat-title { font-size: 14px; color: #909399; margin-bottom: 8px; }
+.stat-value { font-size: 28px; font-weight: bold; font-family: 'DIN Alternate', sans-serif; margin-bottom: 4px; }
+.currency { font-size: 18px; font-weight: normal; margin-right: 2px; }
+.unit { font-size: 14px; color: #909399; font-weight: normal; margin-left: 4px; }
+.stat-desc { font-size: 12px; color: #A8ABB2; }
+.stat-icon-wrapper { width: 56px; height: 56px; border-radius: 50%; display: flex; justify-content: center; align-items: center; }
 
-.action-card,
-.table-card {
-  background: #ffffff;
-  border-radius: 4px;
-}
+.list-card { border: none; border-radius: 8px; }
+.card-header { display: flex; align-items: center; }
+.header-title { font-size: 18px; font-weight: bold; color: #303133; }
 
-.action-left {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
+.action-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.filter-group { display: flex; gap: 12px; flex-wrap: wrap; }
+.filter-item { width: 140px; }
+.input-name { width: 220px; }
 
-.action-right {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-}
-
-.btn-add {
-  margin-right: 8px;
-}
-
-.pager {
-  text-align: right;
-  margin-top: 16px;
-}
-
-:deep(.station-table .el-table__header-wrapper th.el-table__cell) {
-  background: #fafafa;
-  color: #606266;
-  font-size: 14px;
-}
-
-:deep(.col-number .cell) {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-:deep(.action-link.el-button) {
-  color: #409eff;
-}
-
-:deep(.action-link.el-button:hover) {
-  color: #66b1ff;
-}
+.pagination-wrapper { margin-top: 20px; display: flex; justify-content: flex-end; }
 </style>
