@@ -111,3 +111,93 @@ async def trigger_settle(db: Session = Depends(get_db)):
     except Exception as e:
         logger.exception("finance_settle_failed", extra={"date": str(target)})
         return {"code": 500, "message": f"清分失败: {str(e)}", "processed": 0}
+
+
+@api_router.get("/orders/realtime", tags=["orders"])
+async def get_realtime_orders(db: Session = Depends(get_db)):
+    from sqlalchemy.orm import joinedload
+    # 查询 status = 0 (进行中) 的订单，按时间倒序
+    orders = db.query(Order).options(
+        joinedload(Order.user), joinedload(Order.charger)
+    ).filter(Order.status == 0).order_by(Order.start_time.desc()).limit(50).all()
+    
+    return {
+        "code": 200,
+        "data": [{
+            "order_no": o.order_no,
+            "user_phone": o.user.phone if o.user else "未知用户",
+            "charger_sn": o.charger.sn_code if o.charger else "未知设备",
+            "start_time": o.start_time.strftime("%Y-%m-%d %H:%M:%S") if o.start_time else "",
+            "total_kwh": float(o.total_kwh),
+            "total_fee": float(o.total_fee),
+            "duration_mins": int((datetime.now() - o.start_time).total_seconds() / 60) if o.start_time else 0
+        } for o in orders]
+    }
+
+@api_router.get("/orders/abnormal", tags=["orders"])
+async def get_abnormal_orders(db: Session = Depends(get_db)):
+    from sqlalchemy.orm import joinedload
+    import random
+    # 查询 status = 2 (异常) 的订单
+    orders = db.query(Order).options(
+        joinedload(Order.user), joinedload(Order.charger)
+    ).filter(Order.status == 2).order_by(Order.start_time.desc()).limit(50).all()
+    
+    # 模拟几种常见的异常原因
+    error_types = ["设备离线断电", "用户账户余额不足", "枪头温度过高保护", "通讯心跳超时", "结算扣款失败"]
+    
+    return {
+        "code": 200,
+        "data": [{
+            "order_no": o.order_no,
+            "user_phone": o.user.phone if o.user else "未知",
+            "charger_sn": o.charger.sn_code if o.charger else "未知",
+            "start_time": o.start_time.strftime("%Y-%m-%d %H:%M:%S") if o.start_time else "",
+            "total_fee": float(o.total_fee),
+            "error_reason": random.choice(error_types), # 随机分配异常原因展示
+            "handle_status": 0 # 0-未处理, 1-已处理
+        } for o in orders]
+    }
+
+
+@api_router.get("/finance/invoices", tags=["finance"])
+async def get_invoices(db: Session = Depends(get_db)):
+    from sqlalchemy.orm import joinedload
+    from app.models.models import Invoice
+    
+    # 联表查询发票与对应的申请用户，按时间倒序
+    invoices = db.query(Invoice).options(joinedload(Invoice.user)).order_by(Invoice.created_at.desc()).all()
+    
+    return {
+        "code": 200,
+        "data": [{
+            "id": inv.id,
+            "invoice_no": f"INV{inv.created_at.strftime('%Y%m%d')}{str(inv.id).zfill(4)}",
+            "user_phone": inv.user.phone if inv.user else "未知用户",
+            "amount": float(inv.amount),
+            "email": inv.email,
+            "status": inv.status,
+            "created_at": inv.created_at.strftime("%Y-%m-%d %H:%M:%S") if inv.created_at else "",
+            "file_url": inv.file_url
+        } for inv in invoices]
+    }
+
+@api_router.post("/finance/invoices/{invoice_id}/process", tags=["finance"])
+async def process_invoice(invoice_id: int, payload: dict, db: Session = Depends(get_db)):
+    from app.models.models import Invoice
+    
+    action = payload.get("action") # 'approve' 或 'reject'
+    file_url = payload.get("file_url", "")
+    
+    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not invoice:
+        return {"code": 404, "message": "发票申请不存在"}
+        
+    if action == "approve":
+        invoice.status = 1
+        invoice.file_url = file_url
+    elif action == "reject":
+        invoice.status = 2
+        
+    db.commit()
+    return {"code": 200, "message": "处理成功"}

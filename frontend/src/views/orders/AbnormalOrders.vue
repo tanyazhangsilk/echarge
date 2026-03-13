@@ -1,148 +1,134 @@
 <script setup>
-import { ref, reactive } from 'vue'
-import { Search, Refresh, Warning } from '@element-plus/icons-vue'
+import { ref, onMounted } from 'vue'
+import { Warning, Search, Check } from '@element-plus/icons-vue'
+import axios from 'axios'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
-const searchForm = reactive({
-  dateRange: [],
-  station: '',
-  keyword: ''
+const tableData = ref([])
+const loading = ref(true)
+const searchQuery = ref('')
+
+const fetchData = async () => {
+  loading.value = true
+  try {
+    const res = await axios.get('http://127.0.0.1:8000/api/v1/orders/abnormal')
+    if (res.data.code === 200) {
+      tableData.value = res.data.data
+    }
+  } catch (error) {
+    ElMessage.error('获取异常订单失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => {
+  fetchData()
 })
 
-const currentPage = ref(1)
-const pageSize = ref(10)
-const total = ref(25)
-
-const tableData = ref([
-  {
-    orderNo: 'ERR202310260005',
-    stationName: '中心广场充电站',
-    pileNo: 'A05',
-    user: '赵六 (13600136000)',
-    time: '2023-10-26 14:30:00',
-    errorCode: 'E001',
-    errorDesc: '连接超时',
-    status: 'pending'
-  },
-  {
-    orderNo: 'ERR202310260008',
-    stationName: '商业区充电站',
-    pileNo: 'B01',
-    user: '孙七 (13500135000)',
-    time: '2023-10-26 15:45:00',
-    errorCode: 'E003',
-    errorDesc: '电压异常',
-    status: 'processing'
-  },
-  {
-    orderNo: 'ERR202310250012',
-    stationName: '工业园充电站',
-    pileNo: 'C02',
-    user: '周八 (13400134000)',
-    time: '2023-10-25 09:10:00',
-    errorCode: 'E002',
-    errorDesc: '用户中途拔枪',
-    status: 'resolved'
-  }
-])
-
-const handleSearch = () => {
-  console.log('search')
-}
-
-const handleReset = () => {
-  Object.assign(searchForm, { dateRange: [], station: '', keyword: '' })
-}
-
-const handleResolve = (row) => {
-  console.log('resolve', row)
-}
-
-const getStatusType = (status) => {
-  const map = {
-    pending: 'danger',
-    processing: 'warning',
-    resolved: 'success'
-  }
-  return map[status]
-}
-
-const getStatusText = (status) => {
-  const map = {
-    pending: '待处理',
-    processing: '处理中',
-    resolved: '已解决'
-  }
-  return map[status]
+const handleOrder = (row) => {
+  ElMessageBox.confirm(
+    `确认将订单 ${row.order_no} 标记为已处理？此操作通常伴随退款或客诉完结。`,
+    '处理异常订单',
+    { confirmButtonText: '标记已处理', cancelButtonText: '取消', type: 'warning' }
+  ).then(() => {
+    row.handle_status = 1
+    ElMessage.success('订单处理状态已更新')
+  }).catch(() => {})
 }
 </script>
 
 <template>
-  <div class="page-container flex flex-col gap-4">
-    <!-- 筛选区域 -->
-    <el-card shadow="never" class="filter-card">
-      <el-form :inline="true" :model="searchForm">
-        <el-form-item label="发生时间">
-          <el-date-picker
-            v-model="searchForm.dateRange"
-            type="daterange"
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-          />
-        </el-form-item>
-        <el-form-item label="充电站">
-           <el-input v-model="searchForm.station" placeholder="充电站名称" clearable />
-        </el-form-item>
-        <el-form-item label="关键字">
-          <el-input v-model="searchForm.keyword" placeholder="订单号/用户/错误码" clearable />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
-          <el-button :icon="Refresh" @click="handleReset">重置</el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
+  <div class="page-container">
+    <el-alert 
+      title="警告：您有待处理的异常订单！请尽快介入处理以避免客诉。" 
+      type="error" 
+      show-icon 
+      class="mb-6 py-2"
+      :closable="false"
+    />
 
-    <!-- 列表区域 -->
-    <el-card shadow="never" class="table-card flex-1">
-      <el-table :data="tableData" style="width: 100%" v-loading="false">
-        <el-table-column prop="orderNo" label="异常单号" min-width="180" />
-        <el-table-column prop="stationName" label="充电站" min-width="150" />
-        <el-table-column prop="pileNo" label="桩号" width="100" />
-        <el-table-column prop="user" label="用户" min-width="180" />
-        <el-table-column prop="time" label="发生时间" width="180" />
-        <el-table-column prop="errorCode" label="错误码" width="100">
-           <template #default="{ row }">
-            <el-tag type="danger" effect="plain">{{ row.errorCode }}</el-tag>
+    <el-card shadow="never" class="border-0 rounded-lg">
+      <div class="flex justify-between items-center mb-6">
+        <div class="flex gap-4">
+          <el-input v-model="searchQuery" placeholder="搜索订单号或手机号..." :prefix-icon="Search" style="width: 260px;" />
+          <el-select placeholder="异常原因过滤" style="width: 180px;">
+            <el-option label="全部异常" value="" />
+            <el-option label="设备离线断电" value="1" />
+            <el-option label="通讯心跳超时" value="2" />
+          </el-select>
+          <el-select placeholder="处理状态" style="width: 140px;">
+            <el-option label="全部" value="" />
+            <el-option label="未处理" value="0" />
+            <el-option label="已处理" value="1" />
+          </el-select>
+          <el-button type="primary">查询</el-button>
+        </div>
+      </div>
+
+      <el-table :data="tableData" v-loading="loading" stripe border style="width: 100%" :header-cell-style="{ background: '#fef0f0', color: '#F56C6C' }">
+        <el-table-column prop="order_no" label="异常订单号" width="200">
+          <template #default="scope">
+            <span class="font-mono text-gray-700">{{ scope.row.order_no }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="errorDesc" label="异常描述" min-width="150" />
-        <el-table-column prop="status" label="处理状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)">{{ getStatusText(row.status) }}</el-tag>
+        <el-table-column prop="start_time" label="发生时间" width="180" />
+        <el-table-column prop="user_phone" label="受影响用户" width="120" />
+        <el-table-column prop="charger_sn" label="故障终端" width="140" />
+        <el-table-column prop="error_reason" label="系统诊断原因" min-width="180">
+          <template #default="scope">
+            <el-tag type="danger" effect="light" class="w-full justify-start">
+              <el-icon class="mr-1"><Warning /></el-icon>{{ scope.row.error_reason }}
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" v-if="row.status !== 'resolved'" @click="handleResolve(row)">处理</el-button>
-            <el-button link type="info" size="small" v-else>详情</el-button>
+        <el-table-column prop="total_fee" label="涉及金额" width="100" align="right">
+          <template #default="scope">
+            <strong class="text-gray-800">￥{{ scope.row.total_fee }}</strong>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100" align="center">
+          <template #default="scope">
+            <el-tag :type="scope.row.handle_status === 0 ? 'warning' : 'success'" effect="dark">
+              {{ scope.row.handle_status === 0 ? '待介入' : '已解决' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="人工干预" width="180" fixed="right">
+          <template #default="scope">
+            <el-button 
+              size="small" 
+              :type="scope.row.handle_status === 0 ? 'primary' : 'default'"
+              :disabled="scope.row.handle_status === 1"
+              @click="handleOrder(scope.row)"
+            >
+              {{ scope.row.handle_status === 0 ? '立即处理' : '查看记录' }}
+            </el-button>
+            <el-button v-if="scope.row.handle_status === 0" size="small" type="danger" plain>退款</el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <div class="mt-4 flex justify-end">
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          :page-sizes="[10, 20, 50]"
-          layout="total, sizes, prev, pager, next, jumper"
-          :total="total"
-        />
+      <div class="flex justify-end mt-6">
+        <el-pagination background layout="prev, pager, next" :total="tableData.length" />
       </div>
     </el-card>
   </div>
 </template>
 
 <style scoped>
-/* 样式已使用 Tailwind 类名替代，保持与全局风格一致 */
+.mb-6 { margin-bottom: 24px; }
+.mt-6 { margin-top: 24px; }
+.py-2 { padding-top: 8px; padding-bottom: 8px; }
+.flex { display: flex; }
+.justify-between { justify-content: space-between; }
+.justify-end { justify-content: flex-end; }
+.items-center { align-items: center; }
+.gap-4 { gap: 16px; }
+.w-full { width: 100%; display: flex; }
+.mr-1 { margin-right: 4px; }
+
+.text-gray-700 { color: #606266; }
+.text-gray-800 { color: #303133; }
+.font-mono { font-family: monospace; }
 </style>

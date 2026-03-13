@@ -1,171 +1,149 @@
 <script setup>
-import { ref } from 'vue'
-import { Search, Refresh, Warning } from '@element-plus/icons-vue'
+import { ref, onMounted } from 'vue'
+import { VideoPlay, DataLine, Loading, Search } from '@element-plus/icons-vue'
+import axios from 'axios'
+import { ElMessage } from 'element-plus'
 
-const searchForm = ref({
-  status: '',
-  keyword: ''
-})
+const tableData = ref([])
+const loading = ref(true)
 
-const currentPage = ref(1)
-const pageSize = ref(10)
-const total = ref(100)
+// 顶部统计
+const stats = ref({ active: 0, totalPower: 0, currentFee: 0 })
 
-const tableData = ref([
-  {
-    orderNo: 'ORD202310270001',
-    stationName: '中心广场充电站',
-    pileNo: 'A01',
-    user: '张三 (13800138000)',
-    startTime: '2023-10-27 10:00:00',
-    duration: '00:45:00',
-    kwh: 45.5,
-    amount: 56.8,
-    status: 'charging'
-  },
-  {
-    orderNo: 'ORD202310270002',
-    stationName: '商业区充电站',
-    pileNo: 'B02',
-    user: '李四 (13900139000)',
-    startTime: '2023-10-27 10:15:00',
-    duration: '00:30:00',
-    kwh: 32.0,
-    amount: 40.0,
-    status: 'charging'
-  },
-   {
-    orderNo: 'ORD202310270003',
-    stationName: '工业园充电站',
-    pileNo: 'C03',
-    user: '王五 (13700137000)',
-    startTime: '2023-10-27 10:20:00',
-    duration: '00:25:00',
-    kwh: 68.0,
-    amount: 85.0,
-    status: 'charging'
+const fetchData = async () => {
+  loading.value = true
+  try {
+    const res = await axios.get('http://127.0.0.1:8000/api/v1/orders/realtime')
+    if (res.data.code === 200) {
+      tableData.value = res.data.data
+      stats.value.active = tableData.value.length
+      stats.value.totalPower = tableData.value.reduce((sum, item) => sum + item.total_kwh, 0).toFixed(1)
+      stats.value.currentFee = tableData.value.reduce((sum, item) => sum + item.total_fee, 0).toFixed(2)
+    }
+  } catch (error) {
+    ElMessage.error('获取实时订单失败')
+  } finally {
+    loading.value = false
   }
-])
-
-const handleSearch = () => {
-  console.log('search')
 }
 
-const handleReset = () => {
-  searchForm.value = { status: '', keyword: '' }
-}
-
-const handleStopCharging = (row) => {
-  console.log('stop charging', row)
-}
+onMounted(() => {
+  fetchData()
+  // 每30秒自动刷新一次数据
+  setInterval(fetchData, 30000)
+})
 </script>
 
 <template>
-  <div class="page-container flex flex-col gap-4">
-    <!-- 顶部统计卡片 -->
-    <el-row :gutter="16">
-      <el-col :xs="24" :sm="8">
-        <el-card shadow="hover" class="mb-4 sm:mb-0">
-          <div class="flex items-center">
-            <div class="p-3 rounded-full bg-blue-100 text-blue-500 mr-4">
-              <el-icon :size="24"><img src="https://api.iconify.design/heroicons:bolt.svg" class="w-6 h-6" /></el-icon>
-            </div>
-            <div>
-              <div class="text-gray-500 text-sm">进行中订单</div>
-              <div class="text-2xl font-bold">45</div>
-            </div>
+  <div class="page-container">
+    <div class="flex justify-between items-center mb-6">
+      <div class="flex items-center gap-2">
+        <div class="live-indicator"></div>
+        <span class="text-gray-500 text-sm">数据实时同步中 (30s刷新)</span>
+      </div>
+      <el-button type="primary" plain @click="fetchData" :icon="Loading">手动刷新</el-button>
+    </div>
+
+    <el-row :gutter="20" class="mb-6">
+      <el-col :span="8">
+        <el-card shadow="hover" class="stat-card bg-blue">
+          <div class="stat-icon"><el-icon><VideoPlay /></el-icon></div>
+          <div class="stat-info">
+            <div class="stat-title">当前充电中车辆</div>
+            <div class="stat-value">{{ stats.active }} <span class="text-sm font-normal">辆</span></div>
           </div>
         </el-card>
       </el-col>
-      <el-col :xs="24" :sm="8">
-        <el-card shadow="hover" class="mb-4 sm:mb-0">
-          <div class="flex items-center">
-             <div class="p-3 rounded-full bg-green-100 text-green-500 mr-4">
-              <el-icon :size="24"><img src="https://api.iconify.design/heroicons:battery-50.svg" class="w-6 h-6" /></el-icon>
-            </div>
-            <div>
-              <div class="text-gray-500 text-sm">累计充电量(今日)</div>
-              <div class="text-2xl font-bold">1,245 kWh</div>
-            </div>
+      <el-col :span="8">
+        <el-card shadow="hover" class="stat-card bg-green">
+          <div class="stat-icon"><el-icon><DataLine /></el-icon></div>
+          <div class="stat-info">
+            <div class="stat-title">实时总输出电量</div>
+            <div class="stat-value">{{ stats.totalPower }} <span class="text-sm font-normal">kWh</span></div>
           </div>
         </el-card>
       </el-col>
-      <el-col :xs="24" :sm="8">
-        <el-card shadow="hover">
-          <div class="flex items-center">
-             <div class="p-3 rounded-full bg-orange-100 text-orange-500 mr-4">
-              <el-icon :size="24"><img src="https://api.iconify.design/heroicons:currency-yen.svg" class="w-6 h-6" /></el-icon>
-            </div>
-            <div>
-              <div class="text-gray-500 text-sm">预估收益(今日)</div>
-              <div class="text-2xl font-bold">¥ 1,850.00</div>
-            </div>
+      <el-col :span="8">
+        <el-card shadow="hover" class="stat-card bg-orange">
+          <div class="stat-icon" style="font-weight: bold;">￥</div>
+          <div class="stat-info">
+            <div class="stat-title">当前预估总流水</div>
+            <div class="stat-value">{{ stats.currentFee }} <span class="text-sm font-normal">元</span></div>
           </div>
         </el-card>
       </el-col>
     </el-row>
 
-    <!-- 筛选区域 -->
-    <el-card shadow="never" class="filter-card">
-      <el-form :inline="true" :model="searchForm">
-        <el-form-item label="充电站">
-          <el-input v-model="searchForm.keyword" placeholder="请输入充电站名称" clearable />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
-          <el-button :icon="Refresh" @click="handleReset">重置</el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
+    <el-card shadow="never" class="border-0 rounded-lg">
+      <template #header>
+        <div class="font-bold text-lg text-gray-800">实时充电监控列表</div>
+      </template>
 
-    <!-- 列表区域 -->
-    <el-card shadow="never" class="table-card flex-1">
-      <el-table :data="tableData" style="width: 100%" v-loading="false">
-        <el-table-column prop="orderNo" label="订单号" min-width="180" />
-        <el-table-column prop="stationName" label="充电站" min-width="150" />
-        <el-table-column prop="pileNo" label="桩号" width="100" />
-        <el-table-column prop="user" label="用户" min-width="180" />
-        <el-table-column prop="startTime" label="开始时间" width="180" />
-        <el-table-column prop="duration" label="已充时长" width="120" />
-        <el-table-column prop="kwh" label="已充电量(kWh)" width="140">
-           <template #default="{ row }">
-            <span class="font-bold text-blue-600">{{ row.kwh }}</span>
+      <el-table :data="tableData" v-loading="loading" stripe style="width: 100%">
+        <el-table-column prop="order_no" label="订单编号" width="180">
+          <template #default="scope">
+            <span class="font-mono text-blue-600">{{ scope.row.order_no }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="charger_sn" label="电桩终端" width="140" />
+        <el-table-column prop="user_phone" label="用户账号" width="120" />
+        <el-table-column prop="start_time" label="开始时间" width="180" />
+        <el-table-column label="已充时长" width="120" align="center">
+          <template #default="scope">
+            <el-tag type="success" effect="plain">{{ scope.row.duration_mins }} 分钟</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前电量 (实时)" min-width="180">
+          <template #default="scope">
+            <div class="flex items-center gap-2">
+              <span class="w-10 text-right">{{ scope.row.total_kwh }}</span>
+              <el-progress :percentage="Math.min(100, scope.row.total_kwh * 2)" :show-text="false" class="flex-1" :stroke-width="8" striped striped-flow />
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="total_fee" label="当前金额" width="100" align="right">
+          <template #default="scope">
+            <strong class="text-red-500">￥{{ scope.row.total_fee }}</strong>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="100" fixed="right">
           <template #default>
-            <el-tag type="success" effect="light">
-              <span class="flex items-center gap-1">
-                <span class="animate-pulse w-2 h-2 rounded-full bg-green-500"></span>
-                充电中
-              </span>
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-popconfirm title="确定要强制结束该订单吗？" @confirm="handleStopCharging(row)">
-              <template #reference>
-                <el-button link type="danger" size="small">强制结束</el-button>
-              </template>
-            </el-popconfirm>
+            <el-button link type="danger" size="small">强制停止</el-button>
           </template>
         </el-table-column>
       </el-table>
-
-      <div class="mt-4 flex justify-end">
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          :page-sizes="[10, 20, 50]"
-          layout="total, sizes, prev, pager, next, jumper"
-          :total="total"
-        />
-      </div>
     </el-card>
   </div>
 </template>
 
 <style scoped>
-/* 样式已使用 Tailwind 类名替代，保持与全局风格一致 */
+.mb-6 { margin-bottom: 24px; }
+.flex { display: flex; }
+.justify-between { justify-content: space-between; }
+.items-center { align-items: center; }
+.gap-2 { gap: 8px; }
+.flex-1 { flex: 1; }
+.w-10 { width: 40px; }
+
+/* 呼吸灯动画 */
+.live-indicator {
+  width: 10px; height: 10px; border-radius: 50%; background-color: #67C23A;
+  box-shadow: 0 0 8px #67C23A; animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(103, 194, 58, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(103, 194, 58, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(103, 194, 58, 0); }
+}
+
+.stat-card { border: none; color: #fff; border-radius: 8px; }
+.stat-card:deep(.el-card__body) { display: flex; align-items: center; padding: 24px; }
+.bg-blue { background: linear-gradient(135deg, #409EFF, #36a3f7); }
+.bg-green { background: linear-gradient(135deg, #67C23A, #85ce61); }
+.bg-orange { background: linear-gradient(135deg, #E6A23C, #f3d19e); }
+
+.stat-icon { font-size: 48px; opacity: 0.8; margin-right: 20px; }
+.stat-info { flex: 1; text-align: right; }
+.stat-title { font-size: 14px; opacity: 0.9; margin-bottom: 4px; }
+.stat-value { font-size: 32px; font-weight: bold; font-family: 'DIN Alternate', sans-serif; }
 </style>
