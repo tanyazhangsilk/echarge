@@ -1,40 +1,102 @@
 <script setup>
-import { ref } from 'vue'
-import { Search, Plus, OfficeBuilding, CircleCheck, Connection, Money } from '@element-plus/icons-vue'
+import { ref, reactive } from 'vue'
+import { Search, Plus, OfficeBuilding, CircleCheck, Location, Warning, DocumentAdd } from '@element-plus/icons-vue'
+import axios from 'axios'
+import { ElMessage } from 'element-plus'
 
-// 顶部高级统计数据 (加入副标题指标)
+// 顶部统计数据
 const statCards = [
-  { title: '电站总数', value: '12', unit: '座', desc: '较上周新增 1 座', icon: OfficeBuilding, color: '#409EFF', bgColor: '#ecf5ff' },
-  { title: '运营中电站', value: '10', unit: '座', desc: '当前在线率 83.3%', icon: CircleCheck, color: '#67C23A', bgColor: '#f0f9eb' },
-  { title: '总充电桩', value: '156', unit: '个', desc: '综合使用率 45.2%', icon: Connection, color: '#E6A23C', bgColor: '#fdf6ec' },
-  { title: '今日总收益', value: '12,580.00', unit: '元', desc: '较昨日同时段 +12%', icon: Money, color: '#F56C6C', bgColor: '#fef0f0' }
+  { title: '我的电站总数', value: '6', unit: '座', desc: '含 1 座待审核', icon: OfficeBuilding, color: '#409EFF', bgColor: '#ecf5ff' },
+  { title: '正式运营中', value: '4', unit: '座', desc: '当前在线率 92%', icon: CircleCheck, color: '#67C23A', bgColor: '#f0f9eb' },
+  { title: '平台驳回整改', value: '1', unit: '座', desc: '请及时更新资料', icon: Warning, color: '#F56C6C', bgColor: '#fef0f0' }
 ]
 
-// 丰富的搜索表单
-const searchQuery = ref({ name: '', status: '', region: '', type: '' })
+const searchQuery = ref({ name: '', status: '' })
 
-// 模拟表格数据 (增加评分和站点类型)
+// 模拟表格数据 (包含各种审核状态)
 const tableData = ref([
-  { id: 1, name: '南山区高新园超级超充站', region: '南山区', type: '公共超充', piles: '20/5', power: '2400', revenue: '3450.50', status: '营业中', rating: 4.8 },
-  { id: 2, name: '福田区科创大厦充电站', region: '福田区', type: '公共快充', piles: '10/2', power: '1200', revenue: '1890.00', status: '营业中', rating: 4.5 },
-  { id: 3, name: '宝安中心区地下场站', region: '宝安区', type: '商超配套', piles: '15/0', power: '1800', revenue: '2100.80', status: '营业中', rating: 4.6 },
-  { id: 4, name: '龙华区壹方城示范站', region: '龙华区', type: '综合场站', piles: '30/10', power: '4200', revenue: '5600.20', status: '建设中', rating: 0 },
-  { id: 5, name: '罗湖区国贸大厦超充站', region: '罗湖区', type: '写字楼配套', piles: '8/2', power: '960', revenue: '1200.00', status: '营业中', rating: 4.2 },
-  { id: 6, name: '光明区高铁站枢纽站', region: '光明区', type: '交通枢纽', piles: '40/10', power: '6000', revenue: '0.00', status: '停业整顿', rating: 3.5 }
+  { id: 1, name: '南山区高新园超级超充站', region: '南山区', piles: '20', power: '2400', revenue: '3450.50', status: '营业中' },
+  { id: 2, name: '福田区科创大厦充电站', region: '福田区', piles: '10', power: '1200', revenue: '1890.00', status: '营业中' },
+  { id: 3, name: '南山科技园地下二期扩建', region: '南山区', piles: '15', power: '1800', revenue: '0.00', status: '待审核', isNew: true },
+  { id: 4, name: '罗湖区国贸大厦超充站', region: '罗湖区', piles: '8', power: '960', revenue: '1200.00', status: '营业中' },
+  { id: 5, name: '福田高铁站临时配套站', region: '福田区', piles: '5', power: '600', revenue: '0.00', status: '已驳回', rejectReason: '现场实勘照片不清晰，无法确认消防设施位置，请重新拍摄上传。' }
 ])
+
+// ================= 新增电站 (提交审核) 逻辑 =================
+const applyDialogVisible = ref(false)
+const isSubmitting = ref(false)
+const formRef = ref(null)
+
+const form = reactive({
+  name: '',
+  region: '南山区',
+  address: '',
+  piles: 10,
+  power: 1200,
+  lng: 113.943121,
+  lat: 22.541243
+})
+
+const rules = {
+  name: [{ required: true, message: '请输入电站名称', trigger: 'blur' }],
+  address: [{ required: true, message: '请输入详细地址', trigger: 'blur' }]
+}
+
+const openApplyDialog = () => {
+  applyDialogVisible.value = true
+}
+
+const submitApply = async () => {
+  if (!formRef.value) return
+  await formRef.value.validate(async (valid) => {
+    if (valid) {
+      isSubmitting.value = true
+      try {
+        const res = await axios.post('http://127.0.0.1:8000/api/v1/operator/stations/apply', {
+          name: form.name,
+          lng: form.lng,
+          lat: form.lat
+        })
+        
+        if (res.data.code === 200) {
+          ElMessage.success(res.data.message)
+          applyDialogVisible.value = false
+          
+          // 前端直接伪造一条数据插入列表顶部，展现秒级响应体验
+          tableData.value.unshift({
+            id: res.data.station_id || 999,
+            name: form.name,
+            region: form.region,
+            piles: form.piles,
+            power: form.power,
+            revenue: '0.00',
+            status: '待审核',
+            isNew: true
+          })
+          
+          // 重置表单
+          formRef.value.resetFields()
+        }
+      } catch (err) {
+        ElMessage.error('提交失败，请检查网络')
+      } finally {
+        isSubmitting.value = false
+      }
+    }
+  })
+}
 </script>
 
 <template>
   <div class="page-container">
     <el-row :gutter="20" class="stat-row">
-      <el-col :span="6" v-for="(card, index) in statCards" :key="index">
+      <el-col :span="8" v-for="(card, index) in statCards" :key="index">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-content">
             <div class="stat-info">
               <div class="stat-title">{{ card.title }}</div>
               <div class="stat-value" :style="{ color: card.color }">
-                <span v-if="card.unit === '元'" class="currency">￥</span>{{ card.value }} 
-                <span class="unit" v-if="card.unit !== '元'">{{ card.unit }}</span>
+                {{ card.value }} <span class="unit">{{ card.unit }}</span>
               </div>
               <div class="stat-desc">{{ card.desc }}</div>
             </div>
@@ -48,79 +110,117 @@ const tableData = ref([
 
     <el-card shadow="never" class="list-card">
       <template #header>
-        <div class="card-header">
-          <span class="header-title">充电站管理</span>
+        <div class="flex justify-between items-center">
+          <span class="header-title">我的电站资产</span>
+          <el-button type="primary" :icon="Plus" @click="openApplyDialog">申请新建电站</el-button>
         </div>
       </template>
 
-      <div class="action-bar">
-        <div class="filter-group">
-          <el-input v-model="searchQuery.name" placeholder="搜索电站名称..." :prefix-icon="Search" class="filter-item input-name" />
-          <el-select v-model="searchQuery.region" placeholder="所在大区" class="filter-item">
-            <el-option label="全部分区" value="" />
-            <el-option label="南山区" value="南山区" />
-            <el-option label="福田区" value="福田区" />
-            <el-option label="宝安区" value="宝安区" />
-          </el-select>
-          <el-select v-model="searchQuery.type" placeholder="站点类型" class="filter-item">
-            <el-option label="全部类型" value="" />
-            <el-option label="公共超充" value="公共超充" />
-            <el-option label="商超配套" value="商超配套" />
-            <el-option label="交通枢纽" value="交通枢纽" />
-          </el-select>
-          <el-select v-model="searchQuery.status" placeholder="运营状态" class="filter-item">
-            <el-option label="全部状态" value="" />
-            <el-option label="营业中" value="营业中" />
-            <el-option label="建设中" value="建设中" />
-            <el-option label="停业" value="停业" />
-          </el-select>
-          <el-button type="primary" plain>查询</el-button>
-          <el-button plain>重置</el-button>
-        </div>
-        <el-button type="primary" :icon="Plus">新增电站</el-button>
-      </div>
-
-      <el-table :data="tableData" stripe style="width: 100%" :header-cell-style="{ background: '#f5f7fa', color: '#606266' }">
-        <el-table-column prop="name" label="电站名称" min-width="200">
+      <el-table :data="tableData" stripe style="width: 100%" :header-cell-style="{ background: '#f8fafc', color: '#475569' }">
+        <el-table-column prop="name" label="电站名称" min-width="220">
           <template #default="scope">
-            <div style="font-weight: 600; color: #303133;">{{ scope.row.name }}</div>
-            <el-tag size="small" type="info" style="margin-top: 4px;">{{ scope.row.type }}</el-tag>
+            <div style="font-weight: 600; color: #1e293b; display: flex; align-items: center;">
+              {{ scope.row.name }}
+              <el-tag v-if="scope.row.isNew" type="danger" size="small" effect="dark" round style="margin-left: 8px;">新提报</el-tag>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column prop="region" label="所在地区" width="120" />
-        <el-table-column prop="piles" label="快/慢充桩" width="100" />
-        <el-table-column prop="rating" label="用户评分" width="160">
+        <el-table-column prop="region" label="所在地区" width="100" />
+        <el-table-column prop="piles" label="终端数量" width="100" align="center" />
+        <el-table-column prop="power" label="总功率" width="100" align="right">
+          <template #default="scope">{{ scope.row.power }} kW</template>
+        </el-table-column>
+        <el-table-column prop="revenue" label="今日流水" width="120" align="right">
           <template #default="scope">
-            <el-rate v-if="scope.row.rating > 0" v-model="scope.row.rating" disabled show-score text-color="#ff9900" score-template="{value}" />
-            <span v-else style="color: #909399; font-size: 13px;">暂无评分</span>
+            <span style="font-weight: bold;" :style="{ color: scope.row.revenue !== '0.00' ? '#F56C6C' : '#94a3b8' }">￥{{ scope.row.revenue }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="power" label="总功率(kW)" width="100" align="right" />
-        <el-table-column prop="revenue" label="今日收益(元)" width="140" align="right">
+        
+        <el-table-column prop="status" label="运营状态" width="140" align="center">
           <template #default="scope">
-            <span style="font-weight: bold;" :style="{ color: scope.row.revenue !== '0.00' ? '#F56C6C' : '#606266' }">{{ scope.row.revenue }}</span>
+            <el-tag v-if="scope.row.status === '营业中'" type="success" effect="plain"><el-icon><CircleCheck/></el-icon> 营业中</el-tag>
+            <el-tag v-else-if="scope.row.status === '待审核'" type="warning" effect="dark">平台审核中</el-tag>
+            <el-tooltip v-else-if="scope.row.status === '已驳回'" effect="dark" :content="scope.row.rejectReason" placement="top">
+              <el-tag type="danger" effect="plain" style="cursor: help;"><el-icon><Warning/></el-icon> 已驳回 (查看原因)</el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="100" align="center">
+        
+        <el-table-column label="动作" width="180" fixed="right">
           <template #default="scope">
-            <el-tag :type="scope.row.status === '营业中' ? 'success' : (scope.row.status === '建设中' ? 'warning' : 'danger')">
-              {{ scope.row.status }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
-          <template #default>
-            <el-button link type="primary" size="small">编辑</el-button>
-            <el-button link type="success" size="small">配置电价</el-button>
-            <el-button link type="info" size="small">查看电桩</el-button>
+            <el-button v-if="scope.row.status === '营业中'" link type="primary" size="small">配置电价</el-button>
+            <el-button v-if="scope.row.status === '已驳回'" link type="danger" size="small" @click="openApplyDialog">修改资料重提</el-button>
+            <el-button link type="info" size="small">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
-
-      <div class="pagination-wrapper">
-        <el-pagination background layout="total, sizes, prev, pager, next, jumper" :total="45" :page-size="10" />
-      </div>
     </el-card>
+
+    <el-dialog v-model="applyDialogVisible" title="提报新建电站申请" width="600px" destroy-on-close>
+      <el-alert title="平台规范：电站信息提交后需经管理员进行合规审核，预计 1-2 个工作日。审核通过后方可正式上线并配置电价。" type="info" show-icon class="mb-6" :closable="false" />
+      
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+        <el-form-item label="电站名称" prop="name">
+          <el-input v-model="form.name" placeholder="例如：南山区XX地下停车场超充站" />
+        </el-form-item>
+        
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="所在行政区">
+              <el-select v-model="form.region" placeholder="请选择">
+                <el-option label="南山区" value="南山区" />
+                <el-option label="福田区" value="福田区" />
+                <el-option label="宝安区" value="宝安区" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="详细地址" prop="address">
+              <el-input v-model="form.address" placeholder="输入街道与门牌号" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-form-item label="地理坐标">
+          <div class="map-picker-mock">
+            <el-icon class="text-blue-500 mr-2" :size="20"><Location /></el-icon>
+            <span>已选坐标：E {{ form.lng }}, N {{ form.lat }}</span>
+            <el-button link type="primary" class="ml-auto">在地图上微调</el-button>
+          </div>
+        </el-form-item>
+
+        <el-divider content-position="left">硬件规划</el-divider>
+        
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="规划枪数">
+              <el-input-number v-model="form.piles" :min="1" :max="100" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="总功率(kW)">
+              <el-input-number v-model="form.power" :min="30" :step="120" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        
+        <el-form-item label="实勘照片">
+           <div class="upload-mock-area">
+             <el-icon :size="28" color="#94a3b8"><DocumentAdd /></el-icon>
+             <span class="mt-2 text-xs text-gray-500">点击上传现场照片 (道闸、变压器铭牌等)</span>
+           </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="applyDialogVisible = false">暂存草稿</el-button>
+          <el-button type="primary" :loading="isSubmitting" @click="submitApply">
+            确认并提交平台审核
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -129,21 +229,33 @@ const tableData = ref([
 .stat-row { margin-bottom: 24px; }
 .stat-card { border: none; border-radius: 8px; }
 .stat-content { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
-.stat-title { font-size: 14px; color: #909399; margin-bottom: 8px; }
+.stat-title { font-size: 14px; color: #64748b; margin-bottom: 8px; }
 .stat-value { font-size: 28px; font-weight: bold; font-family: 'DIN Alternate', sans-serif; margin-bottom: 4px; }
-.currency { font-size: 18px; font-weight: normal; margin-right: 2px; }
-.unit { font-size: 14px; color: #909399; font-weight: normal; margin-left: 4px; }
-.stat-desc { font-size: 12px; color: #A8ABB2; }
+.unit { font-size: 14px; color: #94a3b8; font-weight: normal; margin-left: 4px; }
+.stat-desc { font-size: 12px; color: #94a3b8; }
 .stat-icon-wrapper { width: 56px; height: 56px; border-radius: 50%; display: flex; justify-content: center; align-items: center; }
 
 .list-card { border: none; border-radius: 8px; }
-.card-header { display: flex; align-items: center; }
-.header-title { font-size: 18px; font-weight: bold; color: #303133; }
+.header-title { font-size: 18px; font-weight: bold; color: #1e293b; }
 
-.action-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.filter-group { display: flex; gap: 12px; flex-wrap: wrap; }
-.filter-item { width: 140px; }
-.input-name { width: 220px; }
+.flex { display: flex; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.mb-6 { margin-bottom: 24px; }
+.mr-2 { margin-right: 8px; }
+.ml-auto { margin-left: auto; }
+.mt-2 { margin-top: 8px; }
 
-.pagination-wrapper { margin-top: 20px; display: flex; justify-content: flex-end; }
+.text-blue-500 { color: #3b82f6; }
+.text-xs { font-size: 12px; }
+.text-gray-500 { color: #64748b; }
+
+.map-picker-mock {
+  display: flex; align-items: center; background: #f1f5f9; padding: 10px 16px; border-radius: 6px; width: 100%; border: 1px solid #e2e8f0;
+}
+.upload-mock-area {
+  width: 100%; height: 100px; border: 1px dashed #cbd5e1; border-radius: 6px; background: #f8fafc;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: all 0.3s;
+}
+.upload-mock-area:hover { border-color: #3b82f6; background: #eff6ff; }
 </style>

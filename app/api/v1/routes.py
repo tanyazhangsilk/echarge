@@ -298,3 +298,32 @@ async def process_station_audit(station_id: int, payload: dict, db: Session = De
         
     db.commit()
     return {"code": 200, "message": "电站审核处理成功"}
+
+@api_router.post("/operator/stations/apply", tags=["operator"])
+async def operator_apply_station(payload: dict, db: Session = Depends(get_db)):
+    """运营商提交新建电站申请"""
+    from app.models.models import Station, Operator
+    
+    # 模拟获取当前登录的运营商 (真实情况应从 Token 中解析)
+    operator = db.query(Operator).first()
+    if not operator:
+        return {"code": 404, "message": "当前运营商未找到，请先入驻"}
+        
+    try:
+        new_station = Station(
+            operator_id=operator.id,
+            name=payload.get("name"),
+            # 真实业务中经纬度由前端地图组件选点获取，这里用传入值
+            longitude=payload.get("lng", 114.0), 
+            latitude=payload.get("lat", 22.5),
+            status=3,  # 核心：3 代表“待审核”
+            visibility="private" # 未过审前，C端不可见
+        )
+        db.add(new_station)
+        db.commit()
+        db.refresh(new_station)
+        
+        return {"code": 200, "message": "电站资料提交成功，已进入平台审核队列", "station_id": new_station.id}
+    except Exception as e:
+        db.rollback()
+        return {"code": 500, "message": f"提交失败: {str(e)}"}
