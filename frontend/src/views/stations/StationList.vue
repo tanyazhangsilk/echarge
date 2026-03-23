@@ -1,8 +1,8 @@
 <script setup>
 import { ref, reactive } from 'vue'
 import { Search, Plus, OfficeBuilding, CircleCheck, Location, Warning, DocumentAdd } from '@element-plus/icons-vue'
-import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import http from '../../api/http'
 
 // 顶部统计数据
 const statCards = [
@@ -52,7 +52,7 @@ const submitApply = async () => {
     if (valid) {
       isSubmitting.value = true
       try {
-        const res = await axios.post('http://127.0.0.1:8000/api/v1/operator/stations/apply', {
+        const res = await http.post('/operator/stations/apply', {
           name: form.name,
           lng: form.lng,
           lat: form.lat

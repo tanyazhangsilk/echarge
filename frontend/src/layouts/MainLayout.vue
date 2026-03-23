@@ -1,60 +1,45 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { IconMoonStars, IconSun } from '@tabler/icons-vue'
+import { Bell, Menu as MenuIcon, Search } from '@element-plus/icons-vue'
+
 import {
-  Menu as MenuIcon,
-  Search,
-  Bell
-} from '@element-plus/icons-vue'
-import { buildMenuByRole, ROLE_DEFAULT_ROUTE } from '../config/permissions'
+  buildMenuByRole,
+  getStoredRole,
+  resolveRoleDefaultRoute,
+  ROLE_LABELS,
+  ROLES,
+  setStoredRole,
+} from '../config/permissions'
 
-const router = useRouter()
 const route = useRoute()
+const router = useRouter()
 
-// 响应式状态控制
 const collapsed = ref(false)
 const drawerVisible = ref(false)
 const windowWidth = ref(window.innerWidth)
 const theme = ref(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
-const currentRole = ref(localStorage.getItem('userRole') || 'operator')
 
+const currentRole = computed(() => route.meta?.role || getStoredRole())
 const activeMenu = computed(() => route.path)
-const pageTitle = computed(() => route.meta?.title || '管理平台')
+const pageTitle = computed(() => route.meta?.title || '项目重构中台')
+const pageSection = computed(() => route.meta?.section || ROLE_LABELS[currentRole.value])
+const roleLabel = computed(() => ROLE_LABELS[currentRole.value] || '运营商')
+const visibleMenuGroups = computed(() => buildMenuByRole(currentRole.value))
+const isMobile = computed(() => windowWidth.value < 960)
 
-const visibleMenus = computed(() => buildMenuByRole(currentRole.value))
-
-// 计算当前屏幕断点
-const isMobile = computed(() => windowWidth.value < 768)
-const isTablet = computed(() => windowWidth.value >= 768 && windowWidth.value < 1024)
-
-// 监听屏幕尺寸变化的核心逻辑
 const handleResize = () => {
   windowWidth.value = window.innerWidth
   if (isMobile.value) {
-    collapsed.value = false 
-  } else if (isTablet.value) {
-    collapsed.value = true 
-    drawerVisible.value = false
-  } else {
-    collapsed.value = false 
-    drawerVisible.value = false
+    collapsed.value = false
   }
 }
 
-onMounted(() => {
-  window.addEventListener('resize', handleResize)
-  handleResize()
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
-})
-
-const handleMenuSelect = (index) => {
-  router.push(index)
+const handleMenuSelect = (path) => {
+  router.push(path)
   if (isMobile.value) {
-    drawerVisible.value = false 
+    drawerVisible.value = false
   }
 }
 
@@ -65,144 +50,172 @@ const toggleTheme = () => {
   window.dispatchEvent(new Event('themechange'))
 }
 
-const handleRoleSwitch = (val) => {
-  currentRole.value = val
-  localStorage.setItem('userRole', val)
-  router.push(ROLE_DEFAULT_ROUTE[val] || '/')
+const switchRole = (role) => {
+  setStoredRole(role)
+  router.push(resolveRoleDefaultRoute(role))
   if (isMobile.value) drawerVisible.value = false
 }
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+  handleResize()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
 </script>
 
 <template>
   <el-container class="layout-root">
-    
-    <el-aside v-if="!isMobile" :width="collapsed ? 'var(--sidebar-collapsed-width)' : 'var(--sidebar-width)'" class="layout-aside hidden-on-mobile">
-      <div class="logo-area">
-        <span class="logo-mark">E</span>
-        <span v-show="!collapsed" class="logo-text">E-Charge 平台</span>
+    <el-aside
+      v-if="!isMobile"
+      :width="collapsed ? '88px' : '288px'"
+      class="layout-aside"
+    >
+      <div class="brand">
+        <div class="brand__mark">EC</div>
+        <div v-show="!collapsed" class="brand__text">
+          <strong>E-Charge Console</strong>
+          <span>{{ roleLabel }}</span>
+        </div>
       </div>
-      <el-menu :default-active="activeMenu" class="custom-menu" :collapse="collapsed" :collapse-transition="false" background-color="var(--sidebar-bg)" text-color="#a6adb4" active-text-color="#ffffff" @select="handleMenuSelect">
-        <template v-for="item in visibleMenus" :key="item.index">
-          <el-sub-menu v-if="item.children" :index="item.index">
-            <template #title>
+
+      <div class="menu-scroll">
+        <section
+          v-for="group in visibleMenuGroups"
+          :key="group.label"
+          class="menu-group"
+        >
+          <p v-show="!collapsed" class="menu-group__label">{{ group.label }}</p>
+          <el-menu
+            :default-active="activeMenu"
+            class="menu"
+            :collapse="collapsed"
+            :collapse-transition="false"
+            background-color="transparent"
+            text-color="var(--color-text-2)"
+            active-text-color="#ffffff"
+            @select="handleMenuSelect"
+          >
+            <el-menu-item
+              v-for="item in group.items"
+              :key="item.index"
+              :index="item.index"
+              class="menu-item"
+            >
               <el-icon><component :is="item.icon" /></el-icon>
-              <span>{{ item.title }}</span>
-            </template>
-            <el-menu-item v-for="child in item.children" :key="child.index" :index="child.index">
-              {{ child.title }}
+              <template #title>{{ item.title }}</template>
             </el-menu-item>
-          </el-sub-menu>
-          <el-menu-item v-else :index="item.index">
-            <el-icon><component :is="item.icon" /></el-icon>
-            <template #title><span>{{ item.title }}</span></template>
-          </el-menu-item>
-        </template>
-      </el-menu>
+          </el-menu>
+        </section>
+      </div>
     </el-aside>
 
-    <el-drawer v-model="drawerVisible" direction="ltr" :size="240" :with-header="false" custom-class="mobile-drawer">
-      <div class="logo-area mobile-logo">
-        <span class="logo-mark">E</span>
-        <span class="logo-text">E-Charge 平台</span>
+    <el-drawer
+      v-model="drawerVisible"
+      direction="ltr"
+      :size="288"
+      :with-header="false"
+      class="mobile-drawer"
+    >
+      <div class="brand brand--mobile">
+        <div class="brand__mark">EC</div>
+        <div class="brand__text">
+          <strong>E-Charge Console</strong>
+          <span>{{ roleLabel }}</span>
+        </div>
       </div>
-      <el-menu :default-active="activeMenu" class="custom-menu" background-color="var(--sidebar-bg)" text-color="#a6adb4" active-text-color="#ffffff" @select="handleMenuSelect">
-        <template v-for="item in visibleMenus" :key="item.index">
-          <el-sub-menu v-if="item.children" :index="item.index">
-            <template #title>
+
+      <div class="menu-scroll">
+        <section
+          v-for="group in visibleMenuGroups"
+          :key="group.label"
+          class="menu-group"
+        >
+          <p class="menu-group__label">{{ group.label }}</p>
+          <el-menu
+            :default-active="activeMenu"
+            class="menu"
+            background-color="transparent"
+            text-color="var(--color-text-2)"
+            active-text-color="#ffffff"
+            @select="handleMenuSelect"
+          >
+            <el-menu-item
+              v-for="item in group.items"
+              :key="item.index"
+              :index="item.index"
+              class="menu-item"
+            >
               <el-icon><component :is="item.icon" /></el-icon>
               <span>{{ item.title }}</span>
-            </template>
-            <el-menu-item v-for="child in item.children" :key="child.index" :index="child.index">
-              {{ child.title }}
             </el-menu-item>
-          </el-sub-menu>
-          <el-menu-item v-else :index="item.index">
-            <el-icon><component :is="item.icon" /></el-icon>
-            <span>{{ item.title }}</span>
-          </el-menu-item>
-        </template>
-      </el-menu>
+          </el-menu>
+        </section>
+      </div>
     </el-drawer>
 
-    <el-container class="main-container">
+    <el-container class="main-shell">
       <el-header class="layout-header">
         <div class="header-left">
-          <el-icon class="toggle-btn" @click="isMobile ? (drawerVisible = true) : (collapsed = !collapsed)">
+          <el-icon class="header-action" @click="isMobile ? (drawerVisible = true) : (collapsed = !collapsed)">
             <MenuIcon />
           </el-icon>
-          <span v-if="!isMobile" class="header-title">{{ pageTitle }}</span>
+          <div class="page-meta">
+            <span class="page-meta__section">{{ pageSection }}</span>
+            <h2 class="page-meta__title">{{ pageTitle }}</h2>
+          </div>
         </div>
 
         <div class="header-right">
-          <div class="search-box">
-            <el-input v-if="!isMobile" aria-label="全局搜索" placeholder="搜索订单号、电站名称..." :prefix-icon="Search" class="search-input" />
-            <el-button v-else circle :icon="Search" aria-label="打开搜索" />
+          <div class="search-shell">
+            <el-input
+              v-if="!isMobile"
+              placeholder="搜索订单、站点、运营商..."
+              :prefix-icon="Search"
+              class="search-input"
+            />
+            <el-button v-else circle :icon="Search" />
           </div>
 
-          <el-divider direction="vertical" class="hidden-on-mobile" />
-
-          <el-button
-            circle
-            class="theme-toggle"
-            :aria-label="theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'"
-            @click="toggleTheme"
-          >
-            <IconSun v-if="theme === 'dark'" :size="20" />
-            <IconMoonStars v-else :size="20" />
+          <el-button circle class="toolbar-btn" @click="toggleTheme">
+            <IconSun v-if="theme === 'dark'" :size="18" />
+            <IconMoonStars v-else :size="18" />
           </el-button>
-          
-          <el-popover placement="bottom-end" :width="300" trigger="click" popper-class="notify-popover">
+
+          <el-popover placement="bottom-end" :width="320" trigger="click">
             <template #reference>
-              <el-badge :is-dot="true" class="notify-badge">
-                <el-icon class="notify-icon"><Bell /></el-icon>
-              </el-badge>
+              <el-button circle class="toolbar-btn">
+                <el-badge :value="2" class="notify-badge">
+                  <el-icon><Bell /></el-icon>
+                </el-badge>
+              </el-button>
             </template>
+
             <div class="notify-panel">
-              <div class="notify-header">
-                <span style="font-weight: 600;">系统通知 (2)</span>
-                <el-button link type="primary" size="small">全部已读</el-button>
+              <div class="notify-panel__item">
+                <strong>结构重构已完成</strong>
+                <p>你现在可以直接从新的管理员/运营商双视角继续迭代页面。</p>
               </div>
-              <el-divider style="margin: 8px 0" />
-              <div class="notify-list">
-                <div class="notify-item">
-                  <div class="notify-title"><el-tag size="small" type="danger" style="margin-right: 8px;">报警</el-tag>A区01号直流桩发生离线故障</div>
-                  <div class="notify-time">10 分钟前</div>
-                </div>
-                <div class="notify-item">
-                  <div class="notify-title"><el-tag size="small" type="success" style="margin-right: 8px;">财务</el-tag>昨日收益 T+1 清分已完成</div>
-                  <div class="notify-time">2 小时前</div>
-                </div>
-              </div>
-              <el-divider style="margin: 8px 0" />
-              <div class="notify-footer">
-                <el-button link style="width: 100%;">查看全部通知</el-button>
+              <div class="notify-panel__item">
+                <strong>占位页已补齐</strong>
+                <p>未开发页面已统一挂载到正式菜单路径，后续补功能不会再改导航结构。</p>
               </div>
             </div>
           </el-popover>
 
-          <el-dropdown trigger="click" @command="handleRoleSwitch" style="margin-right: 16px;">
-            <span class="el-dropdown-link" style="cursor: pointer; display: flex; align-items: center; color: var(--text-primary);">
-              <el-tag :type="currentRole === 'admin' ? 'danger' : 'success'" size="small" style="margin-right: 8px;">
-                {{ currentRole === 'admin' ? '管理员模式' : '运营商模式' }}
+          <el-dropdown @command="switchRole">
+            <div class="role-switcher">
+              <span class="role-switcher__label">当前视角</span>
+              <el-tag :type="currentRole === ROLES.ADMIN ? 'danger' : 'success'">
+                {{ roleLabel }}
               </el-tag>
-            </span>
+            </div>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="admin">切换至: 管理员</el-dropdown-item>
-                <el-dropdown-item command="operator">切换至: 运营商</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-
-          <el-dropdown trigger="click" style="margin-left: 12px;">
-            <span class="user-info">
-              <el-avatar :size="32" class="avatar">Admin</el-avatar>
-              <span class="hidden-on-mobile user-email">admin@echarge.com</span>
-            </span>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item>个人中心</el-dropdown-item>
-                <el-dropdown-item divided>退出登录</el-dropdown-item>
+                <el-dropdown-item :command="ROLES.ADMIN">切换到平台管理员</el-dropdown-item>
+                <el-dropdown-item :command="ROLES.OPERATOR">切换到运营商</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -213,50 +226,212 @@ const handleRoleSwitch = (val) => {
         <router-view />
       </el-main>
     </el-container>
-
   </el-container>
 </template>
 
 <style scoped>
-/* 保持上一版的样式不变 */
-.layout-root { height: 100vh; width: 100vw; overflow: hidden; }
-.main-container { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-.layout-aside { background-color: var(--sidebar-bg); transition: width 0.3s cubic-bezier(0.2, 0, 0, 1) 0s; display: flex; flex-direction: column; z-index: 10; }
-.logo-area { height: 60px; display: flex; align-items: center; padding: 0 16px; overflow: hidden; color: #fff; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
-.logo-mark { min-width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #1890ff, #36d1dc); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 18px; margin-right: 12px; }
-.logo-text { font-size: 16px; font-weight: 600; white-space: nowrap; }
-.custom-menu { border-right: none; flex: 1; overflow-y: auto; }
-.layout-header { height: 60px; background-color: var(--bg-card); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
-.header-left { display: flex; align-items: center; gap: 16px; }
-.toggle-btn { font-size: 20px; cursor: pointer; color: var(--text-regular); transition: color 0.2s; }
-.toggle-btn:hover { color: #1890ff; }
-.header-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
-.header-right { display: flex; align-items: center; gap: 16px; }
-.search-box { display: flex; align-items: center; }
-.search-input { width: 240px; }
-.theme-toggle { border: 1px solid var(--border-color); background: var(--bg-card); }
-.notify-icon { font-size: 20px; cursor: pointer; color: var(--text-regular); margin-top: 4px; outline: none; }
-.notify-icon:hover { color: #1890ff; }
-.notify-badge { cursor: pointer; }
-.user-info { display: flex; align-items: center; gap: 8px; cursor: pointer; outline: none; }
-.avatar { background-color: #1890ff; font-size: 12px; }
-.user-email { font-size: 14px; color: var(--text-regular); }
-.layout-main { background-color: var(--bg-main); padding: 20px; flex: 1; overflow-y: auto; }
-.mobile-logo { background-color: var(--sidebar-bg); }
+.layout-root {
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
 
-/* 通知面板内的样式 */
-.notify-panel { padding: 4px; }
-.notify-header { display: flex; justify-content: space-between; align-items: center; padding: 0 8px; }
-.notify-list { max-height: 240px; overflow-y: auto; }
-.notify-item { padding: 12px 8px; border-radius: 6px; cursor: pointer; transition: background 0.2s; }
-.notify-item:hover { background-color: #f5f7fa; }
-.notify-title { font-size: 14px; color: var(--text-primary); margin-bottom: 4px; line-height: 1.4; display: flex; align-items: flex-start; }
-.notify-time { font-size: 12px; color: #909399; margin-left: 42px; }
-.notify-footer { text-align: center; padding-top: 4px; }
+.layout-aside {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background:
+    radial-gradient(circle at top left, rgba(64, 158, 255, 0.18), transparent 34%),
+    linear-gradient(180deg, rgba(7, 19, 42, 0.98), rgba(10, 26, 55, 0.98));
+  color: #fff;
+  transition: width 0.24s ease;
+}
 
-@media (max-width: 768px) {
-  .hidden-on-mobile { display: none !important; }
-  .layout-header { padding: 0 12px; }
-  .layout-main { padding: 12px; }
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.brand__mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #36cfc9, #409eff);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #fff;
+}
+
+.brand__text {
+  display: flex;
+  flex-direction: column;
+}
+
+.brand__text strong {
+  font-size: 15px;
+  color: #fff;
+}
+
+.brand__text span {
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 12px;
+}
+
+.menu-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 12px 20px;
+}
+
+.menu-group + .menu-group {
+  margin-top: 14px;
+}
+
+.menu-group__label {
+  margin: 0 0 8px;
+  padding: 0 12px;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.menu {
+  border-right: none;
+}
+
+.menu :deep(.el-menu-item),
+.menu :deep(.el-sub-menu__title) {
+  margin-bottom: 6px;
+  border-radius: 12px;
+}
+
+.menu :deep(.el-menu-item:hover) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.menu :deep(.el-menu-item.is-active) {
+  background: linear-gradient(135deg, rgba(64, 158, 255, 0.9), rgba(54, 207, 201, 0.9));
+  box-shadow: 0 10px 24px rgba(64, 158, 255, 0.24);
+}
+
+.main-shell {
+  min-width: 0;
+}
+
+.layout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  height: 76px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(14px);
+}
+
+:root[data-theme='dark'] .layout-header {
+  background: rgba(15, 23, 42, 0.78);
+}
+
+.header-left,
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.header-action,
+.toolbar-btn {
+  color: var(--color-text-2);
+}
+
+.header-action {
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.page-meta__section {
+  display: inline-block;
+  margin-bottom: 4px;
+  color: var(--color-text-3);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.page-meta__title {
+  margin: 0;
+  font-size: 20px;
+  color: var(--color-text);
+}
+
+.search-input {
+  width: 260px;
+}
+
+.role-switcher {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.role-switcher__label {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.notify-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.notify-panel__item {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--color-surface-2);
+}
+
+.notify-panel__item p {
+  margin: 6px 0 0;
+  color: var(--color-text-3);
+  line-height: 1.5;
+}
+
+.layout-main {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.brand--mobile {
+  margin: -18px -16px 0;
+  padding: 18px 20px;
+  background:
+    radial-gradient(circle at top left, rgba(64, 158, 255, 0.18), transparent 34%),
+    linear-gradient(180deg, rgba(7, 19, 42, 0.98), rgba(10, 26, 55, 0.98));
+}
+
+@media (max-width: 960px) {
+  .layout-header {
+    height: 68px;
+    padding: 0 14px;
+  }
+
+  .layout-main {
+    padding: 14px;
+  }
+
+  .page-meta__title {
+    font-size: 18px;
+  }
 }
 </style>

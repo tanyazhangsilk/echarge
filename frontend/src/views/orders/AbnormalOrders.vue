@@ -1,8 +1,8 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { Warning, Search, Check } from '@element-plus/icons-vue'
-import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import http from '../../api/http'
 
 const tableData = ref([])
 const loading = ref(true)
@@ -11,7 +11,7 @@ const searchQuery = ref('')
 const fetchData = async () => {
   loading.value = true
   try {
-    const res = await axios.get('http://127.0.0.1:8000/api/v1/orders/abnormal')
+    const res = await http.get('/orders/abnormal')
     if (res.data.code === 200) {
       tableData.value = res.data.data
     }

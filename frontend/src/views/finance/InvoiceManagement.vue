@@ -1,8 +1,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { Search, UploadFilled, Document, Check, Close, Message } from '@element-plus/icons-vue'
-import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import http from '../../api/http'
 
 const tableData = ref([])
 const loading = ref(true)
@@ -18,7 +18,7 @@ const stats = computed(() => {
 const fetchInvoices = async () => {
   loading.value = true
   try {
-    const res = await axios.get('http://127.0.0.1:8000/api/v1/finance/invoices')
+    const res = await http.get('/finance/invoices')
     if (res.data.code === 200) {
       tableData.value = res.data.data
     }
@@ -77,7 +77,7 @@ const submitProcess = async (action) => {
   try {
     await ElMessageBox.confirm(confirmText, '操作确认', { type: action === 'approve' ? 'success' : 'warning' })
     
-    const res = await axios.post(`http://127.0.0.1:8000/api/v1/finance/invoices/${currentInvoice.value.id}/process`, {
+    const res = await http.post(`/finance/invoices/${currentInvoice.value.id}/process`, {
       action: action,
       file_url: uploadedFile.value
     })

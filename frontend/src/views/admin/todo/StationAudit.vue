@@ -1,8 +1,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { Stamp, Location, Picture, Check, Close, InfoFilled } from '@element-plus/icons-vue'
-import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import http from '../../../api/http'
 
 const tableData = ref([])
 const loading = ref(true)
@@ -16,7 +16,7 @@ const auditRemark = ref('')
 const fetchAudits = async () => {
   loading.value = true
   try {
-    const res = await axios.get('/api/v1/admin/audit/stations')
+    const res = await http.get('/admin/audit/stations')
     if (res.data.code === 200) {
       tableData.value = res.data.data
     }
@@ -49,7 +49,7 @@ const submitAudit = async (action) => {
     await ElMessageBox.confirm(confirmText, '高危操作确认', { type: action === 'approve' ? 'success' : 'warning' })
     
     isProcessing.value = true
-    const res = await axios.post(`/api/v1/admin/audit/stations/${currentStation.value.id}/process`, {
+    const res = await http.post(`/admin/audit/stations/${currentStation.value.id}/process`, {
       action: action,
       remark: auditRemark.value
     })

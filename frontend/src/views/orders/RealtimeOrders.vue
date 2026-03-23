@@ -1,11 +1,12 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { VideoPlay, DataLine, Loading, Search } from '@element-plus/icons-vue'
-import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import http from '../../api/http'
 
 const tableData = ref([])
 const loading = ref(true)
+let refreshTimer = null
 
 // 顶部统计
 const stats = ref({ active: 0, totalPower: 0, currentFee: 0 })
@@ -13,7 +14,7 @@ const stats = ref({ active: 0, totalPower: 0, currentFee: 0 })
 const fetchData = async () => {
   loading.value = true
   try {
-    const res = await axios.get('http://127.0.0.1:8000/api/v1/orders/realtime')
+    const res = await http.get('/orders/realtime')
     if (res.data.code === 200) {
       tableData.value = res.data.data
       stats.value.active = tableData.value.length
@@ -30,7 +31,12 @@ const fetchData = async () => {
 onMounted(() => {
   fetchData()
   // 每30秒自动刷新一次数据
-  setInterval(fetchData, 30000)
+  refreshTimer = window.setInterval(fetchData, 30000)
+})
+onUnmounted(() => {
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer)
+  }
 })
 </script>
 

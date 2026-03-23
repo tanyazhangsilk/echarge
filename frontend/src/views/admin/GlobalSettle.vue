@@ -1,8 +1,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { Money, WarningFilled, Setting, RefreshRight, DocumentChecked } from '@element-plus/icons-vue'
-import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import http from '../../api/http'
 
 const tableData = ref([])
 const loading = ref(true)
@@ -17,7 +17,7 @@ const settleLog = ref('')
 const fetchSettlements = async () => {
   loading.value = true
   try {
-    const res = await axios.get('http://127.0.0.1:8000/api/v1/admin/finance/settlements')
+    const res = await http.get('/admin/finance/settlements')
     if (res.data.code === 200) {
       tableData.value = res.data.data
     }
@@ -75,7 +75,7 @@ const executeSettlement = async () => {
 
   try {
     // 调用真实接口
-    const res = await axios.post('http://127.0.0.1:8000/api/v1/admin/finance/settle', {
+    const res = await http.post('/admin/finance/settle', {
       date: settleDate.value
     })
 
