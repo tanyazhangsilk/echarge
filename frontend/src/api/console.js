@@ -1,9 +1,9 @@
 import {
-  adminDashboardMock,
   operatorAuditMock,
   operatorConsoleMock,
   stationAuditMock,
 } from '../mock/console'
+import { adminDashboardMock } from '../mock/adminDashboard'
 
 const clone = (value) => JSON.parse(JSON.stringify(value))
 
