@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { IconMoonStars, IconSun } from '@tabler/icons-vue'
-import { Bell, Menu as MenuIcon, Search, SwitchButton } from '@element-plus/icons-vue'
+import { ArrowRight, Bell, Menu as MenuIcon, Search, SwitchButton } from '@element-plus/icons-vue'
 
 import {
   buildMenuByRole,
@@ -25,16 +25,15 @@ const currentRole = computed(() => route.meta?.role || getStoredRole())
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta?.title || '运营后台')
 const pageSection = computed(() => route.meta?.section || ROLE_LABELS[currentRole.value])
+const pageDescription = computed(() => route.meta?.description || '业务工作区')
 const roleLabel = computed(() => ROLE_LABELS[currentRole.value] || '充电运营商')
 const visibleMenuGroups = computed(() => buildMenuByRole(currentRole.value))
 const isMobile = computed(() => windowWidth.value < 960)
-const todayText = computed(() =>
-  new Intl.DateTimeFormat('zh-CN', {
-    month: 'long',
-    day: 'numeric',
-    weekday: 'long',
-  }).format(new Date()),
-)
+const breadcrumbs = computed(() => {
+  const items = [ROLE_LABELS[currentRole.value], pageSection.value]
+  if (pageTitle.value && pageTitle.value !== pageSection.value) items.push(pageTitle.value)
+  return items
+})
 
 const handleResize = () => {
   windowWidth.value = window.innerWidth
@@ -71,12 +70,12 @@ onUnmounted(() => {
 
 <template>
   <el-container class="layout-root">
-    <el-aside v-if="!isMobile" :width="collapsed ? '88px' : '288px'" class="layout-aside">
+    <el-aside v-if="!isMobile" :width="collapsed ? '88px' : '280px'" class="layout-aside">
       <div class="brand">
         <div class="brand__mark">EC</div>
         <div v-show="!collapsed" class="brand__text">
           <strong>E-Charge 聚合平台</strong>
-          <span>{{ roleLabel }}后台</span>
+          <span>{{ roleLabel }}控制台</span>
         </div>
       </div>
 
@@ -102,12 +101,12 @@ onUnmounted(() => {
       </div>
     </el-aside>
 
-    <el-drawer v-model="drawerVisible" direction="ltr" :size="288" :with-header="false">
+    <el-drawer v-model="drawerVisible" direction="ltr" :size="280" :with-header="false">
       <div class="brand brand--mobile">
         <div class="brand__mark">EC</div>
         <div class="brand__text">
           <strong>E-Charge 聚合平台</strong>
-          <span>{{ roleLabel }}后台</span>
+          <span>{{ roleLabel }}控制台</span>
         </div>
       </div>
       <div class="menu-scroll">
@@ -136,15 +135,26 @@ onUnmounted(() => {
           <el-icon class="header-action" @click="isMobile ? (drawerVisible = true) : (collapsed = !collapsed)">
             <MenuIcon />
           </el-icon>
+
           <div class="page-meta">
-            <span class="page-meta__section">{{ pageSection }}</span>
+            <div class="page-breadcrumb">
+              <span v-for="(item, index) in breadcrumbs" :key="`${item}-${index}`" class="page-breadcrumb__item">
+                <el-icon v-if="index > 0" class="page-breadcrumb__arrow"><ArrowRight /></el-icon>
+                <span>{{ item }}</span>
+              </span>
+            </div>
             <h2 class="page-meta__title">{{ pageTitle }}</h2>
-            <p class="page-meta__sub">{{ todayText }} · 开发态角色切换已启用</p>
+            <p class="page-meta__sub">{{ pageDescription }}</p>
           </div>
         </div>
 
         <div class="header-right">
-          <el-input v-if="!isMobile" placeholder="搜索订单、运营商、电站或设备编码" :prefix-icon="Search" class="search-input" />
+          <el-input
+            v-if="!isMobile"
+            placeholder="搜索订单、站点、运营商、设备编码"
+            :prefix-icon="Search"
+            class="search-input"
+          />
           <el-button v-else circle :icon="Search" />
 
           <el-button circle class="toolbar-btn" @click="toggleTheme">
@@ -162,19 +172,19 @@ onUnmounted(() => {
             </template>
             <div class="notify-panel">
               <div class="notify-panel__item">
-                <strong>后台壳子已切换到正式结构</strong>
-                <p>管理员与运营商视图已拆分为独立业务路径，后续接入登录和接口时无需重做菜单体系。</p>
+                <strong>系统通知</strong>
+                <p>当前页面结构已统一，后续业务模块可继续在同一后台壳子下扩展。</p>
               </div>
               <div class="notify-panel__item">
-                <strong>核心页面已按联调结构补齐</strong>
-                <p>优先覆盖工作台、审核中心、列表筛选、详情抽屉和状态反馈，便于论文截图与后续继续开发。</p>
+                <strong>待办提醒</strong>
+                <p>后续接入真实接口后，可在此承载审核、告警和订单相关通知。</p>
               </div>
             </div>
           </el-popover>
 
           <el-dropdown @command="switchRole">
             <div class="role-switcher">
-              <span class="role-switcher__label">当前视角</span>
+              <span class="role-switcher__label">当前角色</span>
               <el-icon class="role-switcher__icon"><SwitchButton /></el-icon>
               <el-tag :type="currentRole === ROLES.ADMIN ? 'danger' : 'success'">{{ roleLabel }}</el-tag>
             </div>
@@ -189,7 +199,9 @@ onUnmounted(() => {
       </el-header>
 
       <el-main class="layout-main">
-        <router-view />
+        <div class="layout-main__inner">
+          <router-view />
+        </div>
       </el-main>
     </el-container>
   </el-container>
@@ -205,7 +217,7 @@ onUnmounted(() => {
 .layout-aside {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
   background:
     radial-gradient(circle at top left, rgba(64, 158, 255, 0.18), transparent 34%),
     linear-gradient(180deg, rgba(7, 19, 42, 0.98), rgba(10, 26, 55, 0.98));
@@ -303,15 +315,15 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  height: 76px;
-  padding: 0 20px;
+  height: 78px;
+  padding: 0 24px;
   border-bottom: 1px solid var(--color-border);
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(14px);
 }
 
 :root[data-theme='dark'] .layout-header {
-  background: rgba(15, 23, 42, 0.78);
+  background: rgba(15, 23, 42, 0.82);
 }
 
 .header-left,
@@ -331,13 +343,28 @@ onUnmounted(() => {
   color: var(--color-text-2);
 }
 
-.page-meta__section {
-  display: inline-block;
-  margin-bottom: 4px;
+.page-meta {
+  min-width: 0;
+}
+
+.page-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
   color: var(--color-text-3);
   font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+}
+
+.page-breadcrumb__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-breadcrumb__arrow {
+  font-size: 12px;
 }
 
 .page-meta__title {
@@ -402,9 +429,14 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
+.layout-main__inner {
+  max-width: var(--content-max-width);
+  margin: 0 auto;
+}
+
 @media (max-width: 960px) {
   .layout-header {
-    height: 68px;
+    height: 72px;
     padding: 0 14px;
   }
 
@@ -414,6 +446,11 @@ onUnmounted(() => {
 
   .page-meta__title {
     font-size: 18px;
+  }
+
+  .page-meta__sub,
+  .page-breadcrumb {
+    display: none;
   }
 }
 </style>

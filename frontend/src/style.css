@@ -26,6 +26,10 @@ html {
   height: 100vh;
 }
 
+* {
+  box-sizing: border-box;
+}
+
 .base-card {
   background: var(--bg-card);
   border-radius: var(--radius-lg);
@@ -36,7 +40,7 @@ html {
 .page-shell {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
   max-width: var(--content-max-width);
   margin: 0 auto;
   animation: pageReveal var(--motion-page) ease-out both;
@@ -118,7 +122,7 @@ html {
 }
 
 .page-panel {
-  padding: 18px;
+  padding: 20px;
 }
 
 .panel-heading {
@@ -164,6 +168,13 @@ html {
   background: var(--color-surface-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+}
+
+.filter-panel {
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-3);
 }
 
 .info-list {
@@ -294,6 +305,21 @@ html {
   background: var(--color-surface-3);
   color: var(--color-text-2);
   font-weight: 600;
+}
+
+.table-shell :deep(.el-table td.el-table__cell) {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.empty-block {
+  padding: 24px 0 8px;
+}
+
+.empty-block__title {
+  margin: -4px 0 0;
+  text-align: center;
+  color: var(--color-text);
 }
 
 @keyframes pageReveal {
