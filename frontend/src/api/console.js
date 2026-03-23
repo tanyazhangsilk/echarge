@@ -4,6 +4,7 @@ import {
   stationAuditMock,
 } from '../mock/console'
 import { adminDashboardMock } from '../mock/adminDashboard'
+import { operatorAuditRecordsMock } from '../mock/operatorAudit'
 
 const clone = (value) => JSON.parse(JSON.stringify(value))
 
@@ -20,7 +21,11 @@ const simulateRequest = (payload, delay = 320) =>
 
 export const fetchAdminDashboard = () => simulateRequest(adminDashboardMock)
 
-export const fetchOperatorAuditPage = () => simulateRequest(operatorAuditMock)
+export const fetchOperatorAuditPage = () =>
+  simulateRequest({
+    ...(operatorAuditMock || {}),
+    records: operatorAuditRecordsMock,
+  })
 
 export const fetchStationAuditPage = () => simulateRequest(stationAuditMock)
 
