@@ -45,7 +45,7 @@ const routes = [
       {
         path: 'institutions',
         name: 'AdminInstitutions',
-        component: PlaceholderPage,
+        component: () => import('../views/admin/todo/InstitutionAudit.vue'),
         meta: {
           role: ROLES.ADMIN,
           section: '机构管理',

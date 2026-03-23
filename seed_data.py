@@ -33,29 +33,38 @@ def generate_seed_data():
         print("2. 正在生成 充电站和电桩...")
         stations = []
         chargers = []
-        for i in range(10):
+        for i in range(15): # 增加到15个
             op = random.choice(operators)
+            # 前10个为营业中，后3个为待审核，最后2个为已驳回
+            if i < 10:
+                status = 0
+            elif i < 13:
+                status = 3
+            else:
+                status = 4
+                
             station = Station(
                 operator_id=op.id,
                 name=fake.city() + fake.street_name() + "超级充电站",
                 longitude=fake.longitude(),
                 latitude=fake.latitude(),
-                status=0 # 营业中
+                status=status
             )
             db.add(station)
             db.flush() # 获取 station.id
             stations.append(station)
             
-            # 每个电站生成 5 个电桩
-            for j in range(5):
-                charger = Charger(
-                    station_id=station.id,
-                    sn_code=f"SN{fake.random_number(digits=8, fix_len=True)}",
-                    type=random.choice(["DC", "AC"]),
-                    status=0 # 默认空闲
-                )
-                db.add(charger)
-                chargers.append(charger)
+            # 只为营业中的电站生成电桩
+            if status == 0:
+                for j in range(5):
+                    charger = Charger(
+                        station_id=station.id,
+                        sn_code=f"SN{fake.random_number(digits=8, fix_len=True)}",
+                        type=random.choice(["DC", "AC"]),
+                        status=0 # 默认空闲
+                    )
+                    db.add(charger)
+                    chargers.append(charger)
         db.commit()
 
         print("3. 正在生成 用户...")
