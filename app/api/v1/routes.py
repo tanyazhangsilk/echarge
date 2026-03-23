@@ -1,16 +1,203 @@
 import logging
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db.database import get_db
-from app.models.models import Order, Station, Charger, User, SettlementRecord
+from app.models.models import (
+    Charger,
+    Fleet,
+    Operator,
+    Order,
+    PriceTemplate,
+    SettlementRecord,
+    Station,
+    User,
+)
 from app.services.settlement_service import settle_t_plus_1
 
 api_router = APIRouter()
 logger = logging.getLogger(__name__)
+
+operator_audit_store: dict[int, dict[str, Any]] = {}
+marketing_audit_store: dict[int, dict[str, Any]] = {}
+blacklist_store: set[int] = set()
+system_param_store: dict[str, Any] = {
+    "station_auto_publish": False,
+    "invoice_auto_approve_limit": 300.0,
+    "settlement_platform_rate": 10,
+    "abnormal_order_sla_minutes": 30,
+    "user_refund_limit_per_day": 2,
+    "support_email": "support@echarge.com",
+}
+template_store: list[dict[str, Any]] = []
+tag_store: list[dict[str, Any]] = []
+discount_campaign_store: list[dict[str, Any]] = []
+coupon_campaign_store: list[dict[str, Any]] = []
+
+
+class TemplatePayload(BaseModel):
+    name: str
+    peak_price: float
+    flat_price: float
+    valley_price: float
+    service_price: float
+    scope: str
+    status: str = "active"
+
+
+class FleetPayload(BaseModel):
+    name: str
+    is_whitelist: bool = False
+
+
+class TagPayload(BaseModel):
+    name: str
+    color: str = "#409EFF"
+    description: str = ""
+
+
+class CampaignPayload(BaseModel):
+    name: str
+    campaign_type: str
+    discount_value: float
+    threshold: float = 0
+    audience: str = "all"
+    status: str = "draft"
+
+
+class CouponDispatchPayload(BaseModel):
+    dispatch_count: int = 100
+
+
+class SettingsProfilePayload(BaseModel):
+    name: str
+    org_type: str
+    contact_email: str
+    contact_phone: str
+    bank_account: str = ""
+
+
+class SystemParamsPayload(BaseModel):
+    station_auto_publish: bool
+    invoice_auto_approve_limit: float
+    settlement_platform_rate: int
+    abnormal_order_sla_minutes: int
+    user_refund_limit_per_day: int
+    support_email: str
+
+
+def get_current_operator(db: Session) -> Operator | None:
+    return db.query(Operator).order_by(Operator.id.asc()).first()
+
+
+def user_display_name(user: User) -> str:
+    return user.nickname or f"用户{str(user.phone)[-4:]}"
+
+
+def seed_runtime_data(db: Session) -> None:
+    operator = get_current_operator(db)
+    operator_id = operator.id if operator else 0
+
+    if not template_store:
+      db_templates = db.query(PriceTemplate).filter(PriceTemplate.operator_id == operator_id).order_by(PriceTemplate.created_at.desc()).all()
+      if db_templates:
+        for item in db_templates:
+          template_store.append({
+              "id": item.id,
+              "name": item.name,
+              "peak_price": 1.82,
+              "flat_price": 1.26,
+              "valley_price": 0.68,
+              "service_price": 0.8,
+              "scope": "全站",
+              "status": "active",
+              "updated_at": item.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+          })
+      else:
+        template_store.extend([
+            {
+                "id": 1,
+                "name": "城市快充标准模板",
+                "peak_price": 1.88,
+                "flat_price": 1.34,
+                "valley_price": 0.76,
+                "service_price": 0.8,
+                "scope": "全站",
+                "status": "active",
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            {
+                "id": 2,
+                "name": "园区夜充模板",
+                "peak_price": 1.56,
+                "flat_price": 1.12,
+                "valley_price": 0.58,
+                "service_price": 0.65,
+                "scope": "指定站点",
+                "status": "draft",
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        ])
+
+    if not tag_store:
+      tag_store.extend([
+          {"id": 1, "name": "高频通勤", "color": "#409EFF", "description": "近30天充电6次以上", "user_count": 86},
+          {"id": 2, "name": "夜间充电", "color": "#67C23A", "description": "夜间活跃用户", "user_count": 43},
+          {"id": 3, "name": "待召回", "color": "#E6A23C", "description": "近14天未复购", "user_count": 27},
+      ])
+
+    if not discount_campaign_store:
+      discount_campaign_store.extend([
+          {
+              "id": 1,
+              "name": "工作日午间充电折扣",
+              "campaign_type": "满减",
+              "discount_value": 8.8,
+              "threshold": 30,
+              "audience": "企业车队",
+              "status": "active",
+              "redeem_count": 326,
+              "conversion_rate": 24.5,
+          },
+          {
+              "id": 2,
+              "name": "新用户首充礼",
+              "campaign_type": "立减",
+              "discount_value": 12,
+              "threshold": 0,
+              "audience": "新用户",
+              "status": "draft",
+              "redeem_count": 0,
+              "conversion_rate": 0,
+          },
+      ])
+
+    if not coupon_campaign_store:
+      coupon_campaign_store.extend([
+          {"id": 1, "name": "春季园区通勤券", "discount_value": 10, "inventory": 1000, "dispatched": 640, "used": 381, "status": "active"},
+          {"id": 2, "name": "夜充满减券", "discount_value": 15, "inventory": 500, "dispatched": 120, "used": 39, "status": "paused"},
+      ])
+
+    operators = db.query(Operator).order_by(Operator.created_at.desc()).all()
+    if not operator_audit_store:
+      for item in operators:
+        operator_audit_store[item.id] = {
+            "status": "approved" if item.is_verified else "pending",
+            "remark": "",
+            "contact_email": f"bd{item.id}@echarge.com",
+            "contact_phone": f"1380000{str(item.id).zfill(4)}",
+        }
+
+    if not marketing_audit_store:
+      for item in discount_campaign_store:
+        marketing_audit_store[item["id"]] = {
+            "status": "approved" if item["status"] == "active" else "pending",
+            "remark": "",
+        }
 
 @api_router.get("/health", tags=["system"])
 async def health_check() -> dict:

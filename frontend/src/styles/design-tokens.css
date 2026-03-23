@@ -1,13 +1,19 @@
 :root {
   --color-primary: #409eff;
+  --color-primary-strong: #236bff;
   --color-success: #67c23a;
   --color-warning: #e6a23c;
   --color-danger: #f56c6c;
   --color-info: #909399;
+  --color-sidebar-text: rgba(255, 255, 255, 0.86);
+  --color-sidebar-text-soft: rgba(255, 255, 255, 0.62);
+  --color-sidebar-hover: rgba(255, 255, 255, 0.08);
+  --color-sidebar-active: linear-gradient(135deg, rgba(64, 158, 255, 0.96), rgba(54, 207, 201, 0.92));
 
   --color-bg: #f5f7fa;
   --color-surface: #ffffff;
   --color-surface-2: #f9fafb;
+  --color-surface-3: #f3f6fb;
   --color-border: rgba(17, 24, 39, 0.08);
   --color-text: #111827;
   --color-text-2: rgba(17, 24, 39, 0.72);
@@ -33,19 +39,23 @@
   --font-size-3: 16px;
   --font-size-4: 20px;
   --font-size-5: 28px;
+  --font-size-6: 36px;
 
   --motion-fast: 150ms;
   --motion-card: 200ms;
   --motion-chart: 300ms;
   --motion-count: 800ms;
+  --motion-page: 360ms;
 
   --grid-gap: 16px;
+  --content-max-width: 1600px;
 }
 
 :root[data-theme='dark'] {
   --color-bg: #0b1220;
   --color-surface: #0f172a;
   --color-surface-2: #101b33;
+  --color-surface-3: #16213f;
   --color-border: rgba(255, 255, 255, 0.10);
   --color-text: rgba(255, 255, 255, 0.92);
   --color-text-2: rgba(255, 255, 255, 0.72);

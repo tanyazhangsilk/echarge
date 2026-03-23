@@ -23,7 +23,7 @@ const theme = ref(document.documentElement.dataset.theme === 'dark' ? 'dark' : '
 
 const currentRole = computed(() => route.meta?.role || getStoredRole())
 const activeMenu = computed(() => route.path)
-const pageTitle = computed(() => route.meta?.title || '项目重构中台')
+const pageTitle = computed(() => route.meta?.title || '运营中台')
 const pageSection = computed(() => route.meta?.section || ROLE_LABELS[currentRole.value])
 const roleLabel = computed(() => ROLE_LABELS[currentRole.value] || '运营商')
 const visibleMenuGroups = computed(() => buildMenuByRole(currentRole.value))
@@ -31,16 +31,12 @@ const isMobile = computed(() => windowWidth.value < 960)
 
 const handleResize = () => {
   windowWidth.value = window.innerWidth
-  if (isMobile.value) {
-    collapsed.value = false
-  }
+  if (isMobile.value) collapsed.value = false
 }
 
 const handleMenuSelect = (path) => {
   router.push(path)
-  if (isMobile.value) {
-    drawerVisible.value = false
-  }
+  if (isMobile.value) drawerVisible.value = false
 }
 
 const toggleTheme = () => {
@@ -68,11 +64,7 @@ onUnmounted(() => {
 
 <template>
   <el-container class="layout-root">
-    <el-aside
-      v-if="!isMobile"
-      :width="collapsed ? '88px' : '288px'"
-      class="layout-aside"
-    >
+    <el-aside v-if="!isMobile" :width="collapsed ? '88px' : '288px'" class="layout-aside">
       <div class="brand">
         <div class="brand__mark">EC</div>
         <div v-show="!collapsed" class="brand__text">
@@ -82,11 +74,7 @@ onUnmounted(() => {
       </div>
 
       <div class="menu-scroll">
-        <section
-          v-for="group in visibleMenuGroups"
-          :key="group.label"
-          class="menu-group"
-        >
+        <section v-for="group in visibleMenuGroups" :key="group.label" class="menu-group">
           <p v-show="!collapsed" class="menu-group__label">{{ group.label }}</p>
           <el-menu
             :default-active="activeMenu"
@@ -94,16 +82,11 @@ onUnmounted(() => {
             :collapse="collapsed"
             :collapse-transition="false"
             background-color="transparent"
-            text-color="var(--color-text-2)"
+            text-color="var(--color-sidebar-text)"
             active-text-color="#ffffff"
             @select="handleMenuSelect"
           >
-            <el-menu-item
-              v-for="item in group.items"
-              :key="item.index"
-              :index="item.index"
-              class="menu-item"
-            >
+            <el-menu-item v-for="item in group.items" :key="item.index" :index="item.index">
               <el-icon><component :is="item.icon" /></el-icon>
               <template #title>{{ item.title }}</template>
             </el-menu-item>
@@ -112,13 +95,7 @@ onUnmounted(() => {
       </div>
     </el-aside>
 
-    <el-drawer
-      v-model="drawerVisible"
-      direction="ltr"
-      :size="288"
-      :with-header="false"
-      class="mobile-drawer"
-    >
+    <el-drawer v-model="drawerVisible" direction="ltr" :size="288" :with-header="false">
       <div class="brand brand--mobile">
         <div class="brand__mark">EC</div>
         <div class="brand__text">
@@ -126,28 +103,18 @@ onUnmounted(() => {
           <span>{{ roleLabel }}</span>
         </div>
       </div>
-
       <div class="menu-scroll">
-        <section
-          v-for="group in visibleMenuGroups"
-          :key="group.label"
-          class="menu-group"
-        >
+        <section v-for="group in visibleMenuGroups" :key="group.label" class="menu-group">
           <p class="menu-group__label">{{ group.label }}</p>
           <el-menu
             :default-active="activeMenu"
             class="menu"
             background-color="transparent"
-            text-color="var(--color-text-2)"
+            text-color="var(--color-sidebar-text)"
             active-text-color="#ffffff"
             @select="handleMenuSelect"
           >
-            <el-menu-item
-              v-for="item in group.items"
-              :key="item.index"
-              :index="item.index"
-              class="menu-item"
-            >
+            <el-menu-item v-for="item in group.items" :key="item.index" :index="item.index">
               <el-icon><component :is="item.icon" /></el-icon>
               <span>{{ item.title }}</span>
             </el-menu-item>
@@ -169,15 +136,8 @@ onUnmounted(() => {
         </div>
 
         <div class="header-right">
-          <div class="search-shell">
-            <el-input
-              v-if="!isMobile"
-              placeholder="搜索订单、站点、运营商..."
-              :prefix-icon="Search"
-              class="search-input"
-            />
-            <el-button v-else circle :icon="Search" />
-          </div>
+          <el-input v-if="!isMobile" placeholder="搜索订单、站点、活动..." :prefix-icon="Search" class="search-input" />
+          <el-button v-else circle :icon="Search" />
 
           <el-button circle class="toolbar-btn" @click="toggleTheme">
             <IconSun v-if="theme === 'dark'" :size="18" />
@@ -187,20 +147,19 @@ onUnmounted(() => {
           <el-popover placement="bottom-end" :width="320" trigger="click">
             <template #reference>
               <el-button circle class="toolbar-btn">
-                <el-badge :value="2" class="notify-badge">
+                <el-badge :value="2">
                   <el-icon><Bell /></el-icon>
                 </el-badge>
               </el-button>
             </template>
-
             <div class="notify-panel">
               <div class="notify-panel__item">
-                <strong>结构重构已完成</strong>
-                <p>你现在可以直接从新的管理员/运营商双视角继续迭代页面。</p>
+                <strong>重构导航已完成</strong>
+                <p>管理员与运营商视角已经拆分为独立业务路径，后续开发不再需要反复改菜单结构。</p>
               </div>
               <div class="notify-panel__item">
-                <strong>占位页已补齐</strong>
-                <p>未开发页面已统一挂载到正式菜单路径，后续补功能不会再改导航结构。</p>
+                <strong>第二轮页面补齐中</strong>
+                <p>占位页已逐步替换为正式页面，并统一接入后端接口与视觉系统。</p>
               </div>
             </div>
           </el-popover>
@@ -208,9 +167,7 @@ onUnmounted(() => {
           <el-dropdown @command="switchRole">
             <div class="role-switcher">
               <span class="role-switcher__label">当前视角</span>
-              <el-tag :type="currentRole === ROLES.ADMIN ? 'danger' : 'success'">
-                {{ roleLabel }}
-              </el-tag>
+              <el-tag :type="currentRole === ROLES.ADMIN ? 'danger' : 'success'">{{ roleLabel }}</el-tag>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
@@ -239,11 +196,10 @@ onUnmounted(() => {
 .layout-aside {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--color-border);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
   background:
     radial-gradient(circle at top left, rgba(64, 158, 255, 0.18), transparent 34%),
     linear-gradient(180deg, rgba(7, 19, 42, 0.98), rgba(10, 26, 55, 0.98));
-  color: #fff;
   transition: width 0.24s ease;
 }
 
@@ -280,8 +236,15 @@ onUnmounted(() => {
 
 .brand__text span {
   margin-top: 4px;
-  color: rgba(255, 255, 255, 0.66);
+  color: var(--color-sidebar-text-soft);
   font-size: 12px;
+}
+
+.brand--mobile {
+  margin: -18px -16px 0;
+  background:
+    radial-gradient(circle at top left, rgba(64, 158, 255, 0.18), transparent 34%),
+    linear-gradient(180deg, rgba(7, 19, 42, 0.98), rgba(10, 26, 55, 0.98));
 }
 
 .menu-scroll {
@@ -297,7 +260,7 @@ onUnmounted(() => {
 .menu-group__label {
   margin: 0 0 8px;
   padding: 0 12px;
-  color: rgba(255, 255, 255, 0.48);
+  color: var(--color-sidebar-text-soft);
   font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -307,18 +270,18 @@ onUnmounted(() => {
   border-right: none;
 }
 
-.menu :deep(.el-menu-item),
-.menu :deep(.el-sub-menu__title) {
+.menu :deep(.el-menu-item) {
   margin-bottom: 6px;
   border-radius: 12px;
+  color: var(--color-sidebar-text) !important;
 }
 
 .menu :deep(.el-menu-item:hover) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-sidebar-hover) !important;
 }
 
 .menu :deep(.el-menu-item.is-active) {
-  background: linear-gradient(135deg, rgba(64, 158, 255, 0.9), rgba(54, 207, 201, 0.9));
+  background: var(--color-sidebar-active) !important;
   box-shadow: 0 10px 24px rgba(64, 158, 255, 0.24);
 }
 
@@ -349,14 +312,10 @@ onUnmounted(() => {
   gap: 14px;
 }
 
-.header-action,
-.toolbar-btn {
-  color: var(--color-text-2);
-}
-
 .header-action {
   font-size: 20px;
   cursor: pointer;
+  color: var(--color-text-2);
 }
 
 .page-meta__section {
@@ -378,16 +337,8 @@ onUnmounted(() => {
   width: 260px;
 }
 
-.role-switcher {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-}
-
-.role-switcher__label {
-  color: var(--color-text-3);
-  font-size: 12px;
+.toolbar-btn {
+  color: var(--color-text-2);
 }
 
 .notify-panel {
@@ -407,17 +358,21 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
+.role-switcher {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.role-switcher__label {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
 .layout-main {
   padding: 20px;
   overflow-y: auto;
-}
-
-.brand--mobile {
-  margin: -18px -16px 0;
-  padding: 18px 20px;
-  background:
-    radial-gradient(circle at top left, rgba(64, 158, 255, 0.18), transparent 34%),
-    linear-gradient(180deg, rgba(7, 19, 42, 0.98), rgba(10, 26, 55, 0.98));
 }
 
 @media (max-width: 960px) {

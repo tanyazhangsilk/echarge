@@ -1,0 +1,20 @@
+import http from './http'
+
+export const fetchBillingTemplates = () => http.get('/operator/billing/templates')
+export const createBillingTemplate = (payload) => http.post('/operator/billing/templates', payload)
+export const updateBillingTemplate = (id, payload) => http.put(`/operator/billing/templates/${id}`, payload)
+
+export const fetchCustomerOverview = () => http.get('/operator/customers/overview')
+export const fetchFleets = () => http.get('/operator/customers/fleets')
+export const createFleet = (payload) => http.post('/operator/customers/fleets', payload)
+export const fetchTags = () => http.get('/operator/customers/tags')
+export const createTag = (payload) => http.post('/operator/customers/tags', payload)
+
+export const fetchDiscounts = () => http.get('/operator/marketing/discounts')
+export const createDiscount = (payload) => http.post('/operator/marketing/discounts', payload)
+export const fetchCoupons = () => http.get('/operator/marketing/coupons')
+export const createCoupon = (payload) => http.post('/operator/marketing/coupons', payload)
+export const dispatchCoupon = (id, payload) => http.post(`/operator/marketing/coupons/${id}/dispatch`, payload)
+
+export const fetchOperatorProfile = () => http.get('/operator/settings/profile')
+export const updateOperatorProfile = (payload) => http.put('/operator/settings/profile', payload)
