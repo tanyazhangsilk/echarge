@@ -2,361 +2,321 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import {
-  IconAlertTriangle,
-  IconArrowRight,
-  IconBolt,
-  IconBuilding,
-  IconReceipt,
-  IconWallet,
-} from '@tabler/icons-vue'
 
-import { fetchOverviewSummary } from '../../api/overview'
+import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
+import MetricCard from '../../components/console/MetricCard.vue'
+import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
+import { fetchAdminDashboard } from '../../api/console'
 
 const router = useRouter()
 
 const loading = ref(false)
-const summary = ref({
-  today_orders: 0,
-  today_revenue: 0,
-  online_piles: 0,
-  total_piles: 0,
-  active_users: 0,
-  new_users_month: 0,
-})
+const keyword = ref('')
+const riskFilter = ref('')
+const queue = ref([])
+const cards = ref([])
+const trend = ref([])
+const announcements = ref([])
 
-const cards = computed(() => [
-  {
-    title: '今日平台订单',
-    value: summary.value.today_orders.toLocaleString(),
-    note: '用于观察全网交易活跃度',
-    icon: IconBolt,
-    tone: 'blue',
-  },
-  {
-    title: '今日平台收入',
-    value: `¥${Number(summary.value.today_revenue || 0).toLocaleString()}`,
-    note: '结合清分执行把控资金节奏',
-    icon: IconWallet,
-    tone: 'emerald',
-  },
-  {
-    title: '在线充电桩',
-    value: `${summary.value.online_piles}/${summary.value.total_piles}`,
-    note: '辅助判断设备健康与故障分布',
-    icon: IconBuilding,
-    tone: 'amber',
-  },
-  {
-    title: '活跃用户数',
-    value: summary.value.active_users.toLocaleString(),
-    note: `本月新增 ${summary.value.new_users_month} 人`,
-    icon: IconReceipt,
-    tone: 'violet',
-  },
-])
+const riskTagMap = {
+  high: 'danger',
+  medium: 'warning',
+  low: 'success',
+}
 
-const shortcuts = [
-  {
-    title: '电站上架审批',
-    description: '复用现有电站审核页，集中处理待上线站点。',
-    route: '/admin/institutions/stations',
-  },
-  {
-    title: '清分结算执行',
-    description: '复用全局清分页，保留手动执行与批次回看能力。',
-    route: '/admin/finance',
-  },
-  {
-    title: '发票合规抽查',
-    description: '复用开票处理页，继续承接发票审核动作。',
-    route: '/admin/finance/invoices',
-  },
-  {
-    title: '全局订单查询',
-    description: '先承接原历史订单页，后续可继续扩展更多平台维度筛选。',
-    route: '/admin/orders',
-  },
-]
+const filteredQueue = computed(() =>
+  queue.value.filter((item) => {
+    const matchKeyword =
+      !keyword.value ||
+      [item.id, item.applicantName, item.regionScope, item.contactName]
+        .filter(Boolean)
+        .some((field) => String(field).toLowerCase().includes(keyword.value.trim().toLowerCase()))
+    const matchRisk = !riskFilter.value || item.riskLevel === riskFilter.value
+    return matchKeyword && matchRisk
+  }),
+)
 
-const todoList = [
-  '运营商入驻审核页已挂到新的管理端结构，当前先用占位页承接完整菜单。',
-  '用户管理、营销合规、系统参数这三块已预留正式入口，便于后续继续开发。',
-  '旧项目里可复用的订单、清分、开票、电站审核页都已经迁移到更合适的位置。',
-]
+const maxTrendValue = computed(() =>
+  Math.max(
+    1,
+    ...trend.value.map((item) => Math.max(item.operatorApprovals, item.stationApprovals, item.abnormalOrders)),
+  ),
+)
 
-const loadSummary = async () => {
+const loadData = async () => {
   loading.value = true
   try {
-    const res = await fetchOverviewSummary()
-    summary.value = { ...summary.value, ...(res?.data || {}) }
+    const { data } = await fetchAdminDashboard()
+    cards.value = data.cards
+    trend.value = data.trend
+    queue.value = data.auditQueue
+    announcements.value = data.announcements
   } catch (error) {
     console.error(error)
-    ElMessage.error('管理端概览加载失败，已展示默认数据骨架')
+    ElMessage.error('管理员工作台加载失败，当前请检查 mock 数据或接口配置。')
   } finally {
     loading.value = false
   }
 }
 
-onMounted(loadSummary)
+const goToRecord = (item) => {
+  if (item.applicantType === '省级运营商') {
+    router.push('/admin/institutions')
+    return
+  }
+
+  if (item.applicantType === '电站上架') {
+    router.push('/admin/institutions/stations')
+    return
+  }
+
+  router.push('/admin/orders/anomalies')
+}
+
+onMounted(loadData)
 </script>
 
 <template>
-  <div class="admin-dashboard">
-    <section class="hero surface-card">
-      <div>
-        <p class="hero__eyebrow">Admin Console</p>
-        <h1 class="hero__title">平台治理工作台</h1>
-        <p class="hero__desc">
-          这一层只承接平台管理员视角，聚焦入驻审核、订单监管、清分执行与系统规则控制。
-        </p>
-      </div>
-      <div class="hero__badge">
-        <IconAlertTriangle :size="18" />
-        <span>高权限视角</span>
-      </div>
+  <div class="page-shell">
+    <PageSectionHeader
+      eyebrow="Admin Console"
+      title="平台治理工作台"
+      description="面向平台管理员的聚合监管首页，聚焦准入审核、订单风控、清分监管和系统配置入口，适合作为论文截图首页与后续联调总入口。"
+      chip="平台监管视角"
+    >
+      <template #actions>
+        <el-button @click="router.push('/admin/institutions')">进入运营商审核</el-button>
+        <el-button type="primary" @click="router.push('/admin/institutions/stations')">进入电站审核</el-button>
+      </template>
+    </PageSectionHeader>
+
+    <section class="stats-grid">
+      <MetricCard
+        v-for="item in cards"
+        :key="item.key"
+        :label="item.label"
+        :value="item.value"
+        :prefix="item.prefix"
+        :suffix="item.unit"
+        :trend="item.trend"
+        :tone="item.tone"
+      />
     </section>
 
-    <section class="metrics">
-      <article
-        v-for="card in cards"
-        :key="card.title"
-        class="metric surface-card"
-        :class="`metric--${card.tone}`"
-        v-loading="loading"
-      >
-        <div class="metric__icon">
-          <component :is="card.icon" :size="20" />
-        </div>
-        <div>
-          <p class="metric__title">{{ card.title }}</p>
-          <h3 class="metric__value">{{ card.value }}</h3>
-          <p class="metric__note">{{ card.note }}</p>
-        </div>
-      </article>
-    </section>
-
-    <section class="content-grid">
-      <article class="panel surface-card">
-        <div class="panel__header">
+    <section class="split-layout">
+      <article class="page-panel surface-card">
+        <div class="panel-heading">
           <div>
-            <h3 class="panel__title">快捷入口</h3>
-            <p class="panel__desc">把现有可复用页面优先迁移到平台治理主链路。</p>
+            <h3 class="panel-heading__title">近 7 日平台审核与预警走势</h3>
+            <p class="panel-heading__desc">用统一监管视角展示运营商审核、电站审核和异常订单数量变化，方便后续接真实统计接口。</p>
           </div>
         </div>
-        <div class="shortcut-list">
-          <button
-            v-for="item in shortcuts"
-            :key="item.route"
-            class="shortcut"
-            type="button"
-            @click="router.push(item.route)"
-          >
-            <div>
-              <div class="shortcut__title">{{ item.title }}</div>
-              <div class="shortcut__desc">{{ item.description }}</div>
+
+        <div class="trend-board">
+          <div v-for="item in trend" :key="item.date" class="trend-row">
+            <div class="trend-row__date">{{ item.date }}</div>
+            <div class="trend-row__bars">
+              <div class="trend-bar trend-bar--primary">
+                <span class="trend-bar__label">运营商审核</span>
+                <div class="trend-bar__track">
+                  <div class="trend-bar__fill" :style="{ width: `${(item.operatorApprovals / maxTrendValue) * 100}%` }"></div>
+                </div>
+                <strong>{{ item.operatorApprovals }}</strong>
+              </div>
+              <div class="trend-bar trend-bar--warning">
+                <span class="trend-bar__label">电站审核</span>
+                <div class="trend-bar__track">
+                  <div class="trend-bar__fill" :style="{ width: `${(item.stationApprovals / maxTrendValue) * 100}%` }"></div>
+                </div>
+                <strong>{{ item.stationApprovals }}</strong>
+              </div>
+              <div class="trend-bar trend-bar--danger">
+                <span class="trend-bar__label">异常订单</span>
+                <div class="trend-bar__track">
+                  <div class="trend-bar__fill" :style="{ width: `${(item.abnormalOrders / maxTrendValue) * 100}%` }"></div>
+                </div>
+                <strong>{{ item.abnormalOrders }}</strong>
+              </div>
             </div>
-            <IconArrowRight :size="18" />
-          </button>
+          </div>
         </div>
       </article>
 
-      <article class="panel surface-card">
-        <div class="panel__header">
-          <div>
-            <h3 class="panel__title">重构说明</h3>
-            <p class="panel__desc">当前这一版先保证导航完整、路由稳定、已开发页面就位。</p>
+      <div class="panel-stack">
+        <article class="page-panel surface-card">
+          <div class="panel-heading">
+            <div>
+              <h3 class="panel-heading__title">系统提示</h3>
+              <p class="panel-heading__desc">保留适合论文展示的管理动作说明，同时也为后续公告接口预留结构。</p>
+            </div>
           </div>
-        </div>
-        <ul class="todo-list">
-          <li v-for="item in todoList" :key="item">{{ item }}</li>
-        </ul>
-      </article>
+          <div class="info-list">
+            <div v-for="item in announcements" :key="item.title" class="info-item">
+              <div class="notice-head">
+                <strong class="info-item__title">{{ item.title }}</strong>
+                <el-tag :type="item.level === 'warning' ? 'warning' : item.level === 'success' ? 'success' : 'info'">
+                  {{ item.level === 'warning' ? '提示' : item.level === 'success' ? '已就绪' : '说明' }}
+                </el-tag>
+              </div>
+              <p class="info-item__desc">{{ item.content }}</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="page-panel surface-card">
+          <div class="panel-heading">
+            <div>
+              <h3 class="panel-heading__title">快捷入口</h3>
+              <p class="panel-heading__desc">优先串起论文截图和主业务链路。</p>
+            </div>
+          </div>
+          <div class="quick-actions">
+            <el-button plain @click="router.push('/admin/institutions')">运营商审核</el-button>
+            <el-button plain @click="router.push('/admin/institutions/stations')">电站审核</el-button>
+            <el-button plain @click="router.push('/admin/orders')">全局订单</el-button>
+            <el-button plain @click="router.push('/admin/finance')">清分结算</el-button>
+          </div>
+        </article>
+      </div>
     </section>
+
+    <article class="page-panel surface-card table-shell">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">平台待办队列</h3>
+          <p class="panel-heading__desc">整合运营商审核、电站审核和订单预警，便于管理员从首页直接进入处理。</p>
+        </div>
+      </div>
+
+      <div class="toolbar-row toolbar-row--wrap">
+        <div class="toolbar-group">
+          <el-input v-model="keyword" placeholder="搜索编号、主体名称、区域或责任人" clearable style="width: 320px;" />
+          <el-select v-model="riskFilter" placeholder="风险等级" clearable style="width: 140px;">
+            <el-option label="高风险" value="high" />
+            <el-option label="中风险" value="medium" />
+            <el-option label="低风险" value="low" />
+          </el-select>
+        </div>
+        <div class="toolbar-group">
+          <el-button @click="keyword = ''; riskFilter = ''">重置</el-button>
+          <el-button type="primary" @click="loadData">刷新数据</el-button>
+        </div>
+      </div>
+
+      <el-table v-loading="loading" :data="filteredQueue">
+        <el-table-column prop="id" label="待办编号" min-width="160" />
+        <el-table-column prop="applicantName" label="对象名称" min-width="200" />
+        <el-table-column prop="applicantType" label="类型" width="120" />
+        <el-table-column prop="regionScope" label="区域" min-width="160" />
+        <el-table-column prop="licenseStatus" label="材料状态" min-width="160" />
+        <el-table-column prop="submittedAt" label="提交时间" width="160" />
+        <el-table-column label="风险等级" width="120">
+          <template #default="{ row }">
+            <el-tag :type="riskTagMap[row.riskLevel]">
+              {{ row.riskLevel === 'high' ? '高风险' : row.riskLevel === 'medium' ? '中风险' : '低风险' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="140" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" link @click="goToRecord(row)">立即处理</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <EmptyStateBlock
+        v-if="!loading && filteredQueue.length === 0"
+        title="当前筛选条件下暂无待办"
+        description="你可以清空筛选条件，或继续补充新的平台审核与风控数据。"
+      />
+    </article>
   </div>
 </template>
 
 <style scoped>
-.admin-dashboard {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.hero {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 24px;
-}
-
-.hero__eyebrow {
-  margin: 0 0 8px;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--color-text-3);
-}
-
-.hero__title {
-  margin: 0;
-  font-size: 28px;
-  line-height: 1.15;
-}
-
-.hero__desc {
-  margin: 10px 0 0;
-  max-width: 720px;
-  color: var(--color-text-2);
-  line-height: 1.6;
-}
-
-.hero__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: fit-content;
-  padding: 10px 14px;
-  border-radius: 999px;
-  background: rgba(245, 108, 108, 0.1);
-  color: #d44949;
-}
-
-.metrics {
+.trend-board {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.metric {
-  display: flex;
   gap: 14px;
-  padding: 18px;
 }
 
-.metric__icon {
+.trend-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.trend-row__date {
+  padding-top: 9px;
+  color: var(--color-text-3);
+  font-size: 13px;
+}
+
+.trend-row__bars {
+  display: grid;
+  gap: 10px;
+}
+
+.trend-bar {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 34px;
+  gap: 12px;
+  align-items: center;
+}
+
+.trend-bar__label {
+  color: var(--color-text-2);
+  font-size: 13px;
+}
+
+.trend-bar__track {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--color-surface-3);
+  overflow: hidden;
+}
+
+.trend-bar__fill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.trend-bar--primary .trend-bar__fill {
+  background: linear-gradient(90deg, #2f74ff, #77a7ff);
+}
+
+.trend-bar--warning .trend-bar__fill {
+  background: linear-gradient(90deg, #e19a2b, #f4ca6a);
+}
+
+.trend-bar--danger .trend-bar__fill {
+  background: linear-gradient(90deg, #db5a60, #f4a0a4);
+}
+
+.notice-head {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
-}
-
-.metric--blue .metric__icon {
-  background: rgba(64, 158, 255, 0.12);
-  color: #409eff;
-}
-
-.metric--emerald .metric__icon {
-  background: rgba(46, 204, 113, 0.12);
-  color: #1f9d61;
-}
-
-.metric--amber .metric__icon {
-  background: rgba(230, 162, 60, 0.12);
-  color: #d28a1d;
-}
-
-.metric--violet .metric__icon {
-  background: rgba(116, 75, 162, 0.12);
-  color: #744ba2;
-}
-
-.metric__title,
-.metric__note {
-  margin: 0;
-  color: var(--color-text-3);
-}
-
-.metric__value {
-  margin: 6px 0;
-  font-size: 26px;
-}
-
-.content-grid {
-  display: grid;
-  grid-template-columns: 1.3fr 1fr;
-  gap: 16px;
-}
-
-.panel {
-  padding: 18px;
-}
-
-.panel__header {
-  margin-bottom: 14px;
-}
-
-.panel__title {
-  margin: 0;
-  font-size: 18px;
-}
-
-.panel__desc {
-  margin: 6px 0 0;
-  color: var(--color-text-3);
-}
-
-.shortcut-list {
-  display: grid;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.shortcut {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  width: 100%;
-  padding: 14px 16px;
-  border: 1px solid var(--color-border);
-  border-radius: 14px;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.shortcut:hover {
-  border-color: rgba(64, 158, 255, 0.35);
-  background: rgba(64, 158, 255, 0.04);
-}
-
-.shortcut__title {
-  font-weight: 700;
-}
-
-.shortcut__desc {
-  margin-top: 6px;
-  color: var(--color-text-3);
-  line-height: 1.5;
-}
-
-.todo-list {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--color-text-2);
-  line-height: 1.8;
-}
-
-@media (max-width: 1200px) {
-  .metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .content-grid {
-    grid-template-columns: 1fr;
-  }
+.quick-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 @media (max-width: 768px) {
-  .hero {
-    flex-direction: column;
-    padding: 18px;
+  .trend-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
   }
 
-  .metrics {
+  .trend-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-actions {
     grid-template-columns: 1fr;
   }
 }

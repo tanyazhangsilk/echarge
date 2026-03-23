@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { IconMoonStars, IconSun } from '@tabler/icons-vue'
-import { Bell, Menu as MenuIcon, Search } from '@element-plus/icons-vue'
+import { Bell, Menu as MenuIcon, Search, SwitchButton } from '@element-plus/icons-vue'
 
 import {
   buildMenuByRole,
@@ -23,11 +23,18 @@ const theme = ref(document.documentElement.dataset.theme === 'dark' ? 'dark' : '
 
 const currentRole = computed(() => route.meta?.role || getStoredRole())
 const activeMenu = computed(() => route.path)
-const pageTitle = computed(() => route.meta?.title || '运营中台')
+const pageTitle = computed(() => route.meta?.title || '运营后台')
 const pageSection = computed(() => route.meta?.section || ROLE_LABELS[currentRole.value])
-const roleLabel = computed(() => ROLE_LABELS[currentRole.value] || '运营商')
+const roleLabel = computed(() => ROLE_LABELS[currentRole.value] || '充电运营商')
 const visibleMenuGroups = computed(() => buildMenuByRole(currentRole.value))
 const isMobile = computed(() => windowWidth.value < 960)
+const todayText = computed(() =>
+  new Intl.DateTimeFormat('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  }).format(new Date()),
+)
 
 const handleResize = () => {
   windowWidth.value = window.innerWidth
@@ -68,8 +75,8 @@ onUnmounted(() => {
       <div class="brand">
         <div class="brand__mark">EC</div>
         <div v-show="!collapsed" class="brand__text">
-          <strong>E-Charge Console</strong>
-          <span>{{ roleLabel }}</span>
+          <strong>E-Charge 聚合平台</strong>
+          <span>{{ roleLabel }}后台</span>
         </div>
       </div>
 
@@ -99,8 +106,8 @@ onUnmounted(() => {
       <div class="brand brand--mobile">
         <div class="brand__mark">EC</div>
         <div class="brand__text">
-          <strong>E-Charge Console</strong>
-          <span>{{ roleLabel }}</span>
+          <strong>E-Charge 聚合平台</strong>
+          <span>{{ roleLabel }}后台</span>
         </div>
       </div>
       <div class="menu-scroll">
@@ -132,11 +139,12 @@ onUnmounted(() => {
           <div class="page-meta">
             <span class="page-meta__section">{{ pageSection }}</span>
             <h2 class="page-meta__title">{{ pageTitle }}</h2>
+            <p class="page-meta__sub">{{ todayText }} · 开发态角色切换已启用</p>
           </div>
         </div>
 
         <div class="header-right">
-          <el-input v-if="!isMobile" placeholder="搜索订单、站点、活动..." :prefix-icon="Search" class="search-input" />
+          <el-input v-if="!isMobile" placeholder="搜索订单、运营商、电站或设备编码" :prefix-icon="Search" class="search-input" />
           <el-button v-else circle :icon="Search" />
 
           <el-button circle class="toolbar-btn" @click="toggleTheme">
@@ -154,12 +162,12 @@ onUnmounted(() => {
             </template>
             <div class="notify-panel">
               <div class="notify-panel__item">
-                <strong>重构导航已完成</strong>
-                <p>管理员与运营商视角已经拆分为独立业务路径，后续开发不再需要反复改菜单结构。</p>
+                <strong>后台壳子已切换到正式结构</strong>
+                <p>管理员与运营商视图已拆分为独立业务路径，后续接入登录和接口时无需重做菜单体系。</p>
               </div>
               <div class="notify-panel__item">
-                <strong>第二轮页面补齐中</strong>
-                <p>占位页已逐步替换为正式页面，并统一接入后端接口与视觉系统。</p>
+                <strong>核心页面已按联调结构补齐</strong>
+                <p>优先覆盖工作台、审核中心、列表筛选、详情抽屉和状态反馈，便于论文截图与后续继续开发。</p>
               </div>
             </div>
           </el-popover>
@@ -167,12 +175,13 @@ onUnmounted(() => {
           <el-dropdown @command="switchRole">
             <div class="role-switcher">
               <span class="role-switcher__label">当前视角</span>
+              <el-icon class="role-switcher__icon"><SwitchButton /></el-icon>
               <el-tag :type="currentRole === ROLES.ADMIN ? 'danger' : 'success'">{{ roleLabel }}</el-tag>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item :command="ROLES.ADMIN">切换到平台管理员</el-dropdown-item>
-                <el-dropdown-item :command="ROLES.OPERATOR">切换到运营商</el-dropdown-item>
+                <el-dropdown-item :command="ROLES.OPERATOR">切换到充电运营商</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -312,6 +321,10 @@ onUnmounted(() => {
   gap: 14px;
 }
 
+.header-right {
+  min-width: 0;
+}
+
 .header-action {
   font-size: 20px;
   cursor: pointer;
@@ -333,8 +346,14 @@ onUnmounted(() => {
   color: var(--color-text);
 }
 
+.page-meta__sub {
+  margin: 4px 0 0;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
 .search-input {
-  width: 260px;
+  width: 320px;
 }
 
 .toolbar-btn {
@@ -355,7 +374,7 @@ onUnmounted(() => {
 .notify-panel__item p {
   margin: 6px 0 0;
   color: var(--color-text-3);
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .role-switcher {
@@ -363,11 +382,19 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   cursor: pointer;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
 }
 
 .role-switcher__label {
   color: var(--color-text-3);
   font-size: 12px;
+}
+
+.role-switcher__icon {
+  color: var(--color-text-2);
 }
 
 .layout-main {

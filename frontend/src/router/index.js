@@ -3,7 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import MainLayout from '../layouts/MainLayout.vue'
 import PlaceholderPage from '../views/PlaceholderPage.vue'
 import AdminDashboard from '../views/admin/AdminDashboard.vue'
-import DashboardView from '../views/Dashboard.vue'
+import OperatorDashboard from '../views/operator/OperatorDashboard.vue'
 import {
   getRoleByPath,
   getStoredRole,
@@ -24,15 +24,15 @@ const routes = [
     component: MainLayout,
     meta: { role: ROLES.ADMIN },
     children: [
-      { path: '', name: 'AdminDashboard', component: AdminDashboard, meta: { role: ROLES.ADMIN, title: '平台工作台', section: '概览' } },
-      { path: 'institutions', name: 'AdminInstitutions', component: () => import('../views/admin/OperatorAudit.vue'), meta: { role: ROLES.ADMIN, title: '运营商入驻审核', section: '机构管理' } },
-      { path: 'institutions/stations', name: 'AdminInstitutionStations', component: () => import('../views/admin/todo/StationAudit.vue'), meta: { role: ROLES.ADMIN, title: '电站上架审批', section: '机构管理' } },
+      { path: '', name: 'AdminDashboard', component: AdminDashboard, meta: { role: ROLES.ADMIN, title: '平台工作台', section: '总览' } },
+      { path: 'institutions', name: 'AdminInstitutions', component: () => import('../views/admin/OperatorAudit.vue'), meta: { role: ROLES.ADMIN, title: '运营商审核', section: '审核中心' } },
+      { path: 'institutions/stations', name: 'AdminInstitutionStations', component: () => import('../views/admin/todo/StationAudit.vue'), meta: { role: ROLES.ADMIN, title: '电站审核', section: '审核中心' } },
       { path: 'orders', name: 'AdminOrders', component: () => import('../views/orders/HistoryOrders.vue'), meta: { role: ROLES.ADMIN, title: '全局订单查询', section: '订单监管' } },
       { path: 'orders/anomalies', name: 'AdminOrderAnomalies', component: () => import('../views/orders/AbnormalOrders.vue'), meta: { role: ROLES.ADMIN, title: '异常订单监管', section: '订单监管' } },
       { path: 'finance', name: 'AdminFinance', component: () => import('../views/admin/GlobalSettle.vue'), meta: { role: ROLES.ADMIN, title: '清分结算执行', section: '资金清分' } },
       { path: 'finance/invoices', name: 'AdminFinanceInvoices', component: () => import('../views/finance/InvoiceManagement.vue'), meta: { role: ROLES.ADMIN, title: '发票合规抽查', section: '资金清分' } },
       { path: 'users', name: 'AdminUsers', component: () => import('../views/admin/UserManagement.vue'), meta: { role: ROLES.ADMIN, title: '用户列表', section: '用户管理' } },
-      { path: 'users/blacklist', name: 'AdminUsersBlacklist', component: () => import('../views/admin/UserBlacklist.vue'), meta: { role: ROLES.ADMIN, title: '封禁用户管理', section: '用户管理' } },
+      { path: 'users/blacklist', name: 'AdminUsersBlacklist', component: () => import('../views/admin/UserBlacklist.vue'), meta: { role: ROLES.ADMIN, title: '黑名单管理', section: '用户管理' } },
       { path: 'marketing', name: 'AdminMarketing', component: () => import('../views/admin/MarketingAudit.vue'), meta: { role: ROLES.ADMIN, title: '营销合规审计', section: '系统配置' } },
       { path: 'settings', name: 'AdminSettings', component: () => import('../views/RoleBlueprint.vue'), meta: { role: ROLES.ADMIN, title: '权限控制', section: '系统配置' } },
       { path: 'settings/params', name: 'AdminSettingsParams', component: () => import('../views/admin/SystemParams.vue'), meta: { role: ROLES.ADMIN, title: '系统参数设置', section: '系统配置' } },
@@ -43,11 +43,11 @@ const routes = [
     component: MainLayout,
     meta: { role: ROLES.OPERATOR },
     children: [
-      { path: '', name: 'OperatorDashboard', component: DashboardView, meta: { role: ROLES.OPERATOR, title: '运营工作台', section: '概览' } },
-      { path: 'stations', name: 'OperatorStations', component: () => import('../views/stations/StationList.vue'), meta: { role: ROLES.OPERATOR, title: '站点管理', section: '资产管理' } },
+      { path: '', name: 'OperatorDashboard', component: OperatorDashboard, meta: { role: ROLES.OPERATOR, title: '运营工作台', section: '总览' } },
+      { path: 'stations', name: 'OperatorStations', component: () => import('../views/stations/StationList.vue'), meta: { role: ROLES.OPERATOR, title: '电站管理', section: '资产管理' } },
       { path: 'stations/chargers', name: 'OperatorStationsChargers', component: () => import('../views/stations/PileManagement.vue'), meta: { role: ROLES.OPERATOR, title: '设备状态总览', section: '资产管理' } },
       { path: 'billing', name: 'OperatorBilling', component: () => import('../views/stations/PricingSettings.vue'), meta: { role: ROLES.OPERATOR, title: '电价设置', section: '计费管理' } },
-      { path: 'billing/templates', name: 'OperatorBillingTemplates', component: () => import('../views/operator/BillingTemplates.vue'), meta: { role: ROLES.OPERATOR, title: '计费模板管理', section: '计费管理' } },
+      { path: 'billing/templates', name: 'OperatorBillingTemplates', component: () => import('../views/operator/BillingTemplates.vue'), meta: { role: ROLES.OPERATOR, title: '电价模板管理', section: '计费管理' } },
       { path: 'orders', name: 'OperatorOrders', component: () => import('../views/orders/HistoryOrders.vue'), meta: { role: ROLES.OPERATOR, title: '历史订单', section: '订单管理' } },
       { path: 'orders/realtime', name: 'OperatorOrdersRealtime', component: () => import('../views/orders/RealtimeOrders.vue'), meta: { role: ROLES.OPERATOR, title: '实时订单监控', section: '订单管理' } },
       { path: 'finance', name: 'OperatorFinance', component: () => import('../views/finance/Settlement.vue'), meta: { role: ROLES.OPERATOR, title: '收益对账', section: '财务管理' } },

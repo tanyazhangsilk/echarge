@@ -1,16 +1,16 @@
 import {
-  Histogram,
-  Tickets,
-  Wallet,
-  OfficeBuilding,
-  UserFilled,
-  Promotion,
-  Setting,
-  DataAnalysis,
-  CreditCard,
-  Document,
   Bell,
   Connection,
+  CreditCard,
+  DataAnalysis,
+  Document,
+  Histogram,
+  OfficeBuilding,
+  Promotion,
+  Setting,
+  Tickets,
+  UserFilled,
+  Wallet,
 } from '@element-plus/icons-vue'
 
 export const ROLES = {
@@ -20,7 +20,7 @@ export const ROLES = {
 
 export const ROLE_LABELS = {
   [ROLES.ADMIN]: '平台管理员',
-  [ROLES.OPERATOR]: '运营商',
+  [ROLES.OPERATOR]: '充电运营商',
 }
 
 export const ROLE_DEFAULT_ROUTE = {
@@ -48,14 +48,14 @@ export const getRoleByPath = (path = '') => {
 export const MENU_CONFIG = {
   [ROLES.ADMIN]: [
     {
-      label: '概览',
-      items: [{ index: '/admin', title: '工作台', icon: Histogram }],
+      label: '总览',
+      items: [{ index: '/admin', title: '平台工作台', icon: Histogram }],
     },
     {
-      label: '机构管理',
+      label: '审核中心',
       items: [
-        { index: '/admin/institutions', title: '运营商入驻审核', icon: OfficeBuilding },
-        { index: '/admin/institutions/stations', title: '电站上架审批', icon: Bell },
+        { index: '/admin/institutions', title: '运营商审核', icon: OfficeBuilding },
+        { index: '/admin/institutions/stations', title: '电站审核', icon: Bell },
       ],
     },
     {
@@ -76,7 +76,7 @@ export const MENU_CONFIG = {
       label: '用户管理',
       items: [
         { index: '/admin/users', title: '用户列表', icon: UserFilled },
-        { index: '/admin/users/blacklist', title: '封禁用户管理', icon: UserFilled },
+        { index: '/admin/users/blacklist', title: '黑名单管理', icon: UserFilled },
       ],
     },
     {
@@ -90,13 +90,13 @@ export const MENU_CONFIG = {
   ],
   [ROLES.OPERATOR]: [
     {
-      label: '概览',
-      items: [{ index: '/operator', title: '工作台', icon: Histogram }],
+      label: '总览',
+      items: [{ index: '/operator', title: '运营工作台', icon: Histogram }],
     },
     {
       label: '资产管理',
       items: [
-        { index: '/operator/stations', title: '站点管理', icon: OfficeBuilding },
+        { index: '/operator/stations', title: '电站管理', icon: OfficeBuilding },
         { index: '/operator/stations/chargers', title: '设备状态总览', icon: Connection },
       ],
     },
@@ -104,7 +104,7 @@ export const MENU_CONFIG = {
       label: '计费管理',
       items: [
         { index: '/operator/billing', title: '电价设置', icon: DataAnalysis },
-        { index: '/operator/billing/templates', title: '计费模板管理', icon: Document },
+        { index: '/operator/billing/templates', title: '电价模板管理', icon: Document },
       ],
     },
     {

@@ -1,223 +1,337 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { Stamp, Location, Picture, Check, Close, InfoFilled } from '@element-plus/icons-vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import http from '../../../api/http'
 
-const tableData = ref([])
-const loading = ref(true)
+import EmptyStateBlock from '../../../components/console/EmptyStateBlock.vue'
+import MetricCard from '../../../components/console/MetricCard.vue'
+import PageSectionHeader from '../../../components/console/PageSectionHeader.vue'
+import { fetchStationAuditPage } from '../../../api/console'
 
-// 抽屉与审核逻辑状态
+const loading = ref(false)
 const drawerVisible = ref(false)
-const currentStation = ref(null)
-const isProcessing = ref(false)
-const auditRemark = ref('')
+const records = ref([])
+const stats = ref([])
+const currentRecord = ref(null)
+const filters = reactive({
+  keyword: '',
+  status: '',
+  priority: '',
+})
 
-const fetchAudits = async () => {
+const filteredRecords = computed(() =>
+  records.value.filter((item) => {
+    const keyword = filters.keyword.trim().toLowerCase()
+    const matchKeyword =
+      !keyword ||
+      [item.stationName, item.operatorName, item.city, item.address].some((field) =>
+        String(field).toLowerCase().includes(keyword),
+      )
+    const matchStatus = !filters.status || item.status === filters.status
+    const matchPriority = !filters.priority || item.priority === filters.priority
+    return matchKeyword && matchStatus && matchPriority
+  }),
+)
+
+const loadData = async () => {
   loading.value = true
   try {
-    const res = await http.get('/admin/audit/stations')
-    if (res.data.code === 200) {
-      tableData.value = res.data.data
-    }
+    const { data } = await fetchStationAuditPage()
+    stats.value = data.stats
+    records.value = data.records
   } catch (error) {
-    ElMessage.error('获取审核列表失败')
+    console.error(error)
+    ElMessage.error('电站审核页面加载失败。')
   } finally {
     loading.value = false
   }
 }
 
-onMounted(() => { fetchAudits() })
-
-const openAuditDrawer = (row) => {
-  currentStation.value = row
-  auditRemark.value = ''
+const openDrawer = (row) => {
+  currentRecord.value = row
   drawerVisible.value = true
 }
 
-const submitAudit = async (action) => {
-  if (action === 'reject' && !auditRemark.value) {
-    ElMessage.warning('驳回操作必须填写审核意见')
-    return
+const handleAudit = async (row, action) => {
+  const text = action === 'approved' ? '通过' : '驳回'
+  const result = await ElMessageBox.prompt(`请输入${text}说明，便于后续保留审核痕迹。`, `${text}电站上架申请`, {
+    confirmButtonText: '确认',
+    cancelButtonText: '取消',
+    inputPlaceholder: action === 'approved' ? '例如：资料齐全，允许同步上线' : '例如：消防资料缺失，请补充后重新提交',
+  }).catch(() => null)
+
+  if (!result) return
+
+  const target = records.value.find((item) => item.id === row.id)
+  if (target) {
+    target.status = action
+    target.gridStatus = action === 'approved' ? '已通过' : '待补资料'
+    target.auditHistory = [
+      {
+        time: new Date().toLocaleString('zh-CN', { hour12: false }),
+        action: action === 'approved' ? '平台审核通过' : '平台审核驳回',
+        operator: '平台审核组-当前用户',
+        note: result.value,
+      },
+      ...target.auditHistory,
+    ]
   }
 
-  const confirmText = action === 'approve' 
-    ? `确认通过【${currentStation.value.station_name}】的上线申请吗？通过后该电站将立即在C端地图上可见。` 
-    : `确认驳回该申请？`
-
-  try {
-    await ElMessageBox.confirm(confirmText, '高危操作确认', { type: action === 'approve' ? 'success' : 'warning' })
-    
-    isProcessing.value = true
-    const res = await http.post(`/admin/audit/stations/${currentStation.value.id}/process`, {
-      action: action,
-      remark: auditRemark.value
-    })
-    
-    if (res.data.code === 200) {
-      ElMessage.success(action === 'approve' ? '审核已通过，电站正式上线！' : '已驳回，工单已打回给运营商')
-      drawerVisible.value = false
-      fetchAudits() // 刷新列表，被通过的将从该待办列表中消失
-    }
-  } catch (err) {
-    if (err !== 'cancel') ElMessage.error('处理失败')
-  } finally {
-    isProcessing.value = false
+  if (currentRecord.value?.id === row.id) {
+    currentRecord.value = { ...target }
   }
+
+  ElMessage.success(`已${text} ${row.stationName} 的上架申请。`)
 }
+
+onMounted(loadData)
 </script>
 
 <template>
-  <div class="page-container">
-    <el-card shadow="never" class="border-0 rounded-lg">
-      <template #header>
-        <div class="font-bold text-lg text-gray-800 flex items-center">
-          <el-icon class="mr-2 text-blue-500"><Stamp /></el-icon> 平台电站上线审核中心
-        </div>
+  <div class="page-shell">
+    <PageSectionHeader
+      eyebrow="Station Admission"
+      title="电站审核"
+      description="用于平台管理员审核电站上架申请，覆盖站点档案、配电规模、附件状态、审核记录和上架动作，适合作为后续接入站点审核接口的前端骨架。"
+      chip="电站准入审核"
+    >
+      <template #actions>
+        <el-button @click="filters.keyword = ''; filters.status = ''; filters.priority = ''">清空筛选</el-button>
+        <el-button type="primary" @click="loadData">刷新列表</el-button>
       </template>
+    </PageSectionHeader>
 
-      <el-alert 
-        title="合规提醒：请严格核实运营商提交的电站经纬度与现场照片是否一致。一旦点击【审核通过】，该电站及下属电桩将立即对所有 C 端车主公开可见。" 
-        type="info" 
-        show-icon 
-        class="mb-6" 
-        :closable="false"
+    <section class="stats-grid">
+      <MetricCard
+        v-for="item in stats"
+        :key="item.label"
+        :label="item.label"
+        :value="item.value"
+        :suffix="item.suffix"
+        :hint="item.hint"
+        :tone="item.tone"
       />
+    </section>
 
-      <el-table :data="tableData" v-loading="loading" stripe border style="width: 100%" :header-cell-style="{ background: '#f8f9fa', color: '#475569' }">
-        <el-table-column prop="operator_name" label="归属运营商" min-width="160">
-          <template #default="scope"><strong class="text-gray-700">{{ scope.row.operator_name }}</strong></template>
+    <article class="page-panel surface-card table-shell">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">电站申请列表</h3>
+          <p class="panel-heading__desc">支持按电站、运营商、优先级和状态筛选，列表与详情抽屉已为后端联调预留字段。</p>
+        </div>
+      </div>
+
+      <div class="toolbar-row toolbar-row--wrap">
+        <div class="toolbar-group">
+          <el-input v-model="filters.keyword" placeholder="搜索电站名称、运营商、地址" clearable style="width: 320px;" />
+          <el-select v-model="filters.status" clearable placeholder="审核状态" style="width: 140px;">
+            <el-option label="待审核" value="pending" />
+            <el-option label="已通过" value="approved" />
+            <el-option label="已驳回" value="rejected" />
+          </el-select>
+          <el-select v-model="filters.priority" clearable placeholder="优先级" style="width: 140px;">
+            <el-option label="高优先级" value="high" />
+            <el-option label="中优先级" value="medium" />
+          </el-select>
+        </div>
+      </div>
+
+      <el-table v-loading="loading" :data="filteredRecords">
+        <el-table-column prop="stationName" label="电站名称" min-width="220" />
+        <el-table-column prop="operatorName" label="所属运营商" min-width="220" />
+        <el-table-column prop="city" label="城市" min-width="140" />
+        <el-table-column label="规模" width="160">
+          <template #default="{ row }">{{ row.connectorCount }} 枪 / {{ row.totalPowerKw }} kW</template>
         </el-table-column>
-        <el-table-column prop="station_name" label="申报电站名称" min-width="180" />
-        <el-table-column prop="planned_piles" label="申报终端数" width="100" align="center">
-          <template #default="scope">
-            <el-tag type="info" size="small">{{ scope.row.planned_piles }} 个</el-tag>
+        <el-table-column prop="gridStatus" label="资料状态" min-width="140" />
+        <el-table-column label="优先级" width="110">
+          <template #default="{ row }">
+            <el-tag :type="row.priority === 'high' ? 'danger' : 'warning'">
+              {{ row.priority === 'high' ? '高优先级' : '中优先级' }}
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="total_power" label="总装机功率" width="120" align="right">
-          <template #default="scope">{{ scope.row.total_power }} kW</template>
-        </el-table-column>
-        <el-table-column prop="created_at" label="提交申请时间" width="170" />
-        <el-table-column label="当前状态" width="100" align="center">
-          <template #default="scope">
-            <div class="status-indicator" :class="scope.row.status === 3 ? 'status-pending' : 'status-rejected'">
-              {{ scope.row.status === 3 ? '待审核' : '已驳回' }}
-            </div>
+        <el-table-column label="审核状态" width="110">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 'approved' ? 'success' : row.status === 'rejected' ? 'danger' : 'warning'">
+              {{ row.status === 'approved' ? '已通过' : row.status === 'rejected' ? '已驳回' : '待审核' }}
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="动作" width="120" fixed="right" align="center">
-          <template #default="scope">
-            <el-button v-if="scope.row.status === 3" type="primary" size="small" @click="openAuditDrawer(scope.row)">
-              调阅审核
-            </el-button>
-            <el-button v-else link type="info" size="small" @click="openAuditDrawer(scope.row)">查看驳回记录</el-button>
+        <el-table-column prop="submittedAt" label="提交时间" width="160" />
+        <el-table-column label="操作" width="200" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" link @click="openDrawer(row)">查看详情</el-button>
+            <el-button v-if="row.status === 'pending'" type="success" link @click="handleAudit(row, 'approved')">通过</el-button>
+            <el-button v-if="row.status === 'pending'" type="danger" link @click="handleAudit(row, 'rejected')">驳回</el-button>
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
 
-    <el-drawer v-model="drawerVisible" title="电站准入合规审查" size="550px" destroy-on-close class="audit-drawer">
-      <div v-if="currentStation" class="drawer-content">
-        
-        <div class="audit-header mb-6">
-          <h2 class="text-xl font-bold text-gray-800 mb-2">{{ currentStation.station_name }}</h2>
-          <el-tag type="warning" effect="dark">等待平台管理员审核</el-tag>
+      <EmptyStateBlock
+        v-if="!loading && filteredRecords.length === 0"
+        title="暂无符合条件的电站申请"
+        description="可以尝试调整筛选条件，或继续补充站点上架 mock 数据。"
+      />
+    </article>
+
+    <el-drawer v-model="drawerVisible" title="电站审核详情" size="620px">
+      <template v-if="currentRecord">
+        <div class="drawer-head">
+          <div>
+            <h3>{{ currentRecord.stationName }}</h3>
+            <p>{{ currentRecord.operatorName }} · {{ currentRecord.city }}</p>
+          </div>
+          <el-tag :type="currentRecord.status === 'approved' ? 'success' : currentRecord.status === 'rejected' ? 'danger' : 'warning'">
+            {{ currentRecord.status === 'approved' ? '已通过' : currentRecord.status === 'rejected' ? '已驳回' : '待审核' }}
+          </el-tag>
         </div>
 
-        <el-divider content-position="left">基础档案核对</el-divider>
-        <el-descriptions :column="1" border class="mb-6">
-          <el-descriptions-item label="提报主体">{{ currentStation.operator_name }}</el-descriptions-item>
-          <el-descriptions-item label="详细地址">{{ currentStation.address }}</el-descriptions-item>
-          <el-descriptions-item label="装机规模">
-            <strong class="text-blue-600">{{ currentStation.planned_piles }}</strong> 根充电枪 / <strong class="text-blue-600">{{ currentStation.total_power }}</strong> kW
-          </el-descriptions-item>
-          <el-descriptions-item label="GPS 坐标">
-            <el-link type="primary" :underline="false">
-              <el-icon><Location /></el-icon> {{ currentStation.lng }}, {{ currentStation.lat }}
-            </el-link>
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <el-divider content-position="left">现场实勘底稿</el-divider>
-        <div class="photo-grid mb-6">
-          <div class="mock-photo">
-            <el-icon :size="24" class="mb-1"><Picture /></el-icon>
-            <span>入口道闸/全景.jpg</span>
+        <div class="info-kv">
+          <div class="info-kv__item">
+            <p class="info-kv__label">详细地址</p>
+            <p class="info-kv__value">{{ currentRecord.address }}</p>
           </div>
-          <div class="mock-photo">
-            <el-icon :size="24" class="mb-1"><Picture /></el-icon>
-            <span>高压变压器铭牌.jpg</span>
+          <div class="info-kv__item">
+            <p class="info-kv__label">站点类型</p>
+            <p class="info-kv__value">{{ currentRecord.stationType }}</p>
           </div>
-          <div class="mock-photo">
-            <el-icon :size="24" class="mb-1"><Picture /></el-icon>
-            <span>消防器材配置.jpg</span>
+          <div class="info-kv__item">
+            <p class="info-kv__label">功率与枪口</p>
+            <p class="info-kv__value">{{ currentRecord.totalPowerKw }} kW / {{ currentRecord.connectorCount }} 枪</p>
+          </div>
+          <div class="info-kv__item">
+            <p class="info-kv__label">车位与服务半径</p>
+            <p class="info-kv__value">{{ currentRecord.parkingSlots }} 车位 / {{ currentRecord.serviceRadiusKm }} km</p>
+          </div>
+          <div class="info-kv__item">
+            <p class="info-kv__label">联系人</p>
+            <p class="info-kv__value">{{ currentRecord.contactName }} / {{ currentRecord.contactPhone }}</p>
+          </div>
+          <div class="info-kv__item">
+            <p class="info-kv__label">坐标与营业时间</p>
+            <p class="info-kv__value">{{ currentRecord.longitude }}, {{ currentRecord.latitude }} / {{ currentRecord.businessHours }}</p>
           </div>
         </div>
 
-        <div class="audit-action-zone" v-if="currentStation.status === 3">
-          <div class="mb-2 flex items-center text-gray-700 font-bold">
-            <el-icon class="mr-1"><InfoFilled /></el-icon> 审核处理意见
+        <article class="detail-panel soft-card">
+          <div class="detail-panel__header">
+            <strong>配套服务</strong>
+            <span>{{ currentRecord.photoCount }} 张现场照片</span>
           </div>
-          <el-input 
-            v-model="auditRemark" 
-            type="textarea" 
-            :rows="3" 
-            placeholder="若驳回，请务必填写需整改的原因（如：实勘照片不清晰，坐标偏差过大等）" 
-            class="mb-4"
-          />
-          <div class="flex gap-4">
-            <el-button type="danger" plain class="flex-1" :loading="isProcessing" @click="submitAudit('reject')" :icon="Close">
-              打回整改
-            </el-button>
-            <el-button type="success" class="flex-1" :loading="isProcessing" @click="submitAudit('approve')" :icon="Check">
-              各项合规，允许上线
-            </el-button>
+          <div class="tag-list">
+            <el-tag v-for="item in currentRecord.amenities" :key="item" effect="plain">{{ item }}</el-tag>
           </div>
+        </article>
+
+        <article class="detail-panel soft-card">
+          <div class="detail-panel__header">
+            <strong>附件状态</strong>
+            <span>{{ currentRecord.gridStatus }}</span>
+          </div>
+          <div class="attachment-list">
+            <div v-for="item in currentRecord.attachments" :key="item.name" class="attachment-item">
+              <span>{{ item.name }}</span>
+              <el-tag :type="item.status === 'ready' ? 'success' : 'danger'">
+                {{ item.status === 'ready' ? '已上传' : '缺失' }}
+              </el-tag>
+            </div>
+          </div>
+        </article>
+
+        <article class="detail-panel soft-card">
+          <div class="detail-panel__header">
+            <strong>审核记录</strong>
+            <span>{{ currentRecord.auditHistory.length }} 条</span>
+          </div>
+          <div class="timeline-list">
+            <div v-for="item in currentRecord.auditHistory" :key="`${item.time}-${item.action}`" class="timeline-item">
+              <strong>{{ item.action }}</strong>
+              <p>{{ item.time }} · {{ item.operator }}</p>
+              <p>{{ item.note }}</p>
+            </div>
+          </div>
+        </article>
+
+        <div class="drawer-actions">
+          <el-button @click="drawerVisible = false">关闭</el-button>
+          <el-button v-if="currentRecord.status === 'pending'" type="danger" plain @click="handleAudit(currentRecord, 'rejected')">驳回并补件</el-button>
+          <el-button v-if="currentRecord.status === 'pending'" type="primary" @click="handleAudit(currentRecord, 'approved')">审核通过并上架</el-button>
         </div>
-        
-        <el-alert v-if="currentStation.status === 4" title="该电站申请已被平台驳回，正在等待运营商重新提交资料。" type="error" :closable="false" />
-      </div>
+      </template>
     </el-drawer>
   </div>
 </template>
 
 <style scoped>
-.mb-6 { margin-bottom: 24px; }
-.mb-4 { margin-bottom: 16px; }
-.mb-2 { margin-bottom: 8px; }
-.mb-1 { margin-bottom: 4px; }
-.mr-2 { margin-right: 8px; }
-.mr-1 { margin-right: 4px; }
-.flex { display: flex; }
-.items-center { align-items: center; }
-.flex-1 { flex: 1; }
-.gap-4 { gap: 16px; }
-
-.text-gray-800 { color: #1e293b; }
-.text-gray-700 { color: #334155; }
-.text-xl { font-size: 20px; }
-.font-bold { font-weight: bold; }
-.text-blue-500 { color: #3b82f6; }
-.text-blue-600 { color: #2563eb; }
-
-/* 状态指示器 */
-.status-indicator {
-  display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold;
+.drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
 }
-.status-pending { background-color: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; }
-.status-rejected { background-color: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
 
-/* 抽屉内部样式 */
-.drawer-content { padding: 0 8px; }
-.audit-header { border-left: 4px solid #f59e0b; padding-left: 12px; }
-
-.photo-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-.mock-photo {
-  background: #f1f5f9; border: 1px dashed #cbd5e1; border-radius: 6px; height: 100px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  font-size: 12px; color: #64748b; cursor: pointer; transition: all 0.3s;
+.drawer-head h3 {
+  margin: 0;
+  font-size: 20px;
 }
-.mock-photo:hover { border-color: #3b82f6; color: #3b82f6; background: #eff6ff; }
 
-.audit-action-zone { background: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; }
+.drawer-head p {
+  margin: 6px 0 0;
+  color: var(--color-text-3);
+}
+
+.detail-panel {
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.detail-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tag-list,
+.attachment-list,
+.timeline-list {
+  display: grid;
+  gap: 10px;
+}
+
+.attachment-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.timeline-item {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.timeline-item strong {
+  color: var(--color-text);
+}
+
+.timeline-item p {
+  margin: 6px 0 0;
+  color: var(--color-text-2);
+  line-height: 1.5;
+}
+
+.drawer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
 </style>
