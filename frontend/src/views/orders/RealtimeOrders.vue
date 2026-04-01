@@ -1,42 +1,89 @@
-<script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import { VideoPlay, DataLine, Loading, Search } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import http from '../../api/http'
+﻿<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { VideoPlay, DataLine, Loading } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useOrderStore } from '../../stores/order'
+import OrderDetailDrawer from '../../components/order/OrderDetailDrawer.vue'
 
-const tableData = ref([])
+const orderStore = useOrderStore()
+
 const loading = ref(true)
-let refreshTimer = null
+const tableData = ref(orderStore.getRealtimeOrders())
+const drawerVisible = ref(false)
+const currentOrderId = ref('')
+let refreshTimer: number | null = null
 
-// 顶部统计
-const stats = ref({ active: 0, totalPower: 0, currentFee: 0 })
+const currentOrder = computed(() => orderStore.getOrderById(currentOrderId.value) || null)
 
-const fetchData = async () => {
+const refreshRealtimeOrders = async () => {
   loading.value = true
   try {
-    const res = await http.get('/orders/realtime')
-    if (res.data.code === 200) {
-      tableData.value = res.data.data
-      stats.value.active = tableData.value.length
-      stats.value.totalPower = tableData.value.reduce((sum, item) => sum + item.total_kwh, 0).toFixed(1)
-      stats.value.currentFee = tableData.value.reduce((sum, item) => sum + item.total_fee, 0).toFixed(2)
-    }
-  } catch (error) {
-    ElMessage.error('获取实时订单失败')
+    await new Promise((resolve) => {
+      window.setTimeout(resolve, 120)
+    })
+    tableData.value = orderStore.getRealtimeOrders()
   } finally {
     loading.value = false
   }
 }
 
-onMounted(() => {
-  fetchData()
-  // 每30秒自动刷新一次数据
-  refreshTimer = window.setInterval(fetchData, 30000)
-})
-onUnmounted(() => {
-  if (refreshTimer) {
-    window.clearInterval(refreshTimer)
+const stats = computed(() => ({
+  active: tableData.value.length,
+  totalPower: tableData.value.reduce((sum, item) => sum + Number(item.chargeAmount || 0), 0).toFixed(1),
+  currentFee: tableData.value.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0).toFixed(2),
+}))
+
+const handleForceStop = async (row: { id: string }) => {
+  try {
+    await ElMessageBox.confirm('确认强制停止该订单吗？', '强制停止', {
+      confirmButtonText: '确认停止',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    const result = orderStore.finishOrder(row.id)
+    if (!result) {
+      ElMessage.warning('仅充电中订单可执行此操作')
+      return
+    }
+    ElMessage.success('订单已结束并归档到历史订单')
+    await refreshRealtimeOrders()
+  } catch (error) {
+    // cancel
   }
+}
+
+const handleMarkAbnormal = async (row: { id: string }) => {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入异常原因', '标记异常', {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      inputPlaceholder: '例如：充电枪中途断连',
+      inputValidator: (val) => (val && val.trim().length > 0 ? true : '请填写异常原因'),
+    })
+    const result = orderStore.markOrderAbnormal(row.id, value)
+    if (!result) {
+      ElMessage.warning('仅充电中订单可执行此操作')
+      return
+    }
+    ElMessage.success('订单已转入异常订单')
+    await refreshRealtimeOrders()
+  } catch (error) {
+    // cancel
+  }
+}
+
+const openDetail = (id: string) => {
+  currentOrderId.value = id
+  drawerVisible.value = true
+}
+
+onMounted(() => {
+  refreshRealtimeOrders()
+  refreshTimer = window.setInterval(refreshRealtimeOrders, 30000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) window.clearInterval(refreshTimer)
 })
 </script>
 
@@ -45,9 +92,9 @@ onUnmounted(() => {
     <div class="flex justify-between items-center mb-6">
       <div class="flex items-center gap-2">
         <div class="live-indicator"></div>
-        <span class="text-gray-500 text-sm">数据实时同步中 (30s刷新)</span>
+        <span class="text-gray-500 text-sm">数据实时同步中(30s刷新)</span>
       </div>
-      <el-button type="primary" plain @click="fetchData" :icon="Loading">手动刷新</el-button>
+      <el-button type="primary" plain @click="refreshRealtimeOrders" :icon="Loading">手动刷新</el-button>
     </div>
 
     <el-row :gutter="20" class="mb-6">
@@ -71,9 +118,9 @@ onUnmounted(() => {
       </el-col>
       <el-col :span="8">
         <el-card shadow="hover" class="stat-card bg-orange">
-          <div class="stat-icon" style="font-weight: bold;">￥</div>
+          <div class="stat-icon" style="font-weight: bold;">¥</div>
           <div class="stat-info">
-            <div class="stat-title">当前预估总流水</div>
+            <div class="stat-title">当前预计总流水</div>
             <div class="stat-value">{{ stats.currentFee }} <span class="text-sm font-normal">元</span></div>
           </div>
         </el-card>
@@ -86,39 +133,50 @@ onUnmounted(() => {
       </template>
 
       <el-table :data="tableData" v-loading="loading" stripe style="width: 100%">
-        <el-table-column prop="order_no" label="订单编号" width="180">
+        <el-table-column prop="orderNo" label="订单编号" width="180">
           <template #default="scope">
-            <span class="font-mono text-blue-600">{{ scope.row.order_no }}</span>
+            <span class="font-mono text-blue-600">{{ scope.row.orderNo }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="charger_sn" label="电桩终端" width="140" />
-        <el-table-column prop="user_phone" label="用户账号" width="120" />
-        <el-table-column prop="start_time" label="开始时间" width="180" />
+        <el-table-column prop="chargerName" label="充电终端" width="160" />
+        <el-table-column prop="phone" label="用户账号" width="120" />
+        <el-table-column prop="startTime" label="开始时间" width="180" />
         <el-table-column label="已充时长" width="120" align="center">
           <template #default="scope">
-            <el-tag type="success" effect="plain">{{ scope.row.duration_mins }} 分钟</el-tag>
+            <el-tag type="success" effect="plain">{{ scope.row.chargeDuration }} 分钟</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="当前电量 (实时)" min-width="180">
+        <el-table-column label="当前电量(实时)" min-width="180">
           <template #default="scope">
             <div class="flex items-center gap-2">
-              <span class="w-10 text-right">{{ scope.row.total_kwh }}</span>
-              <el-progress :percentage="Math.min(100, scope.row.total_kwh * 2)" :show-text="false" class="flex-1" :stroke-width="8" striped striped-flow />
+              <span class="w-10 text-right">{{ scope.row.chargeAmount }}</span>
+              <el-progress
+                :percentage="Math.min(100, scope.row.chargeAmount * 2)"
+                :show-text="false"
+                class="flex-1"
+                :stroke-width="8"
+                striped
+                striped-flow
+              />
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="total_fee" label="当前金额" width="100" align="right">
+        <el-table-column prop="totalAmount" label="当前金额" width="100" align="right">
           <template #default="scope">
-            <strong class="text-red-500">￥{{ scope.row.total_fee }}</strong>
+            <strong class="text-red-500">¥{{ Number(scope.row.totalAmount).toFixed(2) }}</strong>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right">
-          <template #default>
-            <el-button link type="danger" size="small">强制停止</el-button>
+        <el-table-column label="操作" width="220" fixed="right">
+          <template #default="scope">
+            <el-button link type="primary" size="small" @click="openDetail(scope.row.id)">详情</el-button>
+            <el-button link type="warning" size="small" @click="handleMarkAbnormal(scope.row)">标记异常</el-button>
+            <el-button link type="danger" size="small" @click="handleForceStop(scope.row)">强制停止</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
+
+    <OrderDetailDrawer v-model:visible="drawerVisible" :order="currentOrder" />
   </div>
 </template>
 
