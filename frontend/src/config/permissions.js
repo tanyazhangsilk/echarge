@@ -28,16 +28,44 @@ export const ROLE_DEFAULT_ROUTE = {
   [ROLES.OPERATOR]: '/operator',
 }
 
+const USER_ROLE_KEY = 'userRole'
+const OPERATOR_ID_KEY = 'operatorId'
+const DEFAULT_OPERATOR_ID = 'op-001'
+
 export const getStoredRole = () => {
-  const saved = localStorage.getItem('userRole')
+  const saved = localStorage.getItem(USER_ROLE_KEY)
   return saved === ROLES.ADMIN ? ROLES.ADMIN : ROLES.OPERATOR
 }
 
 export const setStoredRole = (role) => {
-  localStorage.setItem('userRole', role === ROLES.ADMIN ? ROLES.ADMIN : ROLES.OPERATOR)
+  localStorage.setItem(USER_ROLE_KEY, role === ROLES.ADMIN ? ROLES.ADMIN : ROLES.OPERATOR)
 }
 
 export const resolveRoleDefaultRoute = (role) => ROLE_DEFAULT_ROUTE[role] || ROLE_DEFAULT_ROUTE[ROLES.OPERATOR]
+
+export const getStoredOperatorId = () => {
+  const value = localStorage.getItem(OPERATOR_ID_KEY)
+  return value && value.trim() ? value : DEFAULT_OPERATOR_ID
+}
+
+export const setStoredOperatorId = (operatorId) => {
+  const value = operatorId && String(operatorId).trim() ? String(operatorId).trim() : DEFAULT_OPERATOR_ID
+  localStorage.setItem(OPERATOR_ID_KEY, value)
+}
+
+export const ensureUserContext = () => {
+  if (!localStorage.getItem(USER_ROLE_KEY)) {
+    setStoredRole(ROLES.OPERATOR)
+  }
+  if (!localStorage.getItem(OPERATOR_ID_KEY)) {
+    setStoredOperatorId(DEFAULT_OPERATOR_ID)
+  }
+}
+
+export const getCurrentUserContext = () => ({
+  role: getStoredRole(),
+  operatorId: getStoredOperatorId(),
+})
 
 export const getRoleByPath = (path = '') => {
   if (path.startsWith('/admin')) return ROLES.ADMIN
@@ -61,8 +89,8 @@ export const MENU_CONFIG = {
     {
       label: '订单监管',
       items: [
-        { index: '/admin/orders', title: '全局订单查询', icon: Tickets },
-        { index: '/admin/orders/anomalies', title: '异常订单监管', icon: Connection },
+        { index: '/admin/orders', title: '全局订单监管', icon: Tickets },
+        { index: '/admin/orders/abnormal', title: '全局异常订单监管', icon: Connection },
       ],
     },
     {
@@ -110,8 +138,9 @@ export const MENU_CONFIG = {
     {
       label: '订单管理',
       items: [
-        { index: '/operator/orders', title: '历史订单', icon: Tickets },
+        { index: '/operator/orders/history', title: '历史订单', icon: Tickets },
         { index: '/operator/orders/realtime', title: '实时订单监控', icon: Bell },
+        { index: '/operator/orders/abnormal', title: '异常订单', icon: Connection },
       ],
     },
     {

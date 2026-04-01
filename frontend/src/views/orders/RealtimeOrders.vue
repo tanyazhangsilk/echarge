@@ -1,19 +1,22 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { VideoPlay, DataLine, Loading } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ROLES, getStoredOperatorId } from '../../config/permissions'
 import { useOrderStore } from '../../stores/order'
-import OrderDetailDrawer from '../../components/order/OrderDetailDrawer.vue'
 
+const router = useRouter()
 const orderStore = useOrderStore()
 
-const loading = ref(true)
-const tableData = ref(orderStore.getRealtimeOrders())
-const drawerVisible = ref(false)
-const currentOrderId = ref('')
-let refreshTimer: number | null = null
+const scope = {
+  role: ROLES.OPERATOR,
+  operatorId: getStoredOperatorId(),
+}
 
-const currentOrder = computed(() => orderStore.getOrderById(currentOrderId.value) || null)
+const loading = ref(true)
+const tableData = ref(orderStore.getRealtimeOrders(scope))
+let refreshTimer: number | null = null
 
 const refreshRealtimeOrders = async () => {
   loading.value = true
@@ -21,7 +24,7 @@ const refreshRealtimeOrders = async () => {
     await new Promise((resolve) => {
       window.setTimeout(resolve, 120)
     })
-    tableData.value = orderStore.getRealtimeOrders()
+    tableData.value = orderStore.getRealtimeOrders(scope)
   } finally {
     loading.value = false
   }
@@ -40,9 +43,9 @@ const handleForceStop = async (row: { id: string }) => {
       cancelButtonText: '取消',
       type: 'warning',
     })
-    const result = orderStore.finishOrder(row.id)
+    const result = orderStore.finishOrder(row.id, scope)
     if (!result) {
-      ElMessage.warning('仅充电中订单可执行此操作')
+      ElMessage.warning('仅本机构充电中订单可执行此操作')
       return
     }
     ElMessage.success('订单已结束并归档到历史订单')
@@ -60,12 +63,12 @@ const handleMarkAbnormal = async (row: { id: string }) => {
       inputPlaceholder: '例如：充电枪中途断连',
       inputValidator: (val) => (val && val.trim().length > 0 ? true : '请填写异常原因'),
     })
-    const result = orderStore.markOrderAbnormal(row.id, value)
+    const result = orderStore.markOrderAbnormal(row.id, value, scope)
     if (!result) {
-      ElMessage.warning('仅充电中订单可执行此操作')
+      ElMessage.warning('仅本机构充电中订单可执行此操作')
       return
     }
-    ElMessage.success('订单已转入异常订单')
+    ElMessage.success('订单已转入本机构异常订单')
     await refreshRealtimeOrders()
   } catch (error) {
     // cancel
@@ -73,8 +76,7 @@ const handleMarkAbnormal = async (row: { id: string }) => {
 }
 
 const openDetail = (id: string) => {
-  currentOrderId.value = id
-  drawerVisible.value = true
+  router.push(`/operator/orders/detail/${id}`)
 }
 
 onMounted(() => {
@@ -94,7 +96,11 @@ onUnmounted(() => {
         <div class="live-indicator"></div>
         <span class="text-gray-500 text-sm">数据实时同步中(30s刷新)</span>
       </div>
-      <el-button type="primary" plain @click="refreshRealtimeOrders" :icon="Loading">手动刷新</el-button>
+      <div class="flex items-center gap-2">
+        <el-button plain @click="router.push('/operator/orders/abnormal')">查看异常订单</el-button>
+        <el-button plain @click="router.push('/operator/orders/history')">查看历史订单</el-button>
+        <el-button type="primary" plain @click="refreshRealtimeOrders" :icon="Loading">手动刷新</el-button>
+      </div>
     </div>
 
     <el-row :gutter="20" class="mb-6">
@@ -129,29 +135,29 @@ onUnmounted(() => {
 
     <el-card shadow="never" class="border-0 rounded-lg">
       <template #header>
-        <div class="font-bold text-lg text-gray-800">实时充电监控列表</div>
+        <div class="font-bold text-lg text-gray-800">本机构实时订单监控</div>
       </template>
 
       <el-table :data="tableData" v-loading="loading" stripe style="width: 100%">
         <el-table-column prop="orderNo" label="订单编号" width="180">
-          <template #default="scope">
-            <span class="font-mono text-blue-600">{{ scope.row.orderNo }}</span>
+          <template #default="scopeRow">
+            <span class="font-mono text-blue-600">{{ scopeRow.row.orderNo }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="chargerName" label="充电终端" width="160" />
         <el-table-column prop="phone" label="用户账号" width="120" />
         <el-table-column prop="startTime" label="开始时间" width="180" />
         <el-table-column label="已充时长" width="120" align="center">
-          <template #default="scope">
-            <el-tag type="success" effect="plain">{{ scope.row.chargeDuration }} 分钟</el-tag>
+          <template #default="scopeRow">
+            <el-tag type="success" effect="plain">{{ scopeRow.row.chargeDuration }} 分钟</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="当前电量(实时)" min-width="180">
-          <template #default="scope">
+          <template #default="scopeRow">
             <div class="flex items-center gap-2">
-              <span class="w-10 text-right">{{ scope.row.chargeAmount }}</span>
+              <span class="w-10 text-right">{{ scopeRow.row.chargeAmount }}</span>
               <el-progress
-                :percentage="Math.min(100, scope.row.chargeAmount * 2)"
+                :percentage="Math.min(100, scopeRow.row.chargeAmount * 2)"
                 :show-text="false"
                 class="flex-1"
                 :stroke-width="8"
@@ -162,21 +168,19 @@ onUnmounted(() => {
           </template>
         </el-table-column>
         <el-table-column prop="totalAmount" label="当前金额" width="100" align="right">
-          <template #default="scope">
-            <strong class="text-red-500">¥{{ Number(scope.row.totalAmount).toFixed(2) }}</strong>
+          <template #default="scopeRow">
+            <strong class="text-red-500">¥{{ Number(scopeRow.row.totalAmount).toFixed(2) }}</strong>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="220" fixed="right">
-          <template #default="scope">
-            <el-button link type="primary" size="small" @click="openDetail(scope.row.id)">详情</el-button>
-            <el-button link type="warning" size="small" @click="handleMarkAbnormal(scope.row)">标记异常</el-button>
-            <el-button link type="danger" size="small" @click="handleForceStop(scope.row)">强制停止</el-button>
+          <template #default="scopeRow">
+            <el-button link type="primary" size="small" @click="openDetail(scopeRow.row.id)">详情</el-button>
+            <el-button link type="warning" size="small" @click="handleMarkAbnormal(scopeRow.row)">标记异常</el-button>
+            <el-button link type="danger" size="small" @click="handleForceStop(scopeRow.row)">强制停止</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
-
-    <OrderDetailDrawer v-model:visible="drawerVisible" :order="currentOrder" />
   </div>
 </template>
 
@@ -189,11 +193,15 @@ onUnmounted(() => {
 .flex-1 { flex: 1; }
 .w-10 { width: 40px; }
 
-/* 呼吸灯动画 */
 .live-indicator {
-  width: 10px; height: 10px; border-radius: 50%; background-color: #67C23A;
-  box-shadow: 0 0 8px #67C23A; animation: pulse 1.5s infinite;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: #67c23a;
+  box-shadow: 0 0 8px #67c23a;
+  animation: pulse 1.5s infinite;
 }
+
 @keyframes pulse {
   0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(103, 194, 58, 0.7); }
   70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(103, 194, 58, 0); }
@@ -202,9 +210,9 @@ onUnmounted(() => {
 
 .stat-card { border: none; color: #fff; border-radius: 8px; }
 .stat-card:deep(.el-card__body) { display: flex; align-items: center; padding: 24px; }
-.bg-blue { background: linear-gradient(135deg, #409EFF, #36a3f7); }
-.bg-green { background: linear-gradient(135deg, #67C23A, #85ce61); }
-.bg-orange { background: linear-gradient(135deg, #E6A23C, #f3d19e); }
+.bg-blue { background: linear-gradient(135deg, #409eff, #36a3f7); }
+.bg-green { background: linear-gradient(135deg, #67c23a, #85ce61); }
+.bg-orange { background: linear-gradient(135deg, #e6a23c, #f3d19e); }
 
 .stat-icon { font-size: 48px; opacity: 0.8; margin-right: 20px; }
 .stat-info { flex: 1; text-align: right; }

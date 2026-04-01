@@ -1,27 +1,33 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
+import { ROLES, getStoredOperatorId } from '../../config/permissions'
 import { useOrderStore } from '../../stores/order'
-import OrderDetailDrawer from '../../components/order/OrderDetailDrawer.vue'
-import type { Order } from '../../types/order'
+import type { Order, OrderStatus } from '../../types/order'
 
 interface FilterForm {
   orderNo: string
   keyword: string
   stationName: string
-  status: '' | 'completed'
+  status: '' | OrderStatus
 }
 
+const route = useRoute()
+const router = useRouter()
 const orderStore = useOrderStore()
+
+const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
+const scope = computed(() => ({
+  role: isAdmin.value ? ROLES.ADMIN : ROLES.OPERATOR,
+  operatorId: getStoredOperatorId(),
+}))
 
 const loading = ref(false)
 const allOrders = ref<Order[]>([])
 const currentPage = ref(1)
 const pageSize = ref(10)
-const drawerVisible = ref(false)
-const currentOrderId = ref('')
-const currentOrder = computed(() => orderStore.getOrderById(currentOrderId.value) || null)
 
 const searchForm = reactive<FilterForm>({
   orderNo: '',
@@ -36,6 +42,16 @@ const appliedFilters = reactive<FilterForm>({
   stationName: '',
   status: '',
 })
+
+const statusOptions = computed(() =>
+  isAdmin.value
+    ? [
+        { label: '充电中', value: 'charging' },
+        { label: '已完成', value: 'completed' },
+        { label: '异常', value: 'abnormal' },
+      ]
+    : [{ label: '已完成', value: 'completed' }],
+)
 
 const stationOptions = computed(() => {
   const names = Array.from(new Set(allOrders.value.map((item) => item.stationName)))
@@ -53,7 +69,8 @@ const filteredOrders = computed(() => {
     const keywordOk =
       !keyword ||
       order.phone.toLowerCase().includes(keyword) ||
-      order.userName.toLowerCase().includes(keyword)
+      order.userName.toLowerCase().includes(keyword) ||
+      (isAdmin.value && order.operatorName.toLowerCase().includes(keyword))
     const stationOk = !station || order.stationName === station
     const statusOk = !status || order.status === status
 
@@ -79,13 +96,21 @@ const maskPhone = (phone: string): string => {
   return `${phone.slice(0, 3)}****${phone.slice(-4)}`
 }
 
+const statusTag = (status: OrderStatus): { type: 'success' | 'warning' | 'danger'; text: string } => {
+  if (status === 'charging') return { type: 'warning', text: '充电中' }
+  if (status === 'abnormal') return { type: 'danger', text: '异常' }
+  return { type: 'success', text: '已完成' }
+}
+
 const loadOrders = async () => {
   loading.value = true
   try {
     await new Promise((resolve) => {
       window.setTimeout(resolve, 120)
     })
-    allOrders.value = orderStore.getHistoryOrders()
+    allOrders.value = isAdmin.value
+      ? orderStore.getAllOrders(scope.value)
+      : orderStore.getHistoryOrders(scope.value)
   } finally {
     loading.value = false
   }
@@ -124,14 +149,14 @@ const handleCurrentChange = (val: number): void => {
   currentPage.value = val
 }
 
-const openDetail = (row: Order): void => {
-  currentOrderId.value = row.id
-  drawerVisible.value = true
+const openDetail = (id: string): void => {
+  const path = isAdmin.value ? `/admin/orders/detail/${id}` : `/operator/orders/detail/${id}`
+  router.push(path)
 }
 
 onMounted(async () => {
   await loadOrders()
-  ElMessage.success('历史订单已从统一订单中心加载')
+  ElMessage.success(isAdmin.value ? '全局订单监管数据已加载' : '历史订单已加载')
 })
 </script>
 
@@ -143,8 +168,8 @@ onMounted(async () => {
           <el-form-item label="订单号" :class="$style.formItem">
             <el-input v-model="searchForm.orderNo" placeholder="支持模糊查询" clearable style="width: 210px" />
           </el-form-item>
-          <el-form-item label="手机号/用户名" :class="$style.formItem">
-            <el-input v-model="searchForm.keyword" placeholder="支持手机号或用户名" clearable style="width: 190px" />
+          <el-form-item :label="isAdmin ? '手机号/用户/运营商' : '手机号/用户名'" :class="$style.formItem">
+            <el-input v-model="searchForm.keyword" placeholder="支持手机号、用户名关键词" clearable style="width: 220px" />
           </el-form-item>
           <el-form-item label="场站" :class="$style.formItem">
             <el-select v-model="searchForm.stationName" placeholder="全部场站" clearable style="width: 200px">
@@ -153,7 +178,7 @@ onMounted(async () => {
           </el-form-item>
           <el-form-item label="状态" :class="$style.formItem">
             <el-select v-model="searchForm.status" placeholder="全部状态" clearable style="width: 150px">
-              <el-option label="已完成" value="completed" />
+              <el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" />
             </el-select>
           </el-form-item>
 
@@ -182,6 +207,7 @@ onMounted(async () => {
             <span>{{ row.userName }}（{{ maskPhone(row.phone) }}）</span>
           </template>
         </el-table-column>
+        <el-table-column v-if="isAdmin" prop="operatorName" label="运营商" min-width="180" show-overflow-tooltip />
         <el-table-column prop="stationName" label="所属场站" min-width="180" show-overflow-tooltip />
         <el-table-column prop="chargeAmount" label="充电量(kWh)" width="120" align="right">
           <template #default="{ row }">
@@ -194,13 +220,13 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="110" align="center">
-          <template #default>
-            <el-tag type="success">已完成</el-tag>
+          <template #default="{ row }">
+            <el-tag :type="statusTag(row.status).type">{{ statusTag(row.status).text }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="90" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
+            <el-button link type="primary" size="small" @click="openDetail(row.id)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -217,8 +243,6 @@ onMounted(async () => {
         />
       </div>
     </el-card>
-
-    <OrderDetailDrawer v-model:visible="drawerVisible" :order="currentOrder" />
   </div>
 </template>
 

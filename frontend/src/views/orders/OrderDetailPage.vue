@@ -1,26 +1,28 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed } from 'vue'
-import type { Order } from '../../types/order'
+import { useRoute, useRouter } from 'vue-router'
+import { ROLES, getStoredOperatorId } from '../../config/permissions'
+import { useOrderStore } from '../../stores/order'
 
-const props = defineProps<{
-  visible: boolean
-  order: Order | null
-}>()
+const route = useRoute()
+const router = useRouter()
+const orderStore = useOrderStore()
 
-const emit = defineEmits<{
-  'update:visible': [value: boolean]
-}>()
+const currentRole = computed(() => (route.meta?.role === ROLES.ADMIN ? ROLES.ADMIN : ROLES.OPERATOR))
+const scope = computed(() => ({
+  role: currentRole.value,
+  operatorId: getStoredOperatorId(),
+}))
 
-const drawerVisible = computed({
-  get: () => props.visible,
-  set: (value: boolean) => emit('update:visible', value),
+const orderId = computed(() => String(route.params.id || ''))
+const order = computed(() => orderStore.getOrderById(orderId.value, scope.value) || null)
+
+const backPath = computed(() => {
+  if (currentRole.value === ROLES.ADMIN) {
+    return '/admin/orders'
+  }
+  return '/operator/orders/history'
 })
-
-const formatMoney = (value: number): string =>
-  `¥${Number(value || 0).toLocaleString('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`
 
 const statusTagType = (status?: string): 'success' | 'warning' | 'danger' => {
   if (status === 'charging') return 'warning'
@@ -30,7 +32,7 @@ const statusTagType = (status?: string): 'success' | 'warning' | 'danger' => {
 
 const statusText = (status?: string): string => {
   if (status === 'charging') return '充电中'
-  if (status === 'abnormal') return '异常订单'
+  if (status === 'abnormal') return '异常'
   return '已完成'
 }
 
@@ -39,28 +41,44 @@ const payStatusText = (status?: string): string => {
   if (status === 'refunded') return '已退款'
   return '待支付'
 }
+
+const formatMoney = (value: number): string =>
+  `¥${Number(value || 0).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+
+const goBack = () => {
+  router.push(backPath.value)
+}
 </script>
 
 <template>
-  <el-drawer v-model="drawerVisible" size="50%" direction="rtl">
-    <template #header>
-      <div class="drawer-title">订单详情 {{ order?.orderNo || '' }}</div>
-    </template>
+  <div class="page-shell">
+    <el-card v-if="order" shadow="never" class="surface-card">
+      <template #header>
+        <div class="header-row">
+          <div>
+            <h3>订单详情</h3>
+            <p>{{ order.orderNo }}</p>
+          </div>
+          <el-button @click="goBack">返回列表</el-button>
+        </div>
+      </template>
 
-    <div v-if="order" class="drawer-body">
       <el-descriptions :column="2" border>
         <el-descriptions-item label="订单编号">{{ order.orderNo }}</el-descriptions-item>
         <el-descriptions-item label="订单状态">
           <el-tag :type="statusTagType(order.status)">{{ statusText(order.status) }}</el-tag>
         </el-descriptions-item>
 
-        <el-descriptions-item label="用户昵称">{{ order.userName }}</el-descriptions-item>
+        <el-descriptions-item label="用户">{{ order.userName }}</el-descriptions-item>
         <el-descriptions-item label="手机号">{{ order.phone }}</el-descriptions-item>
         <el-descriptions-item label="VIN">{{ order.vin }}</el-descriptions-item>
-        <el-descriptions-item label="运营商名称">{{ order.operatorName }}</el-descriptions-item>
+        <el-descriptions-item label="运营商">{{ order.operatorName }}</el-descriptions-item>
 
-        <el-descriptions-item label="电站名称">{{ order.stationName }}</el-descriptions-item>
-        <el-descriptions-item label="电桩名称">{{ order.chargerName }}</el-descriptions-item>
+        <el-descriptions-item label="电站">{{ order.stationName }}</el-descriptions-item>
+        <el-descriptions-item label="电桩">{{ order.chargerName }}</el-descriptions-item>
         <el-descriptions-item label="开始时间">{{ order.startTime }}</el-descriptions-item>
         <el-descriptions-item label="结束时间">{{ order.endTime || '-' }}</el-descriptions-item>
 
@@ -75,28 +93,29 @@ const payStatusText = (status?: string): string => {
           {{ order.abnormalReason || '-' }}
         </el-descriptions-item>
       </el-descriptions>
+    </el-card>
 
-      <div class="drawer-footer">
-        <el-button @click="drawerVisible = false">关闭</el-button>
-      </div>
-    </div>
-  </el-drawer>
+    <el-empty v-else description="未找到订单或无权查看该订单">
+      <el-button type="primary" @click="goBack">返回订单列表</el-button>
+    </el-empty>
+  </div>
 </template>
 
 <style scoped>
-.drawer-title {
-  font-weight: 700;
-  color: #409eff;
-}
-
-.drawer-body {
+.header-row {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
   gap: 16px;
 }
 
-.drawer-footer {
-  display: flex;
-  justify-content: flex-end;
+.header-row h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.header-row p {
+  margin: 6px 0 0;
+  color: var(--color-text-3);
 }
 </style>

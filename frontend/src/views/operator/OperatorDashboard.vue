@@ -5,15 +5,64 @@ import { ElMessage } from 'element-plus'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
+import { ROLES, getStoredOperatorId } from '../../config/permissions'
 import { fetchOperatorDashboard } from '../../api/console'
+import { useOrderStore } from '../../stores/order'
 
+const orderStore = useOrderStore()
 const loading = ref(false)
-const cards = ref([])
 const profile = ref(null)
 const stationHealth = ref([])
-const orderTrend = ref([])
 const alarms = ref([])
-const realtimeOrders = ref([])
+const scope = {
+  role: ROLES.OPERATOR,
+  operatorId: getStoredOperatorId(),
+}
+
+const orderStats = computed(() => orderStore.getOrderStats(scope))
+const cards = computed(() => [
+  {
+    label: '实时充电订单',
+    value: orderStats.value.chargingCount,
+    unit: '单',
+    trend: '来自本机构实时订单监控',
+    tone: 'primary',
+  },
+  {
+    label: '今日完成订单',
+    value: orderStats.value.todayCompletedCount,
+    unit: '单',
+    trend: '来自本机构历史订单',
+    tone: 'success',
+  },
+  {
+    label: '今日充电量',
+    value: orderStats.value.todayTotalChargeAmount,
+    unit: 'kWh',
+    trend: '已完成订单累计',
+    tone: 'warning',
+  },
+  {
+    label: '本机构异常订单',
+    value: orderStats.value.abnormalCount,
+    unit: '单',
+    trend: '实时联动异常订单页',
+    tone: 'danger',
+  },
+])
+
+const orderTrend = computed(() => orderStore.getOrderTrend(scope, 7))
+const realtimeOrders = computed(() =>
+  orderStore.getRealtimeOrders(scope).map((order) => ({
+    orderNo: order.orderNo,
+    vehiclePlate: order.vin || '-',
+    stationName: order.stationName,
+    connectorName: order.chargerName,
+    chargedKwh: Number(order.chargeAmount).toFixed(2),
+    amount: Number(order.totalAmount).toFixed(2),
+    status: order.status,
+  })),
+)
 
 const maxOrderCount = computed(() => Math.max(1, ...orderTrend.value.map((item) => item.orderCount)))
 
@@ -22,11 +71,8 @@ const loadData = async () => {
   try {
     const { data } = await fetchOperatorDashboard()
     profile.value = data.profile
-    cards.value = data.cards
     stationHealth.value = data.stationHealth
-    orderTrend.value = data.orderTrend
     alarms.value = data.alarms
-    realtimeOrders.value = data.realtimeOrders
   } catch (error) {
     console.error(error)
     ElMessage.error('运营商工作台加载失败。')

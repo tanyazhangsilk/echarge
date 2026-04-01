@@ -7,6 +7,7 @@ import VueLazyLoad from 'vue3-lazyload'
 import App from './App.vue'
 import router from './router'
 import './style.css'
+import { ensureUserContext } from './config/permissions'
 
 const app = createApp(App)
 
@@ -17,6 +18,7 @@ const getInitialTheme = () => {
 }
 
 document.documentElement.dataset.theme = getInitialTheme()
+ensureUserContext()
 
 app.use(createPinia())
 app.use(router)

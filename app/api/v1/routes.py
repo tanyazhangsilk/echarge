@@ -2,7 +2,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
@@ -21,6 +21,7 @@ from app.schemas import InvoiceApplySchema, InvoiceProcessSchema, OrderActionSch
 from app.services.order_service import (
     ORDER_STATUS_LABELS,
     get_abnormal_order_list,
+    get_all_order_list,
     get_history_order_list,
     get_order_detail_data,
     get_order_stats,
@@ -105,8 +106,63 @@ class SystemParamsPayload(BaseModel):
     support_email: str
 
 
+class RoleContext(BaseModel):
+    role: str
+    operator_id: int | None = None
+
+
+def _parse_operator_id(raw: Any) -> int | None:
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        return raw
+    value = str(raw).strip()
+    if not value:
+        return None
+    if value.isdigit():
+        return int(value)
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if digits:
+        return int(digits)
+    return None
+
+
 def get_current_operator(db: Session) -> Operator | None:
     return db.query(Operator).order_by(Operator.id.asc()).first()
+
+
+def get_role_context(
+    role: str | None = None,
+    operator_id: int | None = None,
+    x_role: str | None = Header(default=None, alias="x-role"),
+    x_operator_id: str | None = Header(default=None, alias="x-operator-id"),
+) -> RoleContext:
+    resolved_role = (x_role or role or "operator").strip().lower()
+    if resolved_role not in {"admin", "operator"}:
+        resolved_role = "operator"
+
+    resolved_operator_id = operator_id if operator_id is not None else _parse_operator_id(x_operator_id)
+
+    if resolved_role == "operator":
+        if resolved_operator_id is None:
+            resolved_operator_id = 1
+    return RoleContext(role=resolved_role, operator_id=resolved_operator_id)
+
+
+def require_admin_context(context: RoleContext = Depends(get_role_context)) -> RoleContext:
+    if context.role != "admin":
+        raise HTTPException(status_code=403, detail="admin role required")
+    return context
+
+
+def require_operator_context(context: RoleContext = Depends(get_role_context)) -> RoleContext:
+    if context.role != "operator":
+        raise HTTPException(status_code=403, detail="operator role required")
+    return context
+
+
+def scoped_operator_id(context: RoleContext) -> int | None:
+    return None if context.role == "admin" else context.operator_id
 
 
 def user_display_name(user: User) -> str:
@@ -325,34 +381,58 @@ async def trigger_settle(db: Session = Depends(get_db)):
         return {"code": 500, "message": f"清分失败: {str(e)}", "processed": 0}
 
 
-@api_router.get("/orders/realtime", tags=["orders"])
-async def get_realtime_orders(db: Session = Depends(get_db)):
+@api_router.get("/orders/all", tags=["orders"])
+async def get_orders_all(
+    context: RoleContext = Depends(get_role_context),
+    db: Session = Depends(get_db),
+):
     return {
         "code": 200,
-        "data": get_realtime_order_list(db, limit=50),
+        "data": get_all_order_list(db, limit=200, operator_id=scoped_operator_id(context)),
     }
 
-@api_router.get("/orders/abnormal", tags=["orders"])
-async def get_abnormal_orders(db: Session = Depends(get_db)):
+
+@api_router.get("/orders/realtime", tags=["orders"])
+async def get_orders_realtime_api(
+    context: RoleContext = Depends(get_role_context),
+    db: Session = Depends(get_db),
+):
     return {
         "code": 200,
-        "data": get_abnormal_order_list(db, limit=50),
+        "data": get_realtime_order_list(db, limit=50, operator_id=scoped_operator_id(context)),
+    }
+
+
+@api_router.get("/orders/abnormal", tags=["orders"])
+async def get_orders_abnormal_api(
+    context: RoleContext = Depends(get_role_context),
+    db: Session = Depends(get_db),
+):
+    return {
+        "code": 200,
+        "data": get_abnormal_order_list(db, limit=50, operator_id=scoped_operator_id(context)),
     }
 
 
 @api_router.get("/orders/history", tags=["orders"])
-async def get_history_orders(db: Session = Depends(get_db)):
+async def get_orders_history_api(
+    context: RoleContext = Depends(get_role_context),
+    db: Session = Depends(get_db),
+):
     return {
         "code": 200,
-        "data": get_history_order_list(db, limit=100),
+        "data": get_history_order_list(db, limit=100, operator_id=scoped_operator_id(context)),
     }
 
 
 @api_router.get("/orders/stats", tags=["orders"])
-async def get_order_stats_api(db: Session = Depends(get_db)):
+async def get_order_stats_api(
+    context: RoleContext = Depends(get_role_context),
+    db: Session = Depends(get_db),
+):
     return {
         "code": 200,
-        "data": get_order_stats(db),
+        "data": get_order_stats(db, operator_id=scoped_operator_id(context)),
     }
 
 
@@ -373,10 +453,14 @@ async def get_wallet_transactions_api(user_id: int = 1, limit: int = 50, db: Ses
 
 
 @api_router.get("/orders/{order_id}", tags=["orders"])
-async def get_order_detail(order_id: int, db: Session = Depends(get_db)):
-    order_data = get_order_detail_data(db, order_id)
+async def get_order_detail(
+    order_id: int,
+    context: RoleContext = Depends(get_role_context),
+    db: Session = Depends(get_db),
+):
+    order_data = get_order_detail_data(db, order_id, operator_id=scoped_operator_id(context))
     if not order_data:
-        return {"code": 404, "message": "订单不存在"}
+        return {"code": 404, "message": "订单不存在或无权限访问"}
 
     return {
         "code": 200,
@@ -385,10 +469,14 @@ async def get_order_detail(order_id: int, db: Session = Depends(get_db)):
 
 
 @api_router.post("/orders/{order_id}/force-stop", tags=["orders"])
-async def force_stop_order_api(order_id: int, db: Session = Depends(get_db)):
-    order = force_stop_order(db, order_id)
+async def force_stop_order_api(
+    order_id: int,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    order = force_stop_order(db, order_id, operator_id=context.operator_id)
     if not order:
-        return {"code": 400, "message": "订单不存在或当前不是充电中状态"}
+        return {"code": 400, "message": "订单不存在、无权限或当前不是充电中状态"}
 
     return {
         "code": 200,
@@ -398,16 +486,110 @@ async def force_stop_order_api(order_id: int, db: Session = Depends(get_db)):
 
 
 @api_router.post("/orders/{order_id}/mark-abnormal", tags=["orders"])
-async def mark_order_abnormal_api(order_id: int, payload: OrderActionSchema, db: Session = Depends(get_db)):
-    order = mark_order_abnormal(db, order_id, payload.abnormal_reason)
+async def mark_order_abnormal_api(
+    order_id: int,
+    payload: OrderActionSchema,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    order = mark_order_abnormal(db, order_id, payload.abnormal_reason, operator_id=context.operator_id)
     if not order:
-        return {"code": 400, "message": "订单不存在或当前不是充电中状态"}
+        return {"code": 400, "message": "订单不存在、无权限或当前不是充电中状态"}
 
     return {
         "code": 200,
         "message": "订单已标记异常",
         "data": serialize_order(order),
     }
+
+
+@api_router.get("/admin/orders", tags=["orders", "admin"])
+async def get_admin_orders(
+    _context: RoleContext = Depends(require_admin_context),
+    db: Session = Depends(get_db),
+):
+    return {"code": 200, "data": get_all_order_list(db, limit=200)}
+
+
+@api_router.get("/admin/orders/abnormal", tags=["orders", "admin"])
+async def get_admin_abnormal_orders(
+    _context: RoleContext = Depends(require_admin_context),
+    db: Session = Depends(get_db),
+):
+    return {"code": 200, "data": get_abnormal_order_list(db, limit=200)}
+
+
+@api_router.get("/admin/orders/{order_id}", tags=["orders", "admin"])
+async def get_admin_order_detail(
+    order_id: int,
+    _context: RoleContext = Depends(require_admin_context),
+    db: Session = Depends(get_db),
+):
+    order_data = get_order_detail_data(db, order_id)
+    if not order_data:
+        return {"code": 404, "message": "订单不存在"}
+    return {"code": 200, "data": order_data}
+
+
+@api_router.get("/operator/orders/history", tags=["orders", "operator"])
+async def get_operator_history_orders(
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    return {"code": 200, "data": get_history_order_list(db, limit=100, operator_id=context.operator_id)}
+
+
+@api_router.get("/operator/orders/realtime", tags=["orders", "operator"])
+async def get_operator_realtime_orders(
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    return {"code": 200, "data": get_realtime_order_list(db, limit=100, operator_id=context.operator_id)}
+
+
+@api_router.get("/operator/orders/abnormal", tags=["orders", "operator"])
+async def get_operator_abnormal_orders(
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    return {"code": 200, "data": get_abnormal_order_list(db, limit=100, operator_id=context.operator_id)}
+
+
+@api_router.get("/operator/orders/{order_id}", tags=["orders", "operator"])
+async def get_operator_order_detail(
+    order_id: int,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    order_data = get_order_detail_data(db, order_id, operator_id=context.operator_id)
+    if not order_data:
+        return {"code": 404, "message": "订单不存在或无权限访问"}
+    return {"code": 200, "data": order_data}
+
+
+@api_router.post("/operator/orders/{order_id}/force-stop", tags=["orders", "operator"])
+async def operator_force_stop_order(
+    order_id: int,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    order = force_stop_order(db, order_id, operator_id=context.operator_id)
+    if not order:
+        return {"code": 400, "message": "订单不存在、无权限或当前不是充电中状态"}
+    return {"code": 200, "message": "订单已强制停止", "data": serialize_order(order)}
+
+
+@api_router.post("/operator/orders/{order_id}/mark-abnormal", tags=["orders", "operator"])
+async def operator_mark_order_abnormal(
+    order_id: int,
+    payload: OrderActionSchema,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    order = mark_order_abnormal(db, order_id, payload.abnormal_reason, operator_id=context.operator_id)
+    if not order:
+        return {"code": 400, "message": "订单不存在、无权限或当前不是充电中状态"}
+    return {"code": 200, "message": "订单已标记异常", "data": serialize_order(order)}
 
 
 

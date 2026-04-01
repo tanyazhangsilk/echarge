@@ -174,7 +174,7 @@ export const adminDashboardMock = {
       count: 3,
       priority: '需复核',
       description: '主要涉及充电中断与支付回调延迟，请尽快人工确认。',
-      route: '/admin/orders/anomalies',
+      route: '/admin/orders/abnormal',
       actionText: '处理异常',
     },
   ],

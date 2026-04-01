@@ -1,9 +1,10 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
+import { ROLES, getStoredOperatorId } from '../../config/permissions'
 import { useOrderStore } from '../../stores/order'
-import OrderDetailDrawer from '../../components/order/OrderDetailDrawer.vue'
 import type { Order } from '../../types/order'
 
 interface FilterForm {
@@ -13,15 +14,20 @@ interface FilterForm {
   abnormalReason: string
 }
 
+const route = useRoute()
+const router = useRouter()
 const orderStore = useOrderStore()
+
+const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
+const scope = computed(() => ({
+  role: isAdmin.value ? ROLES.ADMIN : ROLES.OPERATOR,
+  operatorId: getStoredOperatorId(),
+}))
 
 const loading = ref(false)
 const allOrders = ref<Order[]>([])
 const currentPage = ref(1)
 const pageSize = ref(10)
-const drawerVisible = ref(false)
-const currentOrderId = ref('')
-const currentOrder = computed(() => orderStore.getOrderById(currentOrderId.value) || null)
 
 const searchForm = reactive<FilterForm>({
   orderNo: '',
@@ -53,7 +59,8 @@ const filteredOrders = computed(() => {
     const keywordOk =
       !keyword ||
       order.phone.toLowerCase().includes(keyword) ||
-      order.userName.toLowerCase().includes(keyword)
+      order.userName.toLowerCase().includes(keyword) ||
+      (isAdmin.value && order.operatorName.toLowerCase().includes(keyword))
     const stationOk = !station || order.stationName === station
     const abnormalOk = !abnormalReason || (order.abnormalReason || '').toLowerCase().includes(abnormalReason)
 
@@ -85,7 +92,7 @@ const loadOrders = async () => {
     await new Promise((resolve) => {
       window.setTimeout(resolve, 120)
     })
-    allOrders.value = orderStore.getAbnormalOrders()
+    allOrders.value = orderStore.getAbnormalOrders(scope.value)
   } finally {
     loading.value = false
   }
@@ -124,21 +131,21 @@ const handleCurrentChange = (val: number): void => {
   currentPage.value = val
 }
 
-const openDetail = (row: Order): void => {
-  currentOrderId.value = row.id
-  drawerVisible.value = true
+const openDetail = (id: string): void => {
+  const path = isAdmin.value ? `/admin/orders/detail/${id}` : `/operator/orders/detail/${id}`
+  router.push(path)
 }
 
 onMounted(async () => {
   await loadOrders()
-  ElMessage.success('异常订单已从统一订单中心加载')
+  ElMessage.success(isAdmin.value ? '全局异常订单监管数据已加载' : '本机构异常订单已加载')
 })
 </script>
 
 <template>
   <div :class="$style.page">
     <el-alert
-      title="当前存在异常订单，请及时处理并复核"
+      :title="isAdmin ? '全平台异常订单监管中，请及时复核' : '本机构存在异常订单，请及时处理并复核'"
       type="warning"
       show-icon
       :closable="false"
@@ -151,8 +158,8 @@ onMounted(async () => {
           <el-form-item label="订单号" :class="$style.formItem">
             <el-input v-model="searchForm.orderNo" placeholder="支持模糊查询" clearable style="width: 210px" />
           </el-form-item>
-          <el-form-item label="手机号/用户" :class="$style.formItem">
-            <el-input v-model="searchForm.keyword" placeholder="支持手机号或用户名" clearable style="width: 190px" />
+          <el-form-item :label="isAdmin ? '手机号/用户/运营商' : '手机号/用户'" :class="$style.formItem">
+            <el-input v-model="searchForm.keyword" placeholder="支持手机号、用户名关键词" clearable style="width: 220px" />
           </el-form-item>
           <el-form-item label="场站" :class="$style.formItem">
             <el-select v-model="searchForm.stationName" placeholder="全部场站" clearable style="width: 200px">
@@ -187,6 +194,7 @@ onMounted(async () => {
         <el-table-column label="手机号" width="130">
           <template #default="{ row }">{{ maskPhone(row.phone) }}</template>
         </el-table-column>
+        <el-table-column v-if="isAdmin" prop="operatorName" label="运营商" width="180" show-overflow-tooltip />
         <el-table-column prop="vin" label="VIN" width="160" show-overflow-tooltip />
         <el-table-column prop="stationName" label="电站名称" min-width="160" show-overflow-tooltip />
         <el-table-column prop="chargerName" label="电桩名称" width="160" show-overflow-tooltip />
@@ -209,7 +217,7 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="操作" width="90" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
+            <el-button link type="primary" size="small" @click="openDetail(row.id)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -226,8 +234,6 @@ onMounted(async () => {
         />
       </div>
     </el-card>
-
-    <OrderDetailDrawer v-model:visible="drawerVisible" :order="currentOrder" />
   </div>
 </template>
 

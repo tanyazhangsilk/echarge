@@ -20,18 +20,83 @@ import MetricCard from '../../components/console/MetricCard.vue'
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import TrendAreaChart from '../../components/console/TrendAreaChart.vue'
 import { fetchAdminDashboard } from '../../api/console'
+import { ROLES } from '../../config/permissions'
+import { useOrderStore } from '../../stores/order'
 
 const router = useRouter()
+const orderStore = useOrderStore()
 
 const loading = ref(false)
-const overviewStats = ref([])
-const orderTrend = ref([])
-const revenueTrend = ref([])
-const distributions = ref(null)
+const baseOverviewStats = ref([])
+const baseDistributions = ref(null)
 const todoList = ref([])
-const abnormalOrders = ref([])
 const recentActivities = ref([])
 const announcements = ref([])
+const adminScope = { role: ROLES.ADMIN }
+
+const orderStats = computed(() => orderStore.getOrderStats(adminScope))
+const orderTrendSource = computed(() => orderStore.getOrderTrend(adminScope, 7))
+const allOrders = computed(() => orderStore.getAllOrders(adminScope))
+
+const overviewStats = computed(() =>
+  baseOverviewStats.value.map((item) => {
+    if (item.key === 'todayOrderCount') {
+      return { ...item, value: allOrders.value.length }
+    }
+    if (item.key === 'todayRevenue') {
+      return { ...item, value: orderStats.value.todayTotalAmount.toFixed(2) }
+    }
+    if (item.key === 'abnormalOrderCount') {
+      return { ...item, value: orderStats.value.abnormalCount }
+    }
+    return item
+  }),
+)
+
+const orderTrend = computed(() =>
+  orderTrendSource.value.map((item) => ({
+    date: item.date,
+    orderCount: item.orderCount,
+  })),
+)
+
+const revenueTrend = computed(() =>
+  orderTrendSource.value.map((item) => ({
+    date: item.date,
+    revenue: item.revenue,
+  })),
+)
+
+const distributions = computed(() => {
+  const source = baseDistributions.value || {}
+  const chargingCount = allOrders.value.filter((item) => item.status === 'charging').length
+  const completedCount = allOrders.value.filter((item) => item.status === 'completed').length
+  const abnormalCount = allOrders.value.filter((item) => item.status === 'abnormal').length
+  return {
+    ...source,
+    orderStatus: {
+      total: allOrders.value.length,
+      totalLabel: '订单总数',
+      items: [
+        { label: '充电中', value: chargingCount, color: '#2f74ff' },
+        { label: '已完成', value: completedCount, color: '#22a06b' },
+        { label: '异常', value: abnormalCount, color: '#d84f57' },
+      ],
+    },
+  }
+})
+
+const abnormalOrders = computed(() =>
+  orderStore.getAbnormalOrders(adminScope).slice(0, 6).map((order) => ({
+    id: order.id,
+    orderNo: order.orderNo,
+    userName: order.userName,
+    stationName: order.stationName,
+    abnormalType: order.abnormalReason || '异常',
+    createdAt: (order.updatedAt || order.startTime || '').replace('T', ' ').slice(0, 16),
+    status: '待复核',
+  })),
+)
 
 const iconMap = {
   OfficeBuilding,
@@ -78,12 +143,9 @@ const loadData = async () => {
   loading.value = true
   try {
     const { data } = await fetchAdminDashboard()
-    overviewStats.value = data.overviewStats || []
-    orderTrend.value = data.orderTrend || []
-    revenueTrend.value = data.revenueTrend || []
-    distributions.value = data.distributions || null
+    baseOverviewStats.value = data.overviewStats || []
+    baseDistributions.value = data.distributions || null
     todoList.value = data.todoList || []
-    abnormalOrders.value = data.abnormalOrders || []
     recentActivities.value = data.recentActivities || []
     announcements.value = data.announcements || []
   } catch (error) {
@@ -99,10 +161,7 @@ const goToTodo = (item) => {
 }
 
 const goToOrderDetail = (row) => {
-  router.push({
-    path: '/admin/orders/anomalies',
-    query: { orderNo: row.orderNo },
-  })
+  router.push(`/admin/orders/detail/${row.id}`)
 }
 
 onMounted(loadData)
@@ -134,7 +193,7 @@ onMounted(loadData)
       <div class="hero-banner__actions">
         <el-button plain @click="router.push('/admin/institutions/stations')">电站审核</el-button>
         <el-button plain @click="router.push('/admin/finance')">进入清分中心</el-button>
-        <el-button type="primary" plain @click="router.push('/admin/orders/anomalies')">异常订单监管</el-button>
+        <el-button type="primary" plain @click="router.push('/admin/orders/abnormal')">异常订单监管</el-button>
       </div>
     </section>
 

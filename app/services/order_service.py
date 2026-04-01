@@ -12,6 +12,7 @@ from app.crud.order_crud import (
     count_today_completed_orders,
     get_order_by_id,
     list_abnormal_orders,
+    list_all_orders,
     list_history_orders,
     list_realtime_orders,
     sum_today_charge_amount,
@@ -86,27 +87,31 @@ def serialize_order(order: Order) -> dict[str, Any]:
     }
 
 
-def get_realtime_order_list(db: Session, limit: int = 50) -> list[dict[str, Any]]:
-    return [serialize_order(order) for order in list_realtime_orders(db, limit=limit)]
+def get_all_order_list(db: Session, limit: int = 100, operator_id: int | None = None) -> list[dict[str, Any]]:
+    return [serialize_order(order) for order in list_all_orders(db, limit=limit, operator_id=operator_id)]
 
 
-def get_history_order_list(db: Session, limit: int = 100) -> list[dict[str, Any]]:
-    return [serialize_order(order) for order in list_history_orders(db, limit=limit)]
+def get_realtime_order_list(db: Session, limit: int = 50, operator_id: int | None = None) -> list[dict[str, Any]]:
+    return [serialize_order(order) for order in list_realtime_orders(db, limit=limit, operator_id=operator_id)]
 
 
-def get_abnormal_order_list(db: Session, limit: int = 50) -> list[dict[str, Any]]:
-    return [serialize_order(order) for order in list_abnormal_orders(db, limit=limit)]
+def get_history_order_list(db: Session, limit: int = 100, operator_id: int | None = None) -> list[dict[str, Any]]:
+    return [serialize_order(order) for order in list_history_orders(db, limit=limit, operator_id=operator_id)]
 
 
-def get_order_detail_data(db: Session, order_id: int) -> dict[str, Any] | None:
-    order = get_order_by_id(db, order_id)
+def get_abnormal_order_list(db: Session, limit: int = 50, operator_id: int | None = None) -> list[dict[str, Any]]:
+    return [serialize_order(order) for order in list_abnormal_orders(db, limit=limit, operator_id=operator_id)]
+
+
+def get_order_detail_data(db: Session, order_id: int, operator_id: int | None = None) -> dict[str, Any] | None:
+    order = get_order_by_id(db, order_id, operator_id=operator_id)
     if not order:
         return None
     return serialize_order(order)
 
 
-def force_stop_order(db: Session, order_id: int) -> Order | None:
-    order = get_order_by_id(db, order_id)
+def force_stop_order(db: Session, order_id: int, operator_id: int | None = None) -> Order | None:
+    order = get_order_by_id(db, order_id, operator_id=operator_id)
     if not order or order.status != 0:
         return None
 
@@ -124,8 +129,8 @@ def force_stop_order(db: Session, order_id: int) -> Order | None:
     return order
 
 
-def mark_order_abnormal(db: Session, order_id: int, abnormal_reason: str) -> Order | None:
-    order = get_order_by_id(db, order_id)
+def mark_order_abnormal(db: Session, order_id: int, abnormal_reason: str, operator_id: int | None = None) -> Order | None:
+    order = get_order_by_id(db, order_id, operator_id=operator_id)
     if not order or order.status != 0:
         return None
 
@@ -143,16 +148,16 @@ def mark_order_abnormal(db: Session, order_id: int, abnormal_reason: str) -> Ord
     return order
 
 
-def get_order_stats(db: Session) -> dict[str, Any]:
+def get_order_stats(db: Session, operator_id: int | None = None) -> dict[str, Any]:
     now = datetime.now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
 
-    charging_count = count_charging_orders(db)
-    abnormal_count = count_abnormal_orders(db)
-    today_completed = count_today_completed_orders(db, today_start, today_end)
-    today_charge_amount = sum_today_charge_amount(db, today_start, today_end)
-    today_total_amount = sum_today_total_amount(db, today_start, today_end)
+    charging_count = count_charging_orders(db, operator_id=operator_id)
+    abnormal_count = count_abnormal_orders(db, operator_id=operator_id)
+    today_completed = count_today_completed_orders(db, today_start, today_end, operator_id=operator_id)
+    today_charge_amount = sum_today_charge_amount(db, today_start, today_end, operator_id=operator_id)
+    today_total_amount = sum_today_total_amount(db, today_start, today_end, operator_id=operator_id)
 
     return {
         "charging_count": charging_count,

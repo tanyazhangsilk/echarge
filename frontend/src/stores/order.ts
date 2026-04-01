@@ -2,6 +2,18 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { mockOrders } from '../mock/orders'
 import { ORDER_STATUS, PAY_STATUS, type Order, type OrderStats } from '../types/order'
+import { getStoredOperatorId, getStoredRole, ROLES } from '../config/permissions'
+
+export interface OrderScope {
+  role?: 'admin' | 'operator'
+  operatorId?: string
+}
+
+export interface OrderTrendPoint {
+  date: string
+  orderCount: number
+  revenue: number
+}
 
 const cloneOrders = (): Order[] => JSON.parse(JSON.stringify(mockOrders))
 
@@ -23,28 +35,66 @@ const isToday = (dateStr: string | null): boolean => {
   )
 }
 
+const toDateValue = (value: string | null | undefined): number => {
+  if (!value) return 0
+  const parsed = new Date(value).getTime()
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const sortByLatest = (a: Order, b: Order): number =>
+  toDateValue(b.updatedAt || b.endTime || b.startTime) - toDateValue(a.updatedAt || a.endTime || a.startTime)
+
+const toDayKey = (date: Date): string => {
+  const y = date.getFullYear()
+  const m = `${date.getMonth() + 1}`.padStart(2, '0')
+  const d = `${date.getDate()}`.padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+const toDayLabel = (dayKey: string): string => dayKey.slice(5)
+
 export const useOrderStore = defineStore('order', () => {
   const orders = ref<Order[]>(cloneOrders())
 
-  const getRealtimeOrders = (): Order[] =>
-    orders.value
+  const normalizeScope = (scope?: OrderScope): Required<OrderScope> => {
+    const role = scope?.role || (getStoredRole() as 'admin' | 'operator')
+    const operatorId = scope?.operatorId || getStoredOperatorId()
+    return {
+      role: role === ROLES.ADMIN ? ROLES.ADMIN : ROLES.OPERATOR,
+      operatorId,
+    }
+  }
+
+  const isOrderVisible = (order: Order, scope?: OrderScope): boolean => {
+    const normalized = normalizeScope(scope)
+    if (normalized.role === ROLES.ADMIN) return true
+    return order.operatorId === normalized.operatorId
+  }
+
+  const scopedOrders = (scope?: OrderScope): Order[] => orders.value.filter((order) => isOrderVisible(order, scope))
+
+  const getAllOrders = (scope?: OrderScope): Order[] => scopedOrders(scope).slice().sort(sortByLatest)
+
+  const getRealtimeOrders = (scope?: OrderScope): Order[] =>
+    scopedOrders(scope)
       .filter((order) => order.status === ORDER_STATUS.CHARGING)
-      .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
+      .sort((a, b) => toDateValue(b.startTime) - toDateValue(a.startTime))
 
-  const getHistoryOrders = (): Order[] =>
-    orders.value
+  const getHistoryOrders = (scope?: OrderScope): Order[] =>
+    scopedOrders(scope)
       .filter((order) => order.status === ORDER_STATUS.COMPLETED)
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .sort(sortByLatest)
 
-  const getAbnormalOrders = (): Order[] =>
-    orders.value
+  const getAbnormalOrders = (scope?: OrderScope): Order[] =>
+    scopedOrders(scope)
       .filter((order) => order.status === ORDER_STATUS.ABNORMAL)
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .sort(sortByLatest)
 
-  const getOrderById = (id: string): Order | undefined => orders.value.find((order) => order.id === id)
+  const getOrderById = (id: string, scope?: OrderScope): Order | undefined =>
+    scopedOrders(scope).find((order) => order.id === id)
 
-  const finishOrder = (id: string): Order | null => {
-    const target = orders.value.find((order) => order.id === id)
+  const finishOrder = (id: string, scope?: OrderScope): Order | null => {
+    const target = getOrderById(id, scope)
     if (!target || target.status !== ORDER_STATUS.CHARGING) return null
 
     const now = new Date()
@@ -62,23 +112,25 @@ export const useOrderStore = defineStore('order', () => {
     return target
   }
 
-  const markOrderAbnormal = (id: string, reason: string): Order | null => {
-    const target = orders.value.find((order) => order.id === id)
+  const markOrderAbnormal = (id: string, reason: string, scope?: OrderScope): Order | null => {
+    const target = getOrderById(id, scope)
     if (!target || target.status !== ORDER_STATUS.CHARGING) return null
 
     target.status = ORDER_STATUS.ABNORMAL
+    target.endTime = new Date().toISOString()
     target.abnormalReason = reason?.trim() || '系统判定异常'
-    target.updatedAt = new Date().toISOString()
+    target.updatedAt = target.endTime
 
     return target
   }
 
-  const getOrderStats = (): OrderStats => {
-    const chargingCount = orders.value.filter((order) => order.status === ORDER_STATUS.CHARGING).length
-    const todayCompleted = orders.value.filter(
+  const getOrderStats = (scope?: OrderScope): OrderStats => {
+    const visibleOrders = scopedOrders(scope)
+    const chargingCount = visibleOrders.filter((order) => order.status === ORDER_STATUS.CHARGING).length
+    const todayCompleted = visibleOrders.filter(
       (order) => order.status === ORDER_STATUS.COMPLETED && isToday(order.endTime || order.updatedAt),
     )
-    const abnormalCount = orders.value.filter((order) => order.status === ORDER_STATUS.ABNORMAL).length
+    const abnormalCount = visibleOrders.filter((order) => order.status === ORDER_STATUS.ABNORMAL).length
 
     return {
       chargingCount,
@@ -89,8 +141,44 @@ export const useOrderStore = defineStore('order', () => {
     }
   }
 
+  const getOrderTrend = (scope?: OrderScope, days = 7): OrderTrendPoint[] => {
+    const safeDays = Math.max(1, days)
+    const now = new Date()
+    const buckets = Array.from({ length: safeDays }, (_, index) => {
+      const current = new Date(now)
+      current.setDate(now.getDate() - (safeDays - 1 - index))
+      return {
+        key: toDayKey(current),
+        date: toDayLabel(toDayKey(current)),
+        orderCount: 0,
+        revenue: 0,
+      }
+    })
+    const map = new Map(buckets.map((item) => [item.key, item]))
+
+    scopedOrders(scope)
+      .filter((item) => item.status === ORDER_STATUS.COMPLETED)
+      .forEach((order) => {
+        const time = order.endTime || order.updatedAt || order.startTime
+        const dateObj = new Date(time)
+        if (Number.isNaN(dateObj.getTime())) return
+        const key = toDayKey(dateObj)
+        const bucket = map.get(key)
+        if (!bucket) return
+        bucket.orderCount += 1
+        bucket.revenue = Number((bucket.revenue + safeNumber(order.totalAmount)).toFixed(2))
+      })
+
+    return buckets.map((item) => ({
+      date: item.date,
+      orderCount: item.orderCount,
+      revenue: item.revenue,
+    }))
+  }
+
   return {
     orders,
+    getAllOrders,
     getRealtimeOrders,
     getHistoryOrders,
     getAbnormalOrders,
@@ -98,5 +186,6 @@ export const useOrderStore = defineStore('order', () => {
     finishOrder,
     markOrderAbnormal,
     getOrderStats,
+    getOrderTrend,
   }
 })
