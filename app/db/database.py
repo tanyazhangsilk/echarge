@@ -10,7 +10,6 @@ def _with_charset(url: str) -> str:
 
 engine = create_engine(
     _with_charset(settings.database_url),
-    echo=True,
     pool_pre_ping=True
 )
 

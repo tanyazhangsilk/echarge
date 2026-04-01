@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from app.db.database import get_db
 from app.models.models import (
@@ -17,7 +17,22 @@ from app.models.models import (
     Station,
     User,
 )
+from app.schemas import InvoiceApplySchema, InvoiceProcessSchema, OrderActionSchema
+from app.services.order_service import (
+    ORDER_STATUS_LABELS,
+    get_abnormal_order_list,
+    get_history_order_list,
+    get_order_detail_data,
+    get_order_stats,
+    get_realtime_order_list,
+    get_station_name,
+    mark_order_abnormal,
+    order_duration_minutes,
+    serialize_order,
+    force_stop_order,
+)
 from app.services.settlement_service import settle_t_plus_1
+from app.services.wallet_service import get_wallet_summary, get_wallet_transaction_list
 
 api_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -249,16 +264,26 @@ async def get_overview_summary(db: Session = Depends(get_db)) -> dict:
 
 @api_router.get("/overview/realtime-orders", tags=["overview"])
 async def get_realtime_orders(db: Session = Depends(get_db)) -> list[dict]:
-    realtime_orders = db.query(Order).filter(Order.status == 0).limit(5).all()
-    result = []
-    for order in realtime_orders:
-        result.append({
-            "user_name": order.user.nickname,
-            "station_name": order.charger.station.name,
-            "charged_kwh": float(order.total_kwh),
-            "status": "charging"
-        })
-    return result
+    realtime_orders = (
+        db.query(Order)
+        .options(joinedload(Order.user), joinedload(Order.station), joinedload(Order.charger).joinedload(Charger.station))
+        .filter(Order.status == 0)
+        .order_by(Order.start_time.desc())
+        .limit(5)
+        .all()
+    )
+    return [
+        {
+            "id": order.id,
+            "order_no": order.order_no,
+            "user_name": user_display_name(order.user) if order.user else "",
+            "station_name": get_station_name(order),
+            "charged_kwh": float(order.charge_amount),
+            "charge_duration": order_duration_minutes(order),
+            "status": ORDER_STATUS_LABELS.get(order.status, "unknown"),
+        }
+        for order in realtime_orders
+    ]
 
 class ManualSettleRequest(BaseModel):
     date: date
@@ -302,58 +327,101 @@ async def trigger_settle(db: Session = Depends(get_db)):
 
 @api_router.get("/orders/realtime", tags=["orders"])
 async def get_realtime_orders(db: Session = Depends(get_db)):
-    from sqlalchemy.orm import joinedload
-    # 查询 status = 0 (进行中) 的订单，按时间倒序
-    orders = db.query(Order).options(
-        joinedload(Order.user), joinedload(Order.charger)
-    ).filter(Order.status == 0).order_by(Order.start_time.desc()).limit(50).all()
-    
     return {
         "code": 200,
-        "data": [{
-            "order_no": o.order_no,
-            "user_phone": o.user.phone if o.user else "未知用户",
-            "charger_sn": o.charger.sn_code if o.charger else "未知设备",
-            "start_time": o.start_time.strftime("%Y-%m-%d %H:%M:%S") if o.start_time else "",
-            "total_kwh": float(o.total_kwh),
-            "total_fee": float(o.total_fee),
-            "duration_mins": int((datetime.now() - o.start_time).total_seconds() / 60) if o.start_time else 0
-        } for o in orders]
+        "data": get_realtime_order_list(db, limit=50),
     }
 
 @api_router.get("/orders/abnormal", tags=["orders"])
 async def get_abnormal_orders(db: Session = Depends(get_db)):
-    from sqlalchemy.orm import joinedload
-    import random
-    # 查询 status = 2 (异常) 的订单
-    orders = db.query(Order).options(
-        joinedload(Order.user), joinedload(Order.charger)
-    ).filter(Order.status == 2).order_by(Order.start_time.desc()).limit(50).all()
-    
-    # 模拟几种常见的异常原因
-    error_types = ["设备离线断电", "用户账户余额不足", "枪头温度过高保护", "通讯心跳超时", "结算扣款失败"]
-    
     return {
         "code": 200,
-        "data": [{
-            "order_no": o.order_no,
-            "user_phone": o.user.phone if o.user else "未知",
-            "charger_sn": o.charger.sn_code if o.charger else "未知",
-            "start_time": o.start_time.strftime("%Y-%m-%d %H:%M:%S") if o.start_time else "",
-            "total_fee": float(o.total_fee),
-            "error_reason": random.choice(error_types), # 随机分配异常原因展示
-            "handle_status": 0 # 0-未处理, 1-已处理
-        } for o in orders]
+        "data": get_abnormal_order_list(db, limit=50),
     }
+
+
+@api_router.get("/orders/history", tags=["orders"])
+async def get_history_orders(db: Session = Depends(get_db)):
+    return {
+        "code": 200,
+        "data": get_history_order_list(db, limit=100),
+    }
+
+
+@api_router.get("/orders/stats", tags=["orders"])
+async def get_order_stats_api(db: Session = Depends(get_db)):
+    return {
+        "code": 200,
+        "data": get_order_stats(db),
+    }
+
+
+@api_router.get("/wallet/summary", tags=["wallet"])
+async def get_wallet_summary_api(user_id: int = 1, db: Session = Depends(get_db)):
+    return {
+        "code": 200,
+        "data": get_wallet_summary(db, user_id=user_id, limit=10),
+    }
+
+
+@api_router.get("/wallet/transactions", tags=["wallet"])
+async def get_wallet_transactions_api(user_id: int = 1, limit: int = 50, db: Session = Depends(get_db)):
+    return {
+        "code": 200,
+        "data": get_wallet_transaction_list(db, user_id=user_id, limit=limit),
+    }
+
+
+@api_router.get("/orders/{order_id}", tags=["orders"])
+async def get_order_detail(order_id: int, db: Session = Depends(get_db)):
+    order_data = get_order_detail_data(db, order_id)
+    if not order_data:
+        return {"code": 404, "message": "订单不存在"}
+
+    return {
+        "code": 200,
+        "data": order_data,
+    }
+
+
+@api_router.post("/orders/{order_id}/force-stop", tags=["orders"])
+async def force_stop_order_api(order_id: int, db: Session = Depends(get_db)):
+    order = force_stop_order(db, order_id)
+    if not order:
+        return {"code": 400, "message": "订单不存在或当前不是充电中状态"}
+
+    return {
+        "code": 200,
+        "message": "订单已强制停止",
+        "data": serialize_order(order),
+    }
+
+
+@api_router.post("/orders/{order_id}/mark-abnormal", tags=["orders"])
+async def mark_order_abnormal_api(order_id: int, payload: OrderActionSchema, db: Session = Depends(get_db)):
+    order = mark_order_abnormal(db, order_id, payload.abnormal_reason)
+    if not order:
+        return {"code": 400, "message": "订单不存在或当前不是充电中状态"}
+
+    return {
+        "code": 200,
+        "message": "订单已标记异常",
+        "data": serialize_order(order),
+    }
+
+
 
 
 @api_router.get("/finance/invoices", tags=["finance"])
 async def get_invoices(db: Session = Depends(get_db)):
-    from sqlalchemy.orm import joinedload
     from app.models.models import Invoice
     
-    # 联表查询发票与对应的申请用户，按时间倒序
-    invoices = db.query(Invoice).options(joinedload(Invoice.user)).order_by(Invoice.created_at.desc()).all()
+    invoices = (
+        db.query(Invoice)
+        .options(joinedload(Invoice.user), joinedload(Invoice.related_order))
+        .order_by(Invoice.created_at.desc())
+        .all()
+    )
     
     return {
         "code": 200,
@@ -361,20 +429,86 @@ async def get_invoices(db: Session = Depends(get_db)):
             "id": inv.id,
             "invoice_no": f"INV{inv.created_at.strftime('%Y%m%d')}{str(inv.id).zfill(4)}",
             "user_phone": inv.user.phone if inv.user else "未知用户",
+            "user_id": inv.user_id,
+            "order_id": inv.order_id,
+            "order_no": inv.related_order.order_no if inv.related_order else None,
+            "invoice_title": inv.invoice_title,
             "amount": float(inv.amount),
             "email": inv.email,
             "status": inv.status,
             "created_at": inv.created_at.strftime("%Y-%m-%d %H:%M:%S") if inv.created_at else "",
-            "file_url": inv.file_url
+            "uploaded_at": inv.uploaded_at.strftime("%Y-%m-%d %H:%M:%S") if inv.uploaded_at else None,
+            "file_url": inv.file_url,
+            "remark": inv.remark,
         } for inv in invoices]
     }
 
-@api_router.post("/finance/invoices/{invoice_id}/process", tags=["finance"])
-async def process_invoice(invoice_id: int, payload: dict, db: Session = Depends(get_db)):
+@api_router.post("/finance/invoices/apply", tags=["finance"])
+async def apply_invoice(payload: InvoiceApplySchema, db: Session = Depends(get_db)):
     from app.models.models import Invoice
+
+    invoice = Invoice(
+        user_id=payload.user_id,
+        operator_id=payload.operator_id,
+        order_id=payload.order_id,
+        invoice_title=payload.invoice_title,
+        amount=payload.amount,
+        email=payload.email,
+        status=0,
+        remark=payload.remark or None,
+    )
+    db.add(invoice)
+    db.commit()
+    db.refresh(invoice)
+
+    return {
+        "code": 200,
+        "message": "发票申请已提交",
+        "data": {"id": invoice.id},
+    }
+
+@api_router.get("/finance/invoices/{invoice_id}", tags=["finance"])
+async def get_invoice_detail(invoice_id: int, db: Session = Depends(get_db)):
+    from app.models.models import Invoice
+
+    inv = (
+        db.query(Invoice)
+        .options(joinedload(Invoice.user), joinedload(Invoice.operator), joinedload(Invoice.related_order))
+        .filter(Invoice.id == invoice_id)
+        .first()
+    )
+    if not inv:
+        return {"code": 404, "message": "发票申请不存在"}
+
+    return {
+        "code": 200,
+        "data": {
+            "id": inv.id,
+            "invoice_no": f"INV{inv.created_at.strftime('%Y%m%d')}{str(inv.id).zfill(4)}",
+            "user_id": inv.user_id,
+            "user_phone": inv.user.phone if inv.user else "",
+            "operator_id": inv.operator_id,
+            "order_id": inv.order_id,
+            "order_no": inv.related_order.order_no if inv.related_order else None,
+            "invoice_title": inv.invoice_title,
+            "amount": float(inv.amount),
+            "email": inv.email,
+            "status": inv.status,
+            "file_url": inv.file_url,
+            "remark": inv.remark,
+            "created_at": inv.created_at.strftime("%Y-%m-%d %H:%M:%S") if inv.created_at else "",
+            "uploaded_at": inv.uploaded_at.strftime("%Y-%m-%d %H:%M:%S") if inv.uploaded_at else None,
+            "updated_at": inv.updated_at.strftime("%Y-%m-%d %H:%M:%S") if inv.updated_at else "",
+        },
+    }
+
+@api_router.post("/finance/invoices/{invoice_id}/process", tags=["finance"])
+async def process_invoice(invoice_id: int, payload: InvoiceProcessSchema, db: Session = Depends(get_db)):
+    from app.models.models import Invoice
+    from datetime import datetime
     
-    action = payload.get("action") # 'approve' 或 'reject'
-    file_url = payload.get("file_url", "")
+    action = payload.action
+    file_url = payload.file_url
     
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not invoice:
@@ -383,8 +517,11 @@ async def process_invoice(invoice_id: int, payload: dict, db: Session = Depends(
     if action == "approve":
         invoice.status = 1
         invoice.file_url = file_url
+        invoice.uploaded_at = datetime.now()
+        invoice.remark = payload.remark or invoice.remark
     elif action == "reject":
         invoice.status = 2
+        invoice.remark = payload.remark or invoice.remark
         
     db.commit()
     return {"code": 200, "message": "处理成功"}

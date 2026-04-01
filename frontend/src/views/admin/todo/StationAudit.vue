@@ -100,18 +100,6 @@ onMounted(loadData)
       </template>
     </PageSectionHeader>
 
-    <section class="stats-grid">
-      <MetricCard
-        v-for="item in stats"
-        :key="item.label"
-        :label="item.label"
-        :value="item.value"
-        :suffix="item.suffix"
-        :hint="item.hint"
-        :tone="item.tone"
-      />
-    </section>
-
     <article class="page-panel surface-card table-shell">
       <div class="panel-heading">
         <div>
@@ -120,20 +108,20 @@ onMounted(loadData)
         </div>
       </div>
 
-      <div class="toolbar-row toolbar-row--wrap">
-        <div class="toolbar-group">
-          <el-input v-model="filters.keyword" placeholder="搜索电站名称、运营商、地址" clearable style="width: 320px;" />
-          <el-select v-model="filters.status" clearable placeholder="审核状态" style="width: 140px;">
-            <el-option label="待审核" value="pending" />
-            <el-option label="已通过" value="approved" />
-            <el-option label="已驳回" value="rejected" />
-          </el-select>
-          <el-select v-model="filters.priority" clearable placeholder="优先级" style="width: 140px;">
-            <el-option label="高优先级" value="high" />
-            <el-option label="中优先级" value="medium" />
-          </el-select>
-        </div>
+    <div class="toolbar-row">
+      <div class="toolbar-group">
+        <el-input v-model="filters.keyword" placeholder="搜索电站名称、运营商、地址" clearable style="width: 320px;" />
+        <el-select v-model="filters.status" clearable placeholder="审核状态" style="width: 140px;">
+          <el-option label="待审核" value="pending" />
+          <el-option label="已通过" value="approved" />
+          <el-option label="已驳回" value="rejected" />
+        </el-select>
+        <el-select v-model="filters.priority" clearable placeholder="优先级" style="width: 140px;">
+          <el-option label="高优先级" value="high" />
+          <el-option label="中优先级" value="medium" />
+        </el-select>
       </div>
+    </div>
 
       <el-table v-loading="loading" :data="filteredRecords">
         <el-table-column prop="stationName" label="电站名称" min-width="220" />
@@ -173,6 +161,18 @@ onMounted(loadData)
         description="可以尝试调整筛选条件，或继续补充站点上架 mock 数据。"
       />
     </article>
+
+    <section class="stats-grid">
+      <MetricCard
+        v-for="item in stats"
+        :key="item.label"
+        :label="item.label"
+        :value="item.value"
+        :suffix="item.suffix"
+        :hint="item.hint"
+        :tone="item.tone"
+      />
+    </section>
 
     <el-drawer v-model="drawerVisible" title="电站审核详情" size="620px">
       <template v-if="currentRecord">
@@ -263,6 +263,25 @@ onMounted(loadData)
 </template>
 
 <style scoped>
+.stats-grid :deep(.stat-surface--warning) {
+  background: linear-gradient(135deg, var(--el-color-warning-light-8), var(--el-color-warning-light-9));
+  border-color: var(--el-color-warning-light-5);
+}
+
+.stats-grid :deep(.stat-surface--success) {
+  background: linear-gradient(135deg, var(--el-color-success-light-8), var(--el-color-success-light-9));
+  border-color: var(--el-color-success-light-5);
+}
+
+.stats-grid :deep(.stat-surface--danger) {
+  background: linear-gradient(135deg, var(--el-color-danger-light-8), var(--el-color-danger-light-9));
+  border-color: var(--el-color-danger-light-5);
+}
+
+.stats-grid :deep(.stat-surface__value) {
+  font-size: 28px;
+}
+
 .drawer-head {
   display: flex;
   align-items: flex-start;

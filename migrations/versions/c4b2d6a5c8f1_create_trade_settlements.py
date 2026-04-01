@@ -21,7 +21,7 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     if "trade_settlements" in inspector.get_table_names():
-        op.drop_table("trade_settlements")
+        return
 
     op.create_table(
         "trade_settlements",
@@ -53,4 +53,3 @@ def downgrade() -> None:
         return
     op.drop_index("uq_trade_settlements_settle_date", table_name="trade_settlements")
     op.drop_table("trade_settlements")
-
