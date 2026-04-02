@@ -49,7 +49,8 @@ const trendClass = computed(() => `stat-surface__badge--${props.trendDirection}`
 </script>
 
 <template>
-  <article class="stat-surface surface-card" :class="`stat-surface--${tone}`">
+  <article class="stat-surface surface-card metric-card" :class="`stat-surface--${tone}`">
+    <div class="metric-card__glow"></div>
     <div class="stat-surface__header">
       <div>
         <p class="stat-surface__label">{{ label }}</p>
@@ -63,10 +64,33 @@ const trendClass = computed(() => `stat-surface__badge--${props.trendDirection}`
       <span v-if="trend" class="stat-surface__badge" :class="trendClass">{{ trend }}</span>
       <span class="stat-surface__meta">{{ trendLabel || hint }}</span>
     </div>
+    <div class="metric-card__progress">
+      <span class="metric-card__progress-inner"></span>
+    </div>
   </article>
 </template>
 
 <style scoped>
+.metric-card {
+  animation: metricReveal 420ms ease both;
+}
+
+.metric-card__glow {
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  border-radius: 999px;
+  right: -70px;
+  top: -80px;
+  background: radial-gradient(circle, rgba(64, 158, 255, 0.18), transparent 70%);
+  pointer-events: none;
+  transition: transform 260ms ease;
+}
+
+.metric-card:hover .metric-card__glow {
+  transform: scale(1.08);
+}
+
 .stat-surface {
   position: relative;
   overflow: hidden;
@@ -127,6 +151,23 @@ const trendClass = computed(() => `stat-surface__badge--${props.trendDirection}`
   color: #4b5f7a;
 }
 
+.metric-card__progress {
+  margin-top: 12px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.2);
+  overflow: hidden;
+}
+
+.metric-card__progress-inner {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(79, 70, 229, 0.8), rgba(54, 209, 220, 0.86));
+  transform-origin: left;
+  animation: metricProgress 820ms ease both;
+}
+
 .stat-surface::after {
   content: '';
   position: absolute;
@@ -170,5 +211,25 @@ const trendClass = computed(() => `stat-surface__badge--${props.trendDirection}`
 
 :root[data-theme='dark'] .stat-surface__badge--flat {
   color: #b2bfd4;
+}
+
+@keyframes metricReveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes metricProgress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
 }
 </style>

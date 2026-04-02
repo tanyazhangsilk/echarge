@@ -171,7 +171,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <article class="page-panel surface-card chart-panel" v-loading="loading">
+  <article class="page-panel surface-card chart-panel trend-panel" v-loading="loading">
     <div class="panel-heading">
       <div>
         <h3 class="panel-heading__title">{{ title }}</h3>
@@ -196,5 +196,31 @@ onBeforeUnmount(() => {
 .chart-panel__canvas {
   width: 100%;
   height: 260px;
+  animation: chartReveal 460ms ease both;
+}
+
+.trend-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.trend-panel::after {
+  content: '';
+  position: absolute;
+  inset: auto 16px 0;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(79, 70, 229, 0.6), rgba(54, 209, 220, 0.6));
+}
+
+@keyframes chartReveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>

@@ -17,7 +17,7 @@ html {
   padding: 0;
   width: 100%;
   height: 100%;
-  font-family: 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-family: var(--font-family-base);
   overflow: hidden;
 }
 
@@ -31,10 +31,27 @@ html {
 }
 
 .base-card {
-  background: var(--bg-card);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.98)),
+    linear-gradient(120deg, rgba(79, 70, 229, 0.04), rgba(54, 209, 220, 0.04));
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-inset-1), var(--shadow-elev-1);
   padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: transform var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+}
+
+.base-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-inset-1), var(--shadow-elev-2);
+}
+
+:root[data-theme='dark'] .base-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+    linear-gradient(120deg, rgba(79, 70, 229, 0.08), rgba(54, 209, 220, 0.06));
 }
 
 .page-shell {
@@ -44,6 +61,7 @@ html {
   max-width: var(--content-max-width);
   margin: 0 auto;
   animation: pageReveal var(--motion-page) ease-out both;
+  position: relative;
 }
 
 .page-hero {
@@ -52,6 +70,20 @@ html {
   justify-content: space-between;
   gap: 18px;
   padding: 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+.page-hero::after {
+  content: '';
+  position: absolute;
+  right: -60px;
+  top: -60px;
+  width: 240px;
+  height: 240px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(64, 158, 255, 0.20), transparent 70%);
+  pointer-events: none;
 }
 
 .page-hero__eyebrow {
@@ -64,9 +96,10 @@ html {
 
 .page-hero__title {
   margin: 0;
-  font-size: clamp(24px, 3vw, 34px);
+  font-size: clamp(26px, 3vw, 36px);
   line-height: 1.12;
   color: var(--color-text);
+  letter-spacing: 0.02em;
 }
 
 .page-hero__desc {
@@ -86,6 +119,20 @@ html {
   padding: 18px;
   min-height: 116px;
   transition: transform var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-surface::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(64, 158, 255, 0.85), rgba(54, 209, 220, 0.85));
+  opacity: 0.9;
 }
 
 .stat-surface:hover {
@@ -135,8 +182,9 @@ html {
 
 .panel-heading__title {
   margin: 0;
-  font-size: 18px;
+  font-size: 19px;
   color: var(--color-text);
+  letter-spacing: 0.02em;
 }
 
 .panel-heading__desc {
@@ -165,16 +213,26 @@ html {
 }
 
 .soft-card {
-  background: var(--color-surface-3);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.92)),
+    var(--color-surface-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  transition: box-shadow var(--motion-fast) ease, transform var(--motion-fast) ease;
+}
+
+.soft-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(17, 24, 39, 0.10);
 }
 
 .filter-panel {
   padding: 16px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: var(--color-surface-3);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.92)),
+    var(--color-surface-3);
 }
 
 .info-list {
@@ -302,7 +360,9 @@ html {
 }
 
 .table-shell :deep(.el-table th.el-table__cell) {
-  background: var(--color-surface-3);
+  background:
+    linear-gradient(180deg, rgba(79, 70, 229, 0.08), rgba(64, 158, 255, 0.03)),
+    var(--color-surface-3);
   color: var(--color-text-2);
   font-weight: 600;
 }
@@ -310,6 +370,21 @@ html {
 .table-shell :deep(.el-table td.el-table__cell) {
   padding-top: 14px;
   padding-bottom: 14px;
+}
+
+.table-shell :deep(.el-table__inner-wrapper::before) {
+  background-color: transparent;
+}
+
+.table-shell :deep(.el-table--border::after),
+.table-shell :deep(.el-table--group::after),
+.table-shell :deep(.el-table::before) {
+  background-color: transparent;
+}
+
+.table-shell :deep(.el-tag) {
+  border-radius: 999px;
+  font-weight: 600;
 }
 
 .empty-block {

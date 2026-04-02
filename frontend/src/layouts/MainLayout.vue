@@ -320,6 +320,20 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--color-border);
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(14px);
+  position: relative;
+  box-shadow: 0 4px 18px rgba(17, 24, 39, 0.08);
+}
+
+.layout-header::after {
+  content: '';
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(79, 70, 229, 0.55), rgba(54, 209, 220, 0.55));
+  opacity: 0.8;
 }
 
 :root[data-theme='dark'] .layout-header {
@@ -383,6 +397,12 @@ onUnmounted(() => {
   width: 320px;
 }
 
+.search-input :deep(.el-input__wrapper) {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--color-border);
+}
+
 .toolbar-btn {
   color: var(--color-text-2);
 }
@@ -427,11 +447,28 @@ onUnmounted(() => {
 .layout-main {
   padding: 20px;
   overflow-y: auto;
+  background:
+    radial-gradient(800px 400px at 100% -10%, rgba(64, 158, 255, 0.08), transparent 55%),
+    radial-gradient(900px 460px at -10% 100%, rgba(16, 185, 129, 0.06), transparent 55%);
 }
 
 .layout-main__inner {
   max-width: var(--content-max-width);
   margin: 0 auto;
+  animation: pageReveal 320ms ease-out both;
+}
+
+.menu-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.menu-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.menu-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
 }
 
 @media (max-width: 960px) {

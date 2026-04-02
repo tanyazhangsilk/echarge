@@ -1,283 +1,705 @@
-<script setup>
-import { ref, computed, onMounted } from 'vue'
-import { Money, WarningFilled, Setting, RefreshRight, DocumentChecked } from '@element-plus/icons-vue'
+﻿<script setup>
+import { computed, onMounted, reactive, ref } from 'vue'
+import {
+  CircleCheck,
+  Clock,
+  DataAnalysis,
+  DocumentChecked,
+  Money,
+  RefreshRight,
+  Setting,
+  View,
+  WarningFilled,
+} from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
+import MetricCard from '../../components/console/MetricCard.vue'
+import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import http from '../../api/http'
 
-const tableData = ref([])
-const loading = ref(true)
-
-// 清分执行引擎状态
+const loading = ref(false)
+const executing = ref(false)
 const settleDate = ref('')
-const isSettling = ref(false)
-const settleProgress = ref(0)
-const settleLog = ref('')
+const batchRows = ref([])
+const operatorRowsByDate = ref({})
+const lastExecution = ref(null)
+const logItems = ref([])
 
-// 页面加载时获取历史账单
-const fetchSettlements = async () => {
+const detailVisible = ref(false)
+const detailDate = ref('')
+const detailRows = ref([])
+
+const stats = reactive({
+  pendingOrderCount: 0,
+  pendingAmount: 0,
+  settledAmount: 0,
+  platformFee: 0,
+})
+
+const formatMoney = (value) => {
+  const num = Number(value || 0)
+  return num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+const appendLog = (message, type = 'info') => {
+  const now = new Date()
+  const time = now.toTimeString().slice(0, 8)
+  logItems.value.unshift({ time, message, type })
+  if (logItems.value.length > 80) {
+    logItems.value = logItems.value.slice(0, 80)
+  }
+}
+
+const normalizeOperatorRow = (row) => {
+  if (!row) return null
+  let statusCode = row.status_code
+  if (typeof row.status === 'number') statusCode = row.status
+  if (typeof row.status === 'string') {
+    if (row.status === 'pending') statusCode = 0
+    if (row.status === 'hold') statusCode = 2
+    if (row.status === 'skipped') statusCode = -1
+  }
+  return {
+    id: row.id ?? null,
+    settle_date: row.settle_date,
+    operator_id: row.operator_id ?? null,
+    operator_name: row.operator_name || `运营商 #${row.operator_id ?? '--'}`,
+    order_count: Number(row.order_count || 0),
+    total_amount: Number(row.total_amount || 0),
+    platform_fee: Number(row.platform_fee || 0),
+    settle_amount: Number(row.settle_amount || 0),
+    platform_rate: row.platform_rate == null ? null : Number(row.platform_rate),
+    status_code: statusCode,
+    can_payout: row.can_payout,
+    hold_reason: row.hold_reason || '',
+  }
+}
+
+const batchStatusType = (row) => {
+  if (row.status === 1) return 'success'
+  if (row.status === 2) return 'danger'
+  return 'warning'
+}
+
+const batchStatusText = (row) => row.status_text || (row.status === 1 ? '已完成' : row.status === 2 ? '已挂起' : '处理中')
+
+const operatorPayoutType = (row) => {
+  if (row.status_code === 1) return 'success'
+  if (row.status_code === 2) return 'danger'
+  if (row.status_code === -1) return 'info'
+  return 'warning'
+}
+
+const operatorPayoutText = (row) => {
+  if (row.status_code === 1) return '已打款'
+  if (row.status_code === 2) return '挂起待补资料'
+  if (row.status_code === -1) return '已存在批次'
+  return '待打款'
+}
+
+const operatorQualificationType = (row) => {
+  if (row.can_payout === true) return 'success'
+  if (row.can_payout === false) return 'warning'
+  return 'info'
+}
+
+const operatorQualificationText = (row) => {
+  if (row.can_payout === true) return '资格通过'
+  if (row.can_payout === false) return '待补资料'
+  return '未判定'
+}
+
+const executionRows = computed(() => {
+  const list = lastExecution.value?.data?.operator_results || []
+  return list.map((item) => normalizeOperatorRow(item)).filter(Boolean)
+})
+
+const overviewCards = computed(() => [
+  {
+    label: '待清分订单数',
+    value: stats.pendingOrderCount,
+    suffix: ' 单',
+    trend: 'T+1 目标批次',
+    trendLabel: '仅统计已支付且未清分订单',
+    tone: 'warning',
+    icon: Clock,
+  },
+  {
+    label: '待清分金额',
+    value: formatMoney(stats.pendingAmount),
+    prefix: '¥',
+    trend: '待执行资金池',
+    trendLabel: '计划在下一批次清分完成',
+    tone: 'primary',
+    icon: WarningFilled,
+  },
+  {
+    label: '已清分金额',
+    value: formatMoney(stats.settledAmount),
+    prefix: '¥',
+    trend: '累计已确认',
+    trendLabel: '仅统计已结算订单',
+    tone: 'success',
+    icon: CircleCheck,
+  },
+  {
+    label: '平台累计抽成',
+    value: formatMoney(stats.platformFee),
+    prefix: '¥',
+    trend: '平台服务费汇总',
+    trendLabel: '按运营商清分记录聚合',
+    tone: 'info',
+    icon: Money,
+  },
+])
+
+const historySummary = computed(() => {
+  const totalBatch = batchRows.value.length
+  const totalOperator = batchRows.value.reduce((sum, row) => sum + Number(row.operator_count || 0), 0)
+  const holdTotal = batchRows.value.reduce((sum, row) => sum + Number(row.hold_count || 0), 0)
+  return {
+    totalBatch,
+    totalOperator,
+    holdTotal,
+  }
+})
+
+const executionProgress = computed(() => {
+  const rows = executionRows.value
+  if (!rows.length) return { qualified: 0, payoutReady: 0 }
+  const qualifiedCount = rows.filter((item) => item.can_payout === true).length
+  const payoutReadyCount = rows.filter((item) => item.status_code === 0 || item.status_code === 1).length
+  return {
+    qualified: Math.round((qualifiedCount / rows.length) * 100),
+    payoutReady: Math.round((payoutReadyCount / rows.length) * 100),
+  }
+})
+
+const fetchAllData = async () => {
   loading.value = true
   try {
-    const res = await http.get('/admin/finance/settlements')
-    if (res.data.code === 200) {
-      tableData.value = res.data.data
+    const [batchResp, orderResp] = await Promise.all([
+      http.get('/admin/finance/settlements'),
+      http.get('/admin/orders'),
+    ])
+
+    const batchPayload = batchResp?.data || {}
+    const rows = Array.isArray(batchPayload.data) ? batchPayload.data : []
+    const operatorRows = Array.isArray(batchPayload.operator_records) ? batchPayload.operator_records : []
+
+    batchRows.value = rows.map((item) => ({
+      ...item,
+      order_count: Number(item.order_count || 0),
+      total_amount: Number(item.total_amount || 0),
+      platform_fee: Number(item.platform_fee || 0),
+      settle_amount: Number(item.settle_amount || 0),
+      operator_count: Number(item.operator_count || 0),
+      ready_count: Number(item.ready_count || 0),
+      hold_count: Number(item.hold_count || 0),
+    }))
+
+    const grouped = {}
+    for (const item of operatorRows) {
+      const normalized = normalizeOperatorRow(item)
+      if (!normalized) continue
+      const key = normalized.settle_date
+      if (!grouped[key]) grouped[key] = []
+      grouped[key].push(normalized)
     }
+    operatorRowsByDate.value = grouped
+
+    const allOrders = Array.isArray(orderResp?.data?.data) ? orderResp.data.data : []
+    const pendingOrders = allOrders.filter(
+      (order) =>
+        Number(order.order_status_code) === 1 &&
+        Number(order.pay_status) === 1 &&
+        Number(order.settlement_status) === 0,
+    )
+    const settledOrders = allOrders.filter(
+      (order) =>
+        Number(order.order_status_code) === 1 &&
+        Number(order.pay_status) === 1 &&
+        Number(order.settlement_status) === 1,
+    )
+
+    stats.pendingOrderCount = pendingOrders.length
+    stats.pendingAmount = pendingOrders.reduce((sum, order) => sum + Number(order.total_amount || 0), 0)
+    stats.settledAmount = settledOrders.reduce((sum, order) => sum + Number(order.total_amount || 0), 0)
+    stats.platformFee = batchRows.value.reduce((sum, row) => sum + Number(row.platform_fee || 0), 0)
   } catch (error) {
-    ElMessage.error('获取全局清分记录失败，请检查网络')
+    ElMessage.error('加载清分中心数据失败，请检查网络或后端服务')
   } finally {
     loading.value = false
   }
 }
 
-onMounted(() => {
-  // 默认选中昨天
-  const yesterday = new Date()
-  yesterday.setDate(yesterday.getDate() - 1)
-  settleDate.value = yesterday.toISOString().split('T')[0]
-  fetchSettlements()
-})
+const openDetail = (row) => {
+  detailDate.value = row.settle_date
+  detailRows.value = operatorRowsByDate.value[row.settle_date] || []
+  detailVisible.value = true
+}
 
-// 顶部大盘数据计算 (基于真实返回的数据)
-const stats = computed(() => {
-  const totalOrders = tableData.value.reduce((sum, r) => sum + r.order_count, 0)
-  const platformRevenue = tableData.value.reduce((sum, r) => sum + r.platform_fee, 0)
-  const totalFlow = tableData.value.reduce((sum, r) => sum + r.total_amount, 0)
-  return {
-    totalOrders,
-    platformRevenue: platformRevenue.toFixed(2),
-    totalFlow: totalFlow.toFixed(2)
-  }
-})
-
-// 执行全局清分动作
 const executeSettlement = async () => {
   if (!settleDate.value) {
-    ElMessage.warning('请选择需要清分的日期')
+    ElMessage.warning('请选择清分日期')
     return
   }
 
   await ElMessageBox.confirm(
-    `即将对 ${settleDate.value} 的全网未结算订单执行 T+1 清分，并扣除 10% 平台服务费。此操作涉及资金划转，是否继续？`,
-    '高危操作确认',
-    { confirmButtonText: '确认执行', cancelButtonText: '取消', type: 'warning' }
+    `确认对 ${settleDate.value} 执行平台清分？系统将按运营商分组生成批次并更新订单结算状态。`,
+    '清分执行确认',
+    { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' },
   )
 
-  isSettling.value = true
-  settleProgress.value = 0
-  settleLog.value = `[${new Date().toLocaleTimeString()}] 正在启动清分引擎...\n`
-
-  // 模拟进度条效果，增加真实感
-  const timer = setInterval(() => {
-    if (settleProgress.value < 80) {
-      settleProgress.value += Math.floor(Math.random() * 15 + 5)
-      settleLog.value += `[${new Date().toLocaleTimeString()}] 正在聚合各运营商订单数据...\n`
-    }
-  }, 400)
+  executing.value = true
+  appendLog(`开始执行 ${settleDate.value} 清分任务`)
+  appendLog('正在拉取目标日期订单并进行运营商分组')
 
   try {
-    // 调用真实接口
-    const res = await http.post('/admin/finance/settle', {
-      date: settleDate.value
-    })
-
-    clearInterval(timer)
-    settleProgress.value = 100
-    
-    if (res.data.code === 200) {
-      settleLog.value += `[${new Date().toLocaleTimeString()}] 清分完成！${res.data.message}\n`
-      ElMessage.success(res.data.message)
-      setTimeout(() => {
-        isSettling.value = false
-        fetchSettlements() // 刷新下方表格
-      }, 1500)
-    } else {
-      settleLog.value += `[${new Date().toLocaleTimeString()}] 异常: ${res.data.message}\n`
-      ElMessage.error(res.data.message)
-      isSettling.value = false
+    const resp = await http.post('/admin/finance/settle', { date: settleDate.value })
+    const payload = resp?.data || {}
+    if (payload.code !== 200) {
+      appendLog(`执行失败：${payload.message || '未知错误'}`, 'error')
+      ElMessage.error(payload.message || '清分执行失败')
+      return
     }
+
+    lastExecution.value = payload
+    appendLog(payload.message || '清分执行完成', 'success')
+    appendLog(`本次处理订单 ${payload.processed || 0} 笔，覆盖运营商 ${payload.operator_count || 0} 个`, 'success')
+    if (payload.skipped_operator_count) {
+      appendLog(`已跳过 ${payload.skipped_operator_count} 个已存在批次的运营商`, 'warning')
+    }
+
+    ElMessage.success(payload.message || '清分执行成功')
+    await fetchAllData()
   } catch (error) {
-    clearInterval(timer)
-    isSettling.value = false
-    settleLog.value += `[${new Date().toLocaleTimeString()}] 引擎连接失败！\n`
-    ElMessage.error('执行失败，请检查后端服务是否启动')
+    appendLog('执行异常：后端接口不可用或返回超时', 'error')
+    ElMessage.error('清分执行异常，请稍后重试')
+  } finally {
+    executing.value = false
   }
 }
+
+onMounted(() => {
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  settleDate.value = yesterday.toISOString().slice(0, 10)
+  appendLog('平台清分中心已就绪，等待执行指令')
+  fetchAllData()
+})
 </script>
 
 <template>
-  <div class="page-container">
-    <el-alert 
-      title="清分中心具有最高财务权限。T+1 清分将自动计算全网昨日流水，划扣平台服务费(10%)，并生成运营商可提现账单。" 
-      type="warning" 
-      show-icon 
-      class="mb-6 py-2" 
-      :closable="false"
-    />
-
-    <el-row :gutter="20" class="mb-6">
-      <el-col :span="8">
-        <el-card shadow="hover" class="stat-card bg-gradient-dark">
-          <div class="stat-icon"><el-icon><Money /></el-icon></div>
-          <div class="stat-info">
-            <div class="stat-title text-gray-300">累计平台抽成收益 (元)</div>
-            <div class="stat-value text-white">￥{{ stats.platformRevenue }}</div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="8">
-        <el-card shadow="hover" class="stat-card border-l-blue">
-          <div class="stat-info">
-            <div class="stat-title">全网历史总流水 (元)</div>
-            <div class="stat-value text-blue-600">￥{{ stats.totalFlow }}</div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="8">
-        <el-card shadow="hover" class="stat-card border-l-green">
-          <div class="stat-info">
-            <div class="stat-title">累计清分处理订单 (笔)</div>
-            <div class="stat-value text-green-600">{{ stats.totalOrders }}</div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-card shadow="never" class="engine-card mb-6 border-0 rounded-lg">
-      <template #header>
-        <div class="font-bold text-lg flex items-center">
-          <el-icon class="mr-2 text-blue-500"><Setting /></el-icon> 资金清分执行引擎
-        </div>
+  <div class="page-shell global-settle-page">
+    <PageSectionHeader
+      eyebrow="Settlement Center"
+      title="平台清分中心"
+      description="支持按日执行 T+1 清分、按运营商分组核算，并区分资格状态与打款状态。"
+      chip="管理员财务视角"
+    >
+      <template #actions>
+        <el-button :icon="DataAnalysis" :loading="loading" @click="fetchAllData">刷新数据</el-button>
       </template>
+    </PageSectionHeader>
 
-      <div class="engine-control flex items-center gap-6" v-if="!isSettling">
-        <div class="flex items-center gap-4">
-          <span class="text-gray-600 font-medium">选择清分日期:</span>
-          <el-date-picker 
-            v-model="settleDate" 
-            type="date" 
-            placeholder="选择日期" 
-            format="YYYY/MM/DD" 
-            value-format="YYYY-MM-DD"
-            :clearable="false"
-            style="width: 180px;"
-          />
+    <section class="stats-grid stats-grid--settle">
+      <MetricCard
+        v-for="item in overviewCards"
+        :key="item.label"
+        :label="item.label"
+        :value="item.value"
+        :prefix="item.prefix"
+        :suffix="item.suffix"
+        :trend="item.trend"
+        :trend-label="item.trendLabel"
+        :tone="item.tone"
+        :icon="item.icon"
+      />
+    </section>
+
+    <section class="panel-grid panel-grid--wide">
+      <article class="page-panel surface-card" v-loading="loading">
+        <div class="panel-heading">
+          <div>
+            <h3 class="panel-heading__title">手动清分执行台</h3>
+            <p class="panel-heading__desc">按清分归属日执行批次，系统将自动分运营商生成清分结果。</p>
+          </div>
         </div>
-        <el-button type="primary" size="large" :icon="RefreshRight" @click="executeSettlement" class="execute-btn">
-          立即执行全网清分
-        </el-button>
-        <span class="text-sm text-gray-400"><el-icon><WarningFilled /></el-icon> 建议每天凌晨自动执行，此处为人工干预入口</span>
+
+        <div class="execute-toolbar">
+          <div class="execute-toolbar__left">
+            <span class="label">清分日期</span>
+            <el-date-picker
+              v-model="settleDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              format="YYYY-MM-DD"
+              :clearable="false"
+              style="width: 180px"
+            />
+            <el-button type="primary" :icon="RefreshRight" :loading="executing" @click="executeSettlement">
+              执行清分
+            </el-button>
+          </div>
+          <div class="execute-toolbar__summary">
+            <span>历史批次 {{ historySummary.totalBatch }}</span>
+            <span>覆盖运营商 {{ historySummary.totalOperator }}</span>
+            <span>挂起记录 {{ historySummary.holdTotal }}</span>
+          </div>
+        </div>
+
+        <div class="result-wrap" v-if="lastExecution">
+          <div class="result-head">
+            <strong>最近一次执行结果</strong>
+            <span>{{ lastExecution.message }}</span>
+          </div>
+          <div class="result-grid">
+            <div class="result-item">
+              <span>处理订单</span>
+              <strong>{{ lastExecution.processed || 0 }}</strong>
+            </div>
+            <div class="result-item">
+              <span>覆盖运营商</span>
+              <strong>{{ lastExecution.operator_count || 0 }}</strong>
+            </div>
+            <div class="result-item">
+              <span>跳过批次</span>
+              <strong>{{ lastExecution.skipped_operator_count || 0 }}</strong>
+            </div>
+          </div>
+
+          <div class="progress-grid" v-if="executionRows.length">
+            <div class="progress-card">
+              <div class="progress-card__head">
+                <strong>运营商资格通过率</strong>
+                <span>{{ executionProgress.qualified }}%</span>
+              </div>
+              <el-progress :percentage="executionProgress.qualified" :show-text="false" :stroke-width="10" />
+            </div>
+            <div class="progress-card">
+              <div class="progress-card__head">
+                <strong>可打款状态占比</strong>
+                <span>{{ executionProgress.payoutReady }}%</span>
+              </div>
+              <el-progress :percentage="executionProgress.payoutReady" :show-text="false" :stroke-width="10" color="#22a06b" />
+            </div>
+          </div>
+
+          <el-table :data="executionRows" stripe size="small" class="execution-table">
+            <el-table-column prop="operator_name" label="运营商" min-width="130" />
+            <el-table-column prop="order_count" label="订单数" width="90" align="center" />
+            <el-table-column prop="total_amount" label="订单总额" width="120" align="right">
+              <template #default="{ row }">¥{{ formatMoney(row.total_amount) }}</template>
+            </el-table-column>
+            <el-table-column label="资格状态" width="110" align="center">
+              <template #default="{ row }">
+                <el-tag :type="operatorQualificationType(row)" effect="dark" size="small">{{ operatorQualificationText(row) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="打款状态" width="130" align="center">
+              <template #default="{ row }">
+                <el-tag :type="operatorPayoutType(row)" size="small">{{ operatorPayoutText(row) }}</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </article>
+
+      <article class="page-panel surface-card">
+        <div class="panel-heading">
+          <div>
+            <h3 class="panel-heading__title">执行日志</h3>
+            <p class="panel-heading__desc">按时间倒序记录清分链路状态，便于回溯异常原因。</p>
+          </div>
+        </div>
+
+        <div class="log-panel">
+          <div v-for="(log, idx) in logItems" :key="idx" class="log-item">
+            <span class="log-time">[{{ log.time }}]</span>
+            <span :class="['log-text', `log-text--${log.type}`]">{{ log.message }}</span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="page-panel surface-card table-shell" v-loading="loading">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">历史清分批次</h3>
+          <p class="panel-heading__desc">支持查看批次状态、资格通过情况与各运营商清分明细。</p>
+        </div>
       </div>
 
-      <div v-else class="engine-progress">
-        <div class="flex justify-between mb-2 text-sm text-gray-600 font-bold">
-          <span>引擎高速运转中...</span>
-          <span>{{ settleProgress }}%</span>
-        </div>
-        <el-progress :percentage="settleProgress" :stroke-width="14" striped striped-flow color="#409EFF" :show-text="false" />
-        <div class="console-log mt-4">
-          <pre>{{ settleLog }}</pre>
-        </div>
-      </div>
-    </el-card>
-
-    <el-card shadow="never" class="border-0 rounded-lg">
-      <template #header>
-        <div class="font-bold text-lg flex items-center">
-          <el-icon class="mr-2 text-gray-500"><DocumentChecked /></el-icon> 历史清分批次明细
-        </div>
-      </template>
-
-      <el-table :data="tableData" v-loading="loading" stripe border style="width: 100%" :header-cell-style="{ background: '#f8f9fa' }">
-        <el-table-column prop="settle_date" label="清分归属日期" width="160" align="center">
-          <template #default="scope">
-            <strong class="text-gray-800">{{ scope.row.settle_date }}</strong>
-          </template>
+      <el-table v-if="batchRows.length" :data="batchRows" stripe border>
+        <el-table-column prop="settle_date" label="清分归属日期" min-width="130" />
+        <el-table-column prop="order_count" label="订单数" width="90" align="center" />
+        <el-table-column prop="operator_count" label="运营商数" width="95" align="center" />
+        <el-table-column prop="ready_count" label="资格通过" width="95" align="center" />
+        <el-table-column prop="hold_count" label="待补资料" width="95" align="center" />
+        <el-table-column prop="total_amount" label="订单总额" min-width="140" align="right">
+          <template #default="{ row }">¥{{ formatMoney(row.total_amount) }}</template>
         </el-table-column>
-        <el-table-column prop="order_count" label="打包订单数" width="120" align="center" />
-        <el-table-column prop="total_amount" label="全网总流水 (总充值)" min-width="160" align="right">
-          <template #default="scope">
-            <span class="text-gray-600">￥{{ scope.row.total_amount.toFixed(2) }}</span>
-          </template>
+        <el-table-column prop="platform_fee" label="平台抽成" min-width="130" align="right">
+          <template #default="{ row }">¥{{ formatMoney(row.platform_fee) }}</template>
         </el-table-column>
-        <el-table-column prop="platform_fee" label="平台截留抽成 (10%)" min-width="160" align="right">
-          <template #default="scope">
-            <strong class="text-red-500">￥{{ scope.row.platform_fee.toFixed(2) }}</strong>
-          </template>
-        </el-table-column>
-        <el-table-column prop="settle_amount" label="下发运营商总额" min-width="160" align="right">
-          <template #default="scope">
-            <strong class="text-green-600">￥{{ scope.row.settle_amount.toFixed(2) }}</strong>
-          </template>
+        <el-table-column prop="settle_amount" label="应下发金额" min-width="130" align="right">
+          <template #default="{ row }">¥{{ formatMoney(row.settle_amount) }}</template>
         </el-table-column>
         <el-table-column label="批次状态" width="120" align="center">
-          <template #default="scope">
-            <el-tag :type="scope.row.status === 1 ? 'success' : 'warning'" effect="dark">
-              {{ scope.row.status === 1 ? '入账成功' : '处理中' }}
-            </el-tag>
+          <template #default="{ row }">
+            <el-tag :type="batchStatusType(row)" effect="dark">{{ batchStatusText(row) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right" align="center">
-          <template #default="scope">
-            <el-button link type="primary" size="small">查看财报</el-button>
+        <el-table-column label="操作" width="130" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button link type="primary" :icon="View" @click="openDetail(row)">运营商明细</el-button>
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
+
+      <EmptyStateBlock
+        v-else-if="!loading"
+        title="暂无历史批次"
+        description="执行首批清分后，这里会展示按日批次记录。"
+      />
+    </section>
+
+    <el-drawer v-model="detailVisible" size="58%" :title="`运营商清分明细 · ${detailDate || '-'}`" destroy-on-close>
+      <el-alert
+        type="info"
+        :closable="false"
+        class="mb-4"
+        title="明细用于区分运营商资格状态、批次状态与打款状态，支持论文中的业务闭环说明。"
+      />
+
+      <el-table :data="detailRows" stripe border>
+        <el-table-column prop="operator_name" label="运营商" min-width="140" />
+        <el-table-column prop="order_count" label="订单数" width="90" align="center" />
+        <el-table-column prop="total_amount" label="订单总额" width="130" align="right">
+          <template #default="{ row }">¥{{ formatMoney(row.total_amount) }}</template>
+        </el-table-column>
+        <el-table-column prop="platform_fee" label="平台抽成" width="120" align="right">
+          <template #default="{ row }">¥{{ formatMoney(row.platform_fee) }}</template>
+        </el-table-column>
+        <el-table-column prop="settle_amount" label="应结算金额" width="130" align="right">
+          <template #default="{ row }">¥{{ formatMoney(row.settle_amount) }}</template>
+        </el-table-column>
+        <el-table-column label="运营商资格状态" width="130" align="center">
+          <template #default="{ row }">
+            <el-tag :type="operatorQualificationType(row)" effect="dark" size="small">{{ operatorQualificationText(row) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="打款状态" width="130" align="center">
+          <template #default="{ row }">
+            <el-tag :type="operatorPayoutType(row)" size="small">{{ operatorPayoutText(row) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="资格备注" min-width="180">
+          <template #default="{ row }">
+            <span v-if="row.hold_reason" class="text-warning">{{ row.hold_reason }}</span>
+            <span v-else class="text-muted">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-drawer>
   </div>
 </template>
 
 <style scoped>
-.page-container { display: flex; flex-direction: column; }
-.mb-6 { margin-bottom: 24px; }
-.mt-4 { margin-top: 16px; }
-.py-2 { padding-top: 8px; padding-bottom: 8px; }
-.mr-2 { margin-right: 8px; }
-.flex { display: flex; }
-.items-center { align-items: center; }
-.justify-between { justify-content: space-between; }
-.gap-4 { gap: 16px; }
-.gap-6 { gap: 24px; }
-
-/* 顶部卡片样式 */
-.stat-card { border: none; border-radius: 8px; height: 120px; }
-.stat-card:deep(.el-card__body) { display: flex; align-items: center; padding: 24px; height: 100%; box-sizing: border-box; }
-.bg-gradient-dark { background: linear-gradient(135deg, #1e293b, #334155); }
-.border-l-blue { border-left: 4px solid #409EFF; }
-.border-l-green { border-left: 4px solid #67C23A; }
-
-.stat-icon { font-size: 54px; opacity: 0.2; color: #fff; margin-right: 20px; }
-.stat-info { flex: 1; }
-.stat-title { font-size: 14px; margin-bottom: 8px; font-weight: 500; color: #909399; }
-.stat-value { font-size: 32px; font-weight: bold; font-family: 'DIN Alternate', sans-serif; }
-
-.text-gray-300 { color: #cbd5e1; }
-.text-gray-400 { color: #94a3b8; }
-.text-gray-500 { color: #64748b; }
-.text-gray-600 { color: #475569; }
-.text-gray-800 { color: #1e293b; }
-.text-white { color: #ffffff; }
-.text-blue-500 { color: #3b82f6; }
-.text-blue-600 { color: #2563eb; }
-.text-green-600 { color: #16a34a; }
-.text-red-500 { color: #ef4444; }
-
-/* 引擎控制台 */
-.engine-card { background: #f8fafc; border: 1px solid #e2e8f0; }
-.execute-btn { background: linear-gradient(135deg, #3b82f6, #2563eb); border: none; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3); font-weight: bold; letter-spacing: 1px; }
-.execute-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4); }
-
-/* 控制台日志打印区 */
-.console-log {
-  background-color: #1e293b;
-  border-radius: 6px;
-  padding: 12px;
-  height: 120px;
-  overflow-y: auto;
+.global-settle-page {
+  padding-bottom: 10px;
 }
-.console-log pre {
-  margin: 0;
-  color: #10b981; /* 荧光绿终端字色 */
-  font-family: 'Courier New', Courier, monospace;
+
+.stats-grid--settle {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.execute-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.execute-toolbar__left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.label {
+  color: var(--color-text-3);
   font-size: 13px;
-  line-height: 1.6;
+}
+
+.execute-toolbar__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-text-2);
+}
+
+.result-wrap {
+  margin-top: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(47, 116, 255, 0.16);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.84), rgba(245, 250, 255, 0.9));
+  padding: 16px;
+}
+
+.result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.result-head strong {
+  color: var(--color-text);
+}
+
+.result-head span {
+  color: var(--color-primary-strong);
+  font-size: 13px;
+}
+
+.result-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.result-item {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.result-item span {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.result-item strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--color-text);
+  font-size: 24px;
+}
+
+.progress-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.progress-card {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.progress-card__head {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.progress-card__head strong {
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.progress-card__head span {
+  color: var(--color-primary-strong);
+  font-weight: 600;
+}
+
+.execution-table {
+  margin-top: 14px;
+}
+
+.log-panel {
+  height: 460px;
+  overflow: auto;
+  border-radius: 14px;
+  padding: 14px;
+  background:
+    linear-gradient(180deg, rgba(12, 24, 48, 0.97), rgba(7, 19, 41, 0.95));
+  border: 1px solid rgba(64, 158, 255, 0.28);
+}
+
+.log-item {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.8;
+  color: #dbeafe;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.25);
+  padding: 2px 0;
+}
+
+.log-item:last-child {
+  border-bottom: none;
+}
+
+.log-time {
+  color: #93c5fd;
+  margin-right: 8px;
+}
+
+.log-text--success {
+  color: #34d399;
+}
+
+.log-text--warning {
+  color: #fbbf24;
+}
+
+.log-text--error {
+  color: #f87171;
+}
+
+.text-warning {
+  color: #e6a23c;
+}
+
+.text-muted {
+  color: #909399;
+}
+
+.mb-4 {
+  margin-bottom: 16px;
+}
+
+@media (max-width: 1280px) {
+  .stats-grid--settle {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .result-grid,
+  .progress-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .stats-grid--settle {
+    grid-template-columns: 1fr;
+  }
+
+  .execute-toolbar {
+    align-items: flex-start;
+  }
 }
 </style>

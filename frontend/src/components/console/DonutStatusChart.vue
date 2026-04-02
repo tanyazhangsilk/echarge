@@ -145,7 +145,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <article class="page-panel surface-card distribution-panel" v-loading="loading">
+  <article class="page-panel surface-card distribution-panel donut-panel" v-loading="loading">
     <div class="panel-heading">
       <div>
         <h3 class="panel-heading__title">{{ title }}</h3>
@@ -180,6 +180,7 @@ onBeforeUnmount(() => {
 .distribution-panel__chart {
   width: 100%;
   height: 220px;
+  animation: donutReveal 460ms ease both;
 }
 
 .distribution-panel__legend {
@@ -195,6 +196,12 @@ onBeforeUnmount(() => {
   padding: 10px 12px;
   border-radius: 12px;
   background: var(--color-surface-3);
+  transition: transform var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+}
+
+.distribution-panel__legend-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(17, 24, 39, 0.10);
 }
 
 .distribution-panel__dot {
@@ -210,5 +217,33 @@ onBeforeUnmount(() => {
 
 .distribution-panel__value {
   color: var(--color-text);
+}
+
+.donut-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.donut-panel::after {
+  content: '';
+  position: absolute;
+  right: -70px;
+  top: -70px;
+  width: 180px;
+  height: 180px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(64, 158, 255, 0.18), transparent 70%);
+  pointer-events: none;
+}
+
+@keyframes donutReveal {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 </style>

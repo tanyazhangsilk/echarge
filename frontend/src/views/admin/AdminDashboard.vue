@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -32,6 +32,7 @@ const baseDistributions = ref(null)
 const todoList = ref([])
 const recentActivities = ref([])
 const announcements = ref([])
+
 const adminScope = { role: ROLES.ADMIN }
 
 const orderStats = computed(() => orderStore.getOrderStats(adminScope))
@@ -92,7 +93,7 @@ const abnormalOrders = computed(() =>
     orderNo: order.orderNo,
     userName: order.userName,
     stationName: order.stationName,
-    abnormalType: order.abnormalReason || '异常',
+    abnormalType: order.abnormalReason || '订单异常',
     createdAt: (order.updatedAt || order.startTime || '').replace('T', ' ').slice(0, 16),
     status: '待复核',
   })),
@@ -109,16 +110,6 @@ const iconMap = {
   WarningFilled,
 }
 
-const currentDateText = computed(() => dayjs().format('YYYY年MM月DD日 dddd'))
-
-const summaryText = computed(() => {
-  const statsMap = Object.fromEntries(overviewStats.value.map((item) => [item.key, item]))
-  const operatorTotal = statsMap.operatorTotal?.value ?? '--'
-  const stationTotal = statsMap.stationTotal?.value ?? '--'
-  const todayOrderCount = statsMap.todayOrderCount?.value ?? '--'
-  return `当前平台已接入 ${operatorTotal} 家运营商、${stationTotal} 座电站，今日累计订单 ${todayOrderCount} 单。`
-})
-
 const decoratedOverviewStats = computed(() =>
   overviewStats.value.map((item) => ({
     ...item,
@@ -127,9 +118,66 @@ const decoratedOverviewStats = computed(() =>
   })),
 )
 
+const currentDateText = computed(() => dayjs().format('YYYY年M月D日 dddd'))
+
+const summaryText = computed(() => {
+  const statsMap = Object.fromEntries(overviewStats.value.map((item) => [item.key, item]))
+  const operatorTotal = statsMap.operatorTotal?.value ?? '--'
+  const stationTotal = statsMap.stationTotal?.value ?? '--'
+  const todayOrderCount = statsMap.todayOrderCount?.value ?? '--'
+  return `当前平台接入 ${operatorTotal} 家运营商、${stationTotal} 座站点，今日累计订单 ${todayOrderCount} 单。`
+})
+
+const todayCompletionRate = computed(() => {
+  const total = allOrders.value.length
+  if (!total) return 0
+  const completed = allOrders.value.filter((item) => item.status === 'completed').length
+  return Math.round((completed / total) * 100)
+})
+
+const opsPulse = computed(() => {
+  const operatorItems = distributions.value?.operatorAudit?.items || []
+  const stationItems = distributions.value?.stationStatus?.items || []
+  const operatorTotal = Number(distributions.value?.operatorAudit?.total || 0)
+  const stationTotal = Number(distributions.value?.stationStatus?.total || 0)
+
+  const inReview = operatorItems.find((item) => String(item.label).includes('审核'))?.value || 0
+  const pendingStation = stationItems.find((item) => String(item.label).includes('待'))?.value || 0
+
+  return [
+    {
+      key: 'operator-review',
+      label: '运营商审核进度',
+      value: operatorTotal ? Math.round(((operatorTotal - inReview) / operatorTotal) * 100) : 100,
+      desc: `待审核 ${inReview} 家`,
+      tone: 'primary',
+    },
+    {
+      key: 'station-online',
+      label: '站点上架进度',
+      value: stationTotal ? Math.round(((stationTotal - pendingStation) / stationTotal) * 100) : 100,
+      desc: `待上架 ${pendingStation} 座`,
+      tone: 'success',
+    },
+    {
+      key: 'order-safety',
+      label: '订单风控健康度',
+      value: Math.max(0, 100 - orderStats.value.abnormalCount * 6),
+      desc: `异常订单 ${orderStats.value.abnormalCount} 单`,
+      tone: 'warning',
+    },
+  ]
+})
+
 const abnormalTagType = (status) => {
   if (status === '处理中') return 'warning'
   if (status === '待复核') return 'danger'
+  return 'info'
+}
+
+const todoPriorityType = (priority) => {
+  if (String(priority).includes('高')) return 'danger'
+  if (String(priority).includes('协同') || String(priority).includes('处理中')) return 'warning'
   return 'info'
 }
 
@@ -150,7 +198,7 @@ const loadData = async () => {
     announcements.value = data.announcements || []
   } catch (error) {
     console.error(error)
-    ElMessage.error('平台工作台加载失败，请检查 mock 数据或接口配置。')
+    ElMessage.error('平台工作台加载失败，请检查 mock 数据或接口配置')
   } finally {
     loading.value = false
   }
@@ -171,29 +219,45 @@ onMounted(loadData)
   <div class="page-shell admin-dashboard">
     <PageSectionHeader
       eyebrow="Admin Console"
-      title="平台工作台"
-      description="展示平台运营、审核和订单概况"
-      chip="平台管理员视角"
+      title="平台运营总览"
+      description="聚焦审核、订单、清分与风险预警的一体化驾驶舱"
+      chip="管理员视角"
     >
       <template #actions>
         <div class="hero-meta">
           <span class="hero-meta__date">{{ currentDateText }}</span>
           <el-button @click="loadData">刷新数据</el-button>
-          <el-button type="primary" @click="router.push('/admin/institutions')">运营商审核</el-button>
+          <el-button type="primary" @click="router.push('/admin/finance')">进入清分中心</el-button>
         </div>
       </template>
     </PageSectionHeader>
 
     <section class="hero-banner surface-card">
       <div class="hero-banner__content">
-        <p class="hero-banner__label">平台概览</p>
-        <h2 class="hero-banner__title">面向平台运营、审核与风控的一体化首页</h2>
+        <p class="hero-banner__label">Platform Pulse</p>
+        <h2 class="hero-banner__title">面向平台治理的可视化运营中枢</h2>
         <p class="hero-banner__desc">{{ summaryText }}</p>
+
+        <div class="hero-banner__quick-actions">
+          <el-button plain @click="router.push('/admin/institutions')">运营商审核</el-button>
+          <el-button plain @click="router.push('/admin/institutions/stations')">站点审核</el-button>
+          <el-button type="primary" plain @click="router.push('/admin/orders/abnormal')">异常订单</el-button>
+        </div>
       </div>
-      <div class="hero-banner__actions">
-        <el-button plain @click="router.push('/admin/institutions/stations')">电站审核</el-button>
-        <el-button plain @click="router.push('/admin/finance')">进入清分中心</el-button>
-        <el-button type="primary" plain @click="router.push('/admin/orders/abnormal')">异常订单监管</el-button>
+
+      <div class="hero-banner__dashboard">
+        <div class="dashboard-ring">
+          <el-progress type="dashboard" :percentage="todayCompletionRate" :stroke-width="14" color="#2f74ff" />
+          <div class="dashboard-ring__label">
+            <strong>{{ todayCompletionRate }}%</strong>
+            <span>订单完成率</span>
+          </div>
+        </div>
+        <div class="dashboard-meta">
+          <p>实时充电中 {{ orderStats.chargingCount }} 单</p>
+          <p>今日异常 {{ orderStats.abnormalCount }} 单</p>
+          <p>累计交易 ¥{{ Number(orderStats.todayTotalAmount || 0).toLocaleString() }}</p>
+        </div>
       </div>
     </section>
 
@@ -213,59 +277,31 @@ onMounted(loadData)
       />
     </section>
 
-    <section class="panel-grid">
-      <TrendAreaChart
-        title="近 7 日订单趋势图"
-        subtitle="展示平台近 7 日订单规模变化，可直接替换为订单统计接口。"
-        :data="orderTrend"
-        y-field="orderCount"
-        :loading="loading"
-      />
-      <TrendAreaChart
-        title="近 7 日交易额趋势图"
-        subtitle="按自然日展示平台交易额走势，便于观察日度交易波动。"
-        :data="revenueTrend"
-        y-field="revenue"
-        color="#22a06b"
-        area-color="rgba(34, 160, 107, 0.16)"
-        :value-formatter="(value) => `¥${Number(value).toLocaleString()}`"
-        :loading="loading"
-      />
-    </section>
-
-    <section class="panel-grid distribution-grid">
-      <DonutStatusChart
-        title="运营商审核状态分布"
-        subtitle="反映平台当前运营商接入审核整体情况。"
-        :items="distributions?.operatorAudit?.items || []"
-        :total="distributions?.operatorAudit?.total"
-        :total-label="distributions?.operatorAudit?.totalLabel"
-        :loading="loading"
-      />
-      <DonutStatusChart
-        title="电站状态分布"
-        subtitle="聚焦已运营、维护中和待审核电站结构。"
-        :items="distributions?.stationStatus?.items || []"
-        :total="distributions?.stationStatus?.total"
-        :total-label="distributions?.stationStatus?.totalLabel"
-        :loading="loading"
-      />
-      <DonutStatusChart
-        title="订单状态分布"
-        subtitle="从运营视角查看今日订单完成与异常占比。"
-        :items="distributions?.orderStatus?.items || []"
-        :total="distributions?.orderStatus?.total"
-        :total-label="distributions?.orderStatus?.totalLabel"
-        :loading="loading"
-      />
-    </section>
-
     <section class="panel-grid panel-grid--wide">
+      <article class="page-panel surface-card">
+        <div class="panel-heading">
+          <div>
+            <h3 class="panel-heading__title">运营脉冲</h3>
+            <p class="panel-heading__desc">通过关键进度条快速感知平台当前健康状态与优先处理方向。</p>
+          </div>
+        </div>
+        <div class="ops-pulse-list">
+          <div v-for="item in opsPulse" :key="item.key" class="ops-pulse-item">
+            <div class="ops-pulse-item__head">
+              <strong>{{ item.label }}</strong>
+              <span>{{ item.value }}%</span>
+            </div>
+            <el-progress :percentage="item.value" :stroke-width="10" :show-text="false" :color="item.tone === 'primary' ? '#2f74ff' : item.tone === 'success' ? '#22a06b' : '#d9911f'" />
+            <p>{{ item.desc }}</p>
+          </div>
+        </div>
+      </article>
+
       <article class="page-panel surface-card" v-loading="loading">
         <div class="panel-heading">
           <div>
-            <h3 class="panel-heading__title">待处理事项</h3>
-            <p class="panel-heading__desc">集中展示平台当前需要优先跟进的审核、财务和异常事务。</p>
+            <h3 class="panel-heading__title">待办聚焦</h3>
+            <p class="panel-heading__desc">集中展示当前最影响平台流转效率的任务。</p>
           </div>
         </div>
 
@@ -280,7 +316,7 @@ onMounted(loadData)
             <div class="todo-item__main">
               <div class="todo-item__title-row">
                 <strong>{{ item.title }}</strong>
-                <el-tag size="small" effect="plain">{{ item.priority }}</el-tag>
+                <el-tag size="small" :type="todoPriorityType(item.priority)" effect="plain">{{ item.priority }}</el-tag>
               </div>
               <p class="todo-item__desc">{{ item.description }}</p>
             </div>
@@ -294,23 +330,72 @@ onMounted(loadData)
         <EmptyStateBlock
           v-else-if="!loading"
           title="当前暂无待处理事项"
-          description="待办数据为空时，将在这里展示默认空状态。"
+          description="当待办为空时，会在这里展示默认空状态。"
         />
       </article>
+    </section>
 
+    <section class="panel-grid">
+      <TrendAreaChart
+        title="近 7 日订单趋势"
+        subtitle="按自然日呈现订单规模变化，便于观察高峰波动。"
+        :data="orderTrend"
+        y-field="orderCount"
+        :loading="loading"
+      />
+      <TrendAreaChart
+        title="近 7 日交易趋势"
+        subtitle="按日展示平台交易金额，用于运营复盘与财务跟踪。"
+        :data="revenueTrend"
+        y-field="revenue"
+        color="#22a06b"
+        area-color="rgba(34, 160, 107, 0.16)"
+        :value-formatter="(value) => `¥${Number(value).toLocaleString()}`"
+        :loading="loading"
+      />
+    </section>
+
+    <section class="panel-grid distribution-grid">
+      <DonutStatusChart
+        title="运营商审核分布"
+        subtitle="反映平台当前运营商准入审核结构。"
+        :items="distributions?.operatorAudit?.items || []"
+        :total="distributions?.operatorAudit?.total"
+        :total-label="distributions?.operatorAudit?.totalLabel"
+        :loading="loading"
+      />
+      <DonutStatusChart
+        title="站点状态分布"
+        subtitle="观察已运营、维护中与待审核站点占比。"
+        :items="distributions?.stationStatus?.items || []"
+        :total="distributions?.stationStatus?.total"
+        :total-label="distributions?.stationStatus?.totalLabel"
+        :loading="loading"
+      />
+      <DonutStatusChart
+        title="订单状态分布"
+        subtitle="从运营视角查看完成、实时与异常订单结构。"
+        :items="distributions?.orderStatus?.items || []"
+        :total="distributions?.orderStatus?.total"
+        :total-label="distributions?.orderStatus?.totalLabel"
+        :loading="loading"
+      />
+    </section>
+
+    <section class="panel-grid panel-grid--wide">
       <article class="page-panel surface-card table-shell" v-loading="loading">
         <div class="panel-heading">
           <div>
             <h3 class="panel-heading__title">最近异常订单</h3>
-            <p class="panel-heading__desc">用于展示最新进入异常流程的订单，并支持跳转到异常订单监管页面。</p>
+            <p class="panel-heading__desc">展示最新进入异常流程的订单，支持一键跳转详情处理。</p>
           </div>
         </div>
 
         <el-table v-if="abnormalOrders.length" :data="abnormalOrders">
           <el-table-column prop="orderNo" label="订单编号" min-width="180" />
           <el-table-column prop="userName" label="用户" width="110" />
-          <el-table-column prop="stationName" label="电站" min-width="180" />
-          <el-table-column prop="abnormalType" label="异常类型" min-width="150" />
+          <el-table-column prop="stationName" label="站点" min-width="180" />
+          <el-table-column prop="abnormalType" label="异常类型" min-width="160" />
           <el-table-column prop="createdAt" label="创建时间" width="150" />
           <el-table-column label="状态" width="110">
             <template #default="{ row }">
@@ -327,21 +412,19 @@ onMounted(loadData)
         <EmptyStateBlock
           v-else-if="!loading"
           title="暂无异常订单"
-          description="当平台没有进入异常流程的订单时，这里会展示空状态。"
+          description="平台没有进入异常流程的订单时，将显示空状态。"
         />
       </article>
-    </section>
 
-    <section class="panel-grid">
       <article class="page-panel surface-card" v-loading="loading">
         <div class="panel-heading">
           <div>
-            <h3 class="panel-heading__title">最近动态</h3>
-            <p class="panel-heading__desc">记录平台最新发生的审核、风控和配置调整事件。</p>
+            <h3 class="panel-heading__title">平台公告与动态</h3>
+            <p class="panel-heading__desc">用于论文截图展示平台治理闭环，也便于后续接入真实消息流。</p>
           </div>
         </div>
 
-        <div v-if="recentActivities.length" class="activity-list">
+        <div class="activity-list" v-if="recentActivities.length">
           <div v-for="item in recentActivities" :key="item.id" class="activity-item">
             <div class="activity-item__dot"></div>
             <div class="activity-item__content">
@@ -354,22 +437,7 @@ onMounted(loadData)
           </div>
         </div>
 
-        <EmptyStateBlock
-          v-else-if="!loading"
-          title="暂无最近动态"
-          description="后续接入动态流接口后，可在此处展示更完整的平台事件。"
-        />
-      </article>
-
-      <article class="page-panel surface-card" v-loading="loading">
-        <div class="panel-heading">
-          <div>
-            <h3 class="panel-heading__title">平台公告</h3>
-            <p class="panel-heading__desc">适合论文截图展示，也为后续公告接口预留清晰结构。</p>
-          </div>
-        </div>
-
-        <div v-if="announcements.length" class="info-list">
+        <div class="info-list" v-if="announcements.length">
           <div v-for="item in announcements" :key="item.id" class="info-item notice-card">
             <div class="notice-card__head">
               <strong class="info-item__title">{{ item.title }}</strong>
@@ -382,9 +450,9 @@ onMounted(loadData)
         </div>
 
         <EmptyStateBlock
-          v-else-if="!loading"
-          title="暂无平台公告"
-          description="公告数据为空时，这里会保留空状态占位。"
+          v-if="!loading && !recentActivities.length && !announcements.length"
+          title="暂无平台动态"
+          description="后续接入消息流接口后，这里会展示更完整的运营事件。"
         />
       </article>
     </section>
@@ -410,25 +478,21 @@ onMounted(loadData)
 }
 
 .hero-banner {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 20px;
   padding: 26px 28px;
   background:
-    radial-gradient(circle at right top, rgba(47, 116, 255, 0.16), transparent 34%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 252, 0.94));
-}
-
-.hero-banner__content {
-  max-width: 760px;
+    radial-gradient(circle at 82% 10%, rgba(47, 116, 255, 0.2), transparent 34%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 252, 0.95));
+  animation: fadeUp 520ms ease both;
 }
 
 .hero-banner__label {
   margin: 0;
   color: var(--color-primary-strong);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -446,10 +510,56 @@ onMounted(loadData)
   line-height: 1.7;
 }
 
-.hero-banner__actions {
+.hero-banner__quick-actions {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.hero-banner__dashboard {
+  border-radius: 18px;
+  padding: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(244, 248, 252, 0.72));
+  border: 1px solid rgba(47, 116, 255, 0.14);
+}
+
+.dashboard-ring {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.dashboard-ring__label {
+  position: absolute;
+  inset: 0;
   display: grid;
-  gap: 12px;
-  min-width: 220px;
+  place-content: center;
+  text-align: center;
+}
+
+.dashboard-ring__label strong {
+  font-size: 28px;
+  color: var(--color-text);
+  line-height: 1;
+}
+
+.dashboard-ring__label span {
+  margin-top: 4px;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.dashboard-meta {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.dashboard-meta p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-2);
 }
 
 .stats-grid--dashboard {
@@ -458,6 +568,42 @@ onMounted(loadData)
 
 .distribution-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ops-pulse-list {
+  display: grid;
+  gap: 14px;
+}
+
+.ops-pulse-item {
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(246, 249, 253, 0.9));
+}
+
+.ops-pulse-item__head {
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ops-pulse-item__head strong {
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.ops-pulse-item__head span {
+  color: var(--color-primary-strong);
+  font-weight: 700;
+}
+
+.ops-pulse-item p {
+  margin: 10px 0 0;
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 
 .todo-list,
@@ -485,10 +631,6 @@ onMounted(loadData)
   transform: translateY(-2px);
   border-color: rgba(47, 116, 255, 0.22);
   box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
-}
-
-.todo-item__main {
-  min-width: 0;
 }
 
 .todo-item__title-row {
@@ -573,13 +715,22 @@ onMounted(loadData)
   gap: 12px;
 }
 
-:root[data-theme='dark'] .hero-banner {
-  background:
-    radial-gradient(circle at right top, rgba(47, 116, 255, 0.22), transparent 34%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 1280px) {
+  .hero-banner {
+    grid-template-columns: 1fr;
+  }
+
   .distribution-grid {
     grid-template-columns: 1fr;
   }
@@ -587,7 +738,6 @@ onMounted(loadData)
 
 @media (max-width: 768px) {
   .hero-meta,
-  .hero-banner,
   .todo-item,
   .activity-item__head {
     flex-direction: column;
@@ -598,7 +748,6 @@ onMounted(loadData)
     padding: 20px;
   }
 
-  .hero-banner__actions,
   .stats-grid--dashboard {
     grid-template-columns: 1fr;
   }

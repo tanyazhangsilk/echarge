@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Calendar, CircleCheck, CloseBold, OfficeBuilding } from '@element-plus/icons-vue'
@@ -42,7 +42,7 @@ const tableStats = computed(() => {
 
   return [
     { label: '申请总数', value: total, hint: '当前平台运营商入驻申请总量', tone: 'primary', icon: OfficeBuilding },
-    { label: '待审核数量', value: pending, hint: '等待平台管理员处理的申请', tone: 'warning', icon: Calendar },
+    { label: '待审核数量', value: pending, hint: '等待管理员处理', tone: 'warning', icon: Calendar },
     { label: '已通过数量', value: approved, hint: '已进入后续接入与配置阶段', tone: 'success', icon: CircleCheck },
     { label: '已驳回数量', value: rejected, hint: '需补充材料后重新提交', tone: 'danger', icon: CloseBold },
   ]
@@ -63,7 +63,7 @@ const pendingFocusList = computed(() =>
     .map((item) => ({
       id: item.id,
       operatorName: item.operatorName,
-      meta: `${item.region} · ${item.stationCount} 座电站 / ${item.chargerCount} 个充电桩`,
+      meta: `${item.region} · ${item.stationCount} 座站 / ${item.chargerCount} 个枪口`,
       submittedAt: item.submittedAt,
       attachmentSummary: createAuditSummary(item.attachments),
     })),
@@ -105,6 +105,17 @@ const latestUpdatedAt = computed(() => {
     .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]
 })
 
+const pipelineProgress = computed(() => {
+  const total = records.value.length || 1
+  const pending = records.value.filter((item) => item.status === 'pending').length
+  const approved = records.value.filter((item) => item.status === 'approved').length
+  return {
+    intake: 100,
+    review: Math.round(((total - pending) / total) * 100),
+    pass: Math.round((approved / total) * 100),
+  }
+})
+
 const loadData = async () => {
   loading.value = true
   try {
@@ -112,7 +123,7 @@ const loadData = async () => {
     records.value = data.records || []
   } catch (error) {
     console.error(error)
-    ElMessage.error('运营商审核页面加载失败，请检查 mock 数据或接口配置。')
+    ElMessage.error('运营商审核页面加载失败，请检查 mock 数据或接口配置')
   } finally {
     loading.value = false
   }
@@ -126,7 +137,7 @@ const resetFilters = () => {
 }
 
 const handleSearch = () => {
-  ElMessage.success(`已按条件筛选，共匹配 ${filteredRecords.value.length} 条申请记录。`)
+  ElMessage.success(`已按条件筛选，共匹配 ${filteredRecords.value.length} 条申请记录`)
 }
 
 const openDetail = (record: OperatorAuditRecord) => {
@@ -184,7 +195,7 @@ const handleReviewSubmit = (payload: { status: ReviewStatus; comment: string }) 
   syncCurrentRecord(record.id)
   dialogVisible.value = false
 
-  ElMessage.success(`${record.operatorName} 已${payload.status === 'approved' ? '审核通过' : '驳回'}，状态与审核记录已更新。`)
+  ElMessage.success(`${record.operatorName} 已${payload.status === 'approved' ? '审核通过' : '驳回'}，状态与审核记录已更新`)
 }
 
 onMounted(loadData)
@@ -195,8 +206,8 @@ onMounted(loadData)
     <PageSectionHeader
       eyebrow="Operator Admission Review"
       title="运营商入驻审核"
-      description="用于审核申请入驻平台的充电运营商资料与资质信息"
-      chip="平台管理员核心业务页"
+      description="用于审核申请入驻平台的充电运营商资质信息与材料完整性。"
+      chip="管理员核心业务页"
     >
       <template #actions>
         <span class="header-meta">最近处理时间：{{ latestUpdatedAt }}</span>
@@ -222,7 +233,7 @@ onMounted(loadData)
         <div class="panel-heading">
           <div>
             <h3 class="panel-heading__title">筛选与检索</h3>
-            <p class="panel-heading__desc">支持按运营商、联系人、审核状态和提交时间范围进行筛选，结构已预留真实查询接口替换点。</p>
+            <p class="panel-heading__desc">支持按运营商、联系人、审核状态和提交时间范围进行筛选。</p>
           </div>
         </div>
 
@@ -263,8 +274,32 @@ onMounted(loadData)
       <article class="page-panel surface-card">
         <div class="panel-heading">
           <div>
-            <h3 class="panel-heading__title">审核概览</h3>
-            <p class="panel-heading__desc">突出当前待处理数量、状态分布与优先关注申请，方便管理员快速进入审核流。</p>
+            <h3 class="panel-heading__title">审核流程状态</h3>
+            <p class="panel-heading__desc">展示准入流程进度和当前优先待审队列。</p>
+          </div>
+        </div>
+
+        <div class="pipeline-grid">
+          <div class="pipeline-item">
+            <div class="pipeline-item__head">
+              <span>资料接收完成率</span>
+              <strong>{{ pipelineProgress.intake }}%</strong>
+            </div>
+            <el-progress :percentage="pipelineProgress.intake" :show-text="false" :stroke-width="10" />
+          </div>
+          <div class="pipeline-item">
+            <div class="pipeline-item__head">
+              <span>审核流转完成率</span>
+              <strong>{{ pipelineProgress.review }}%</strong>
+            </div>
+            <el-progress :percentage="pipelineProgress.review" :show-text="false" :stroke-width="10" color="#2f74ff" />
+          </div>
+          <div class="pipeline-item">
+            <div class="pipeline-item__head">
+              <span>通过转化率</span>
+              <strong>{{ pipelineProgress.pass }}%</strong>
+            </div>
+            <el-progress :percentage="pipelineProgress.pass" :show-text="false" :stroke-width="10" color="#22a06b" />
           </div>
         </div>
 
@@ -313,7 +348,7 @@ onMounted(loadData)
       <div class="panel-heading">
         <div>
           <h3 class="panel-heading__title">申请列表</h3>
-          <p class="panel-heading__desc">集中展示运营商申请基础信息、审核状态与最近处理记录，适合作为平台后台核心审核工作台。</p>
+          <p class="panel-heading__desc">集中展示运营商申请基础信息、审核状态与最近处理记录。</p>
         </div>
       </div>
 
@@ -403,7 +438,37 @@ onMounted(loadData)
   line-height: 1;
 }
 
+.pipeline-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.pipeline-item {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(243, 246, 251, 0.9));
+}
+
+.pipeline-item__head {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pipeline-item__head span {
+  color: var(--color-text-2);
+  font-size: 13px;
+}
+
+.pipeline-item__head strong {
+  color: var(--color-primary-strong);
+}
+
 .audit-distribution {
+  margin-top: 14px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
@@ -512,11 +577,14 @@ onMounted(loadData)
   .operator-audit-filter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .audit-distribution {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 768px) {
-  .operator-audit-filter-grid,
-  .audit-distribution {
+  .operator-audit-filter-grid {
     grid-template-columns: 1fr;
   }
 

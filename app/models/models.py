@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -87,6 +88,11 @@ class Operator(Base, BaseModel):
     invoices: Mapped[List["Invoice"]] = relationship("Invoice", back_populates="operator", lazy="selectin")
     bank_cards: Mapped[List["OperatorBankCard"]] = relationship(
         "OperatorBankCard",
+        back_populates="operator",
+        lazy="selectin",
+    )
+    operator_settlements: Mapped[List["OperatorSettlementRecord"]] = relationship(
+        "OperatorSettlementRecord",
         back_populates="operator",
         lazy="selectin",
     )
@@ -311,6 +317,61 @@ class UserCoupon(Base, BaseModel):
 
     user: Mapped["User"] = relationship("User", back_populates="user_coupons", lazy="joined")
     coupon: Mapped["Coupon"] = relationship("Coupon", back_populates="user_coupons", lazy="joined")
+
+
+class OperatorSettlementRecord(Base):
+    __tablename__ = "trade_operator_settlements"
+    __table_args__ = (
+        Index("ix_trade_operator_settlements_settle_date", "settle_date"),
+        Index("ix_trade_operator_settlements_operator_id", "operator_id"),
+        Index("ix_trade_operator_settlements_status", "status"),
+        UniqueConstraint("settle_date", "operator_id", name="uq_trade_operator_settlements_date_operator"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
+    settle_date: Mapped[datetime.date] = mapped_column(Date, nullable=False, comment="清分归属日期")
+    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), nullable=False, comment="运营商ID")
+    order_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="订单数量")
+    total_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        default=Decimal("0.00"),
+        nullable=False,
+        comment="订单总金额",
+    )
+    platform_rate: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4),
+        default=Decimal("0.1000"),
+        nullable=False,
+        comment="平台抽成比例",
+    )
+    platform_fee: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        default=Decimal("0.00"),
+        nullable=False,
+        comment="平台抽成金额",
+    )
+    settle_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        default=Decimal("0.00"),
+        nullable=False,
+        comment="应结算金额",
+    )
+    status: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="打款状态(0-待打款 1-已打款 2-挂起待补资料)",
+    )
+    hold_reason: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="挂起原因")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        default=func.now(),
+        onupdate=func.now(),
+        comment="最后更新时间",
+    )
+
+    operator: Mapped["Operator"] = relationship("Operator", back_populates="operator_settlements", lazy="joined")
 
 
 class SettlementRecord(Base):

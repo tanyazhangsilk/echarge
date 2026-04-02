@@ -2,7 +2,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search } from '@element-plus/icons-vue'
+import { Refresh, Search, WarningFilled, DataAnalysis, Money, Bell } from '@element-plus/icons-vue'
+import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
+import MetricCard from '../../components/console/MetricCard.vue'
+import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import { ROLES, getStoredOperatorId } from '../../config/permissions'
 import { useOrderStore } from '../../stores/order'
 import type { Order } from '../../types/order'
@@ -75,6 +78,72 @@ const tableData = computed(() => {
   return filteredOrders.value.slice(start, start + pageSize.value)
 })
 
+const summaryCards = computed(() => {
+  const totalAmount = filteredOrders.value.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0)
+  const highRiskCount = filteredOrders.value.filter((item) => {
+    const reason = String(item.abnormalReason || '')
+    return reason.includes('支付') || reason.includes('中断') || reason.includes('校验')
+  }).length
+
+  const reasonSet = new Set(filteredOrders.value.map((item) => item.abnormalReason || '未知'))
+
+  return [
+    {
+      label: '异常订单总数',
+      value: filteredOrders.value.length,
+      suffix: ' 单',
+      trend: '异常工单池',
+      trendLabel: '待人工复核处理',
+      tone: 'danger',
+      icon: WarningFilled,
+    },
+    {
+      label: '高风险异常',
+      value: highRiskCount,
+      suffix: ' 单',
+      trend: '建议优先处理',
+      trendLabel: '支付/中断类异常',
+      tone: 'warning',
+      icon: Bell,
+    },
+    {
+      label: '涉异常金额',
+      value: totalAmount.toFixed(2),
+      prefix: '¥',
+      trend: '金额影响范围',
+      trendLabel: '用于财务风险评估',
+      tone: 'primary',
+      icon: Money,
+    },
+    {
+      label: '异常类型数',
+      value: reasonSet.size,
+      suffix: ' 类',
+      trend: '问题覆盖面',
+      trendLabel: '用于运营改进追踪',
+      tone: 'info',
+      icon: DataAnalysis,
+    },
+  ]
+})
+
+const reasonDistribution = computed(() => {
+  const map = new Map<string, number>()
+  filteredOrders.value.forEach((item) => {
+    const reason = item.abnormalReason || '未知异常'
+    map.set(reason, (map.get(reason) || 0) + 1)
+  })
+  const list = Array.from(map.entries()).map(([reason, count]) => ({ reason, count }))
+  const totalCount = list.reduce((sum, item) => sum + item.count, 0)
+  return list
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+    .map((item) => ({
+      ...item,
+      percent: totalCount ? Math.round((item.count / totalCount) * 100) : 0,
+    }))
+})
+
 const formatMoney = (value: number): string =>
   `¥${Number(value || 0).toLocaleString('zh-CN', {
     minimumFractionDigits: 2,
@@ -143,47 +212,110 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div :class="$style.page">
+  <div class="page-shell abnormal-orders-page">
+    <PageSectionHeader
+      eyebrow="Abnormal Orders"
+      :title="isAdmin ? '异常订单监管' : '异常订单处理'"
+      :description="isAdmin ? '全平台异常订单监管与复核看板。' : '本机构异常订单筛查与处理看板。'"
+      :chip="isAdmin ? '管理员风控视角' : '运营商风控视角'"
+    >
+      <template #actions>
+        <el-button type="primary" :icon="Search" :loading="loading" @click="handleSearch">查询</el-button>
+        <el-button :icon="Refresh" :disabled="loading" @click="handleReset">重置</el-button>
+      </template>
+    </PageSectionHeader>
+
     <el-alert
       :title="isAdmin ? '全平台异常订单监管中，请及时复核' : '本机构存在异常订单，请及时处理并复核'"
       type="warning"
       show-icon
       :closable="false"
-      :class="$style.alert"
+      class="risk-alert"
     />
 
-    <el-card shadow="never" :class="$style.filterCard">
-      <el-form :model="searchForm" :class="$style.filterForm" label-width="auto">
-        <div :class="$style.filterRow">
-          <el-form-item label="订单号" :class="$style.formItem">
-            <el-input v-model="searchForm.orderNo" placeholder="支持模糊查询" clearable style="width: 210px" />
-          </el-form-item>
-          <el-form-item :label="isAdmin ? '手机号/用户/运营商' : '手机号/用户'" :class="$style.formItem">
-            <el-input v-model="searchForm.keyword" placeholder="支持手机号、用户名关键词" clearable style="width: 220px" />
-          </el-form-item>
-          <el-form-item label="场站" :class="$style.formItem">
-            <el-select v-model="searchForm.stationName" placeholder="全部场站" clearable style="width: 200px">
-              <el-option v-for="s in stationOptions" :key="s" :label="s" :value="s" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="异常原因" :class="$style.formItem">
-            <el-input v-model="searchForm.abnormalReason" placeholder="输入异常关键词" clearable style="width: 220px" />
-          </el-form-item>
+    <section class="stats-grid stats-grid--abnormal">
+      <MetricCard
+        v-for="item in summaryCards"
+        :key="item.label"
+        :label="item.label"
+        :value="item.value"
+        :prefix="item.prefix"
+        :suffix="item.suffix"
+        :trend="item.trend"
+        :trend-label="item.trendLabel"
+        :tone="item.tone"
+        :icon="item.icon"
+      />
+    </section>
 
-          <div :class="$style.actions">
-            <el-button type="primary" :icon="Search" :loading="loading" @click="handleSearch">查询</el-button>
-            <el-button :icon="Refresh" :disabled="loading" @click="handleReset">重置</el-button>
+    <section class="panel-grid panel-grid--wide">
+      <article class="page-panel surface-card">
+        <div class="panel-heading">
+          <div>
+            <h3 class="panel-heading__title">筛选条件</h3>
+            <p class="panel-heading__desc">支持按订单号、用户、场站和异常原因筛选。</p>
           </div>
         </div>
-      </el-form>
-    </el-card>
 
-    <el-card shadow="never" :class="$style.tableCard">
+        <el-form :model="searchForm" class="filter-form" label-width="auto">
+          <div class="filter-row">
+            <el-form-item label="订单号" class="form-item">
+              <el-input v-model="searchForm.orderNo" placeholder="支持模糊查询" clearable style="width: 210px" />
+            </el-form-item>
+            <el-form-item :label="isAdmin ? '手机号/用户/运营商' : '手机号/用户'" class="form-item">
+              <el-input v-model="searchForm.keyword" placeholder="支持手机号、用户名关键词" clearable style="width: 220px" />
+            </el-form-item>
+            <el-form-item label="场站" class="form-item">
+              <el-select v-model="searchForm.stationName" placeholder="全部场站" clearable style="width: 200px">
+                <el-option v-for="s in stationOptions" :key="s" :label="s" :value="s" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="异常原因" class="form-item">
+              <el-input v-model="searchForm.abnormalReason" placeholder="输入异常关键词" clearable style="width: 220px" />
+            </el-form-item>
+          </div>
+        </el-form>
+      </article>
+
+      <article class="page-panel surface-card">
+        <div class="panel-heading">
+          <div>
+            <h3 class="panel-heading__title">异常原因分布</h3>
+            <p class="panel-heading__desc">按当前筛选结果统计 Top 异常原因，用于优先级排序。</p>
+          </div>
+        </div>
+
+        <div class="reason-list" v-if="reasonDistribution.length">
+          <div v-for="item in reasonDistribution" :key="item.reason" class="reason-item">
+            <div class="reason-item__head">
+              <strong>{{ item.reason }}</strong>
+              <span>{{ item.count }} 单 / {{ item.percent }}%</span>
+            </div>
+            <el-progress :percentage="item.percent" :show-text="false" :stroke-width="10" color="#f56c6c" />
+          </div>
+        </div>
+
+        <EmptyStateBlock
+          v-else
+          title="暂无异常类型分布"
+          description="当前筛选条件下没有异常记录。"
+        />
+      </article>
+    </section>
+
+    <section class="page-panel surface-card table-shell">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">异常订单列表</h3>
+          <p class="panel-heading__desc">共 {{ total }} 条记录，支持进入详情页处理。</p>
+        </div>
+      </div>
+
       <el-table
+        v-if="tableData.length"
         :data="tableData"
         stripe
         highlight-current-row
-        :class="$style.table"
         v-loading="loading"
         element-loading-text="加载中..."
       >
@@ -201,12 +333,12 @@ onMounted(async () => {
         <el-table-column prop="startTime" label="开始时间" width="170" />
         <el-table-column prop="chargeAmount" label="充电量(kWh)" width="120" align="right">
           <template #default="{ row }">
-            <span :class="$style.num">{{ Number(row.chargeAmount).toFixed(2) }}</span>
+            <span class="num">{{ Number(row.chargeAmount).toFixed(2) }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="totalAmount" label="总金额" width="120" align="right">
           <template #default="{ row }">
-            <span :class="$style.money">{{ formatMoney(row.totalAmount) }}</span>
+            <span class="money">{{ formatMoney(row.totalAmount) }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="abnormalReason" label="异常原因" min-width="170" show-overflow-tooltip />
@@ -222,7 +354,13 @@ onMounted(async () => {
         </el-table-column>
       </el-table>
 
-      <div :class="$style.pagination">
+      <EmptyStateBlock
+        v-else-if="!loading"
+        title="暂无异常订单"
+        description="当前筛选条件下无异常订单。"
+      />
+
+      <div class="pagination-wrap">
         <el-pagination
           v-model:current-page="currentPage"
           v-model:page-size="pageSize"
@@ -233,58 +371,66 @@ onMounted(async () => {
           @current-change="handleCurrentChange"
         />
       </div>
-    </el-card>
+    </section>
   </div>
 </template>
 
-<style module scoped>
-.page {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+<style scoped>
+.abnormal-orders-page {
+  padding-bottom: 8px;
+}
+
+.risk-alert {
+  border-radius: 10px;
+}
+
+.stats-grid--abnormal {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.filter-form {
   width: 100%;
 }
 
-.alert {
-  border-radius: 8px;
-}
-
-.filterCard {
-  border-radius: 8px;
-}
-
-.filterForm {
-  width: 100%;
-}
-
-.filterRow {
+.filter-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
 }
 
-.formItem {
+.form-item {
   margin-bottom: 0;
 }
 
-.actions {
-  margin-left: auto;
+.reason-list {
+  display: grid;
+  gap: 10px;
+}
+
+.reason-item {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(245, 108, 108, 0.18);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 248, 248, 0.9));
+}
+
+.reason-item__head {
+  margin-bottom: 8px;
   display: flex;
-  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.tableCard {
-  border-radius: 8px;
+.reason-item__head strong {
+  color: var(--color-text);
+  font-size: 13px;
 }
 
-.table :deep(.el-table__header-wrapper th.el-table__cell) {
-  background: #f5f7fa;
-  font-size: 14px;
-}
-
-.table :deep(.el-table__row) {
-  height: 48px;
+.reason-item__head span {
+  color: var(--color-text-2);
+  font-size: 12px;
 }
 
 .num {
@@ -297,17 +443,21 @@ onMounted(async () => {
   color: #303133;
 }
 
-.pagination {
+.pagination-wrap {
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
 }
 
+@media (max-width: 1280px) {
+  .stats-grid--abnormal {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 768px) {
-  .actions {
-    margin-left: 0;
-    width: 100%;
-    justify-content: flex-end;
+  .stats-grid--abnormal {
+    grid-template-columns: 1fr;
   }
 }
 </style>

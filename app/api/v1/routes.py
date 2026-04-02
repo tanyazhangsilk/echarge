@@ -11,6 +11,7 @@ from app.models.models import (
     Charger,
     Fleet,
     Operator,
+    OperatorSettlementRecord,
     Order,
     PriceTemplate,
     SettlementRecord,
@@ -32,7 +33,7 @@ from app.services.order_service import (
     serialize_order,
     force_stop_order,
 )
-from app.services.settlement_service import settle_t_plus_1
+from app.services.settlement_service import settle_t_plus_1_by_operator
 from app.services.wallet_service import get_wallet_summary, get_wallet_transaction_list
 
 api_router = APIRouter()
@@ -167,6 +168,33 @@ def scoped_operator_id(context: RoleContext) -> int | None:
 
 def user_display_name(user: User) -> str:
     return user.nickname or f"用户{str(user.phone)[-4:]}"
+
+
+SETTLEMENT_STATUS_TEXT = {
+    0: "待打款",
+    1: "已打款",
+    2: "挂起待补资料",
+}
+
+
+def serialize_operator_settlement(record: OperatorSettlementRecord) -> dict:
+    return {
+        "id": record.id,
+        "settle_date": str(record.settle_date),
+        "operator_id": record.operator_id,
+        "operator_name": record.operator.name if record.operator else "",
+        "order_count": record.order_count,
+        "total_amount": float(record.total_amount),
+        "platform_rate": float(record.platform_rate),
+        "platform_fee": float(record.platform_fee),
+        "settle_amount": float(record.settle_amount),
+        "status": record.status,
+        "status_text": SETTLEMENT_STATUS_TEXT.get(record.status, "未知"),
+        "can_payout": record.status == 0,
+        "hold_reason": record.hold_reason,
+        "created_at": record.created_at.strftime("%Y-%m-%d %H:%M:%S") if record.created_at else "",
+        "updated_at": record.updated_at.strftime("%Y-%m-%d %H:%M:%S") if record.updated_at else "",
+    }
 
 
 def seed_runtime_data(db: Session) -> None:
@@ -347,35 +375,100 @@ class ManualSettleRequest(BaseModel):
 @api_router.post("/settlements/manual_settle", tags=["settlements"])
 async def manual_settle(payload: ManualSettleRequest, db: Session = Depends(get_db)) -> dict:
     try:
-        processed = settle_t_plus_1(payload.date, db=db)
-        logger.info("manual_settle", extra={"date": str(payload.date), "processed": processed})
-        return {"code": 0, "processed": processed}
+        detail = settle_t_plus_1_by_operator(
+            payload.date,
+            db=db,
+            platform_rate_percent=system_param_store.get("settlement_platform_rate", 10),
+        )
+        logger.info(
+            "manual_settle",
+            extra={
+                "date": str(payload.date),
+                "processed": detail["processed_order_count"],
+                "operator_count": detail["processed_operator_count"],
+            },
+        )
+        return {
+            "code": 0,
+            "processed": detail["processed_order_count"],
+            "operator_count": detail["processed_operator_count"],
+            "data": detail,
+        }
     except Exception as e:
         logger.exception("manual_settle_failed", extra={"date": str(payload.date)})
         return {"code": 1, "processed": 0, "message": str(e)}
 
 @api_router.get("/finance/settlements", tags=["finance"])
-async def get_settlements(db: Session = Depends(get_db)):
-    records = db.query(SettlementRecord).order_by(SettlementRecord.settle_date.desc()).all()
-    result = []
-    for r in records:
-        result.append({
+async def get_settlements(
+    context: RoleContext = Depends(get_role_context),
+    db: Session = Depends(get_db),
+):
+    query = (
+        db.query(OperatorSettlementRecord)
+        .options(joinedload(OperatorSettlementRecord.operator))
+        .order_by(OperatorSettlementRecord.settle_date.desc(), OperatorSettlementRecord.operator_id.asc())
+    )
+    if context.role == "operator" and context.operator_id is not None:
+        query = query.filter(OperatorSettlementRecord.operator_id == context.operator_id)
+
+    records = query.all()
+    if records:
+        data = [serialize_operator_settlement(r) for r in records]
+        return {
+            "code": 200,
+            "data": data,
+            "summary": {
+                "order_count": sum(item["order_count"] for item in data),
+                "total_amount": round(sum(item["total_amount"] for item in data), 2),
+                "platform_fee": round(sum(item["platform_fee"] for item in data), 2),
+                "settle_amount": round(sum(item["settle_amount"] for item in data), 2),
+            },
+        }
+
+    legacy_records = db.query(SettlementRecord).order_by(SettlementRecord.settle_date.desc()).all()
+    legacy_data = [
+        {
             "settle_date": str(r.settle_date),
             "order_count": r.order_count,
             "total_amount": float(r.total_amount),
             "platform_fee": float(r.platform_fee),
             "settle_amount": float(r.settle_amount),
-            "status": r.status
-        })
-    return {"code": 200, "data": result}
+            "status": r.status,
+            "status_text": SETTLEMENT_STATUS_TEXT.get(r.status, "未知"),
+            "operator_id": None,
+            "operator_name": "全网汇总",
+            "platform_rate": None,
+            "can_payout": None,
+            "hold_reason": None,
+            "created_at": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else "",
+            "updated_at": r.updated_at.strftime("%Y-%m-%d %H:%M:%S") if r.updated_at else "",
+        }
+        for r in legacy_records
+    ]
+    return {"code": 200, "data": legacy_data}
 
 
 @api_router.post("/finance/settle", tags=["finance"])
 async def trigger_settle(db: Session = Depends(get_db)):
     target = date.today() - timedelta(days=1)
     try:
-        processed = settle_t_plus_1(target, db=db)
-        return {"code": 200, "message": f"清分完成，处理 {processed} 笔订单", "processed": processed}
+        detail = settle_t_plus_1_by_operator(
+            target,
+            db=db,
+            platform_rate_percent=system_param_store.get("settlement_platform_rate", 10),
+        )
+        return {
+            "code": 200,
+            "message": (
+                f"清分完成：处理订单 {detail['processed_order_count']} 笔，"
+                f"覆盖运营商 {detail['processed_operator_count']} 个，"
+                f"跳过已存在批次 {detail['skipped_operator_count']} 个"
+            ),
+            "processed": detail["processed_order_count"],
+            "operator_count": detail["processed_operator_count"],
+            "skipped_operator_count": detail["skipped_operator_count"],
+            "data": detail,
+        }
     except Exception as e:
         logger.exception("finance_settle_failed", extra={"date": str(target)})
         return {"code": 500, "message": f"清分失败: {str(e)}", "processed": 0}
@@ -710,31 +803,81 @@ async def process_invoice(invoice_id: int, payload: InvoiceProcessSchema, db: Se
 
 @api_router.get("/admin/finance/settlements", tags=["admin"])
 async def admin_get_settlements(db: Session = Depends(get_db)):
-    """管理员获取全网历史清分记录"""
-    from app.models.models import SettlementRecord
-    
-    # 按照清分日期倒序排列
-    records = db.query(SettlementRecord).order_by(SettlementRecord.settle_date.desc()).all()
-    
-    return {
-        "code": 200,
-        "data": [
-            {
-                "id": r.id,
-                "settle_date": str(r.settle_date),
-                "order_count": r.order_count,
-                "total_amount": float(r.total_amount),
-                "platform_fee": float(r.platform_fee),
-                "settle_amount": float(r.settle_amount),
-                "status": r.status
-            } for r in records
-        ]
-    }
+    records = (
+        db.query(OperatorSettlementRecord)
+        .options(joinedload(OperatorSettlementRecord.operator))
+        .order_by(OperatorSettlementRecord.settle_date.desc(), OperatorSettlementRecord.operator_id.asc())
+        .all()
+    )
+
+    if not records:
+        legacy = db.query(SettlementRecord).order_by(SettlementRecord.settle_date.desc()).all()
+        return {
+            "code": 200,
+            "data": [
+                {
+                    "id": r.id,
+                    "settle_date": str(r.settle_date),
+                    "order_count": r.order_count,
+                    "total_amount": float(r.total_amount),
+                    "platform_fee": float(r.platform_fee),
+                    "settle_amount": float(r.settle_amount),
+                    "status": r.status,
+                    "status_text": SETTLEMENT_STATUS_TEXT.get(r.status, "未知"),
+                    "operator_count": None,
+                    "ready_count": None,
+                    "hold_count": None,
+                }
+                for r in legacy
+            ],
+            "operator_records": [],
+        }
+
+    operator_data = [serialize_operator_settlement(r) for r in records]
+    daily_map: dict[str, dict] = {}
+    for item in operator_data:
+        day_key = item["settle_date"]
+        if day_key not in daily_map:
+            daily_map[day_key] = {
+                "settle_date": day_key,
+                "order_count": 0,
+                "total_amount": 0.0,
+                "platform_fee": 0.0,
+                "settle_amount": 0.0,
+                "operator_count": 0,
+                "ready_count": 0,
+                "hold_count": 0,
+                "status": 0,
+                "status_text": "待打款",
+            }
+        day = daily_map[day_key]
+        day["order_count"] += item["order_count"]
+        day["total_amount"] += item["total_amount"]
+        day["platform_fee"] += item["platform_fee"]
+        day["settle_amount"] += item["settle_amount"]
+        day["operator_count"] += 1
+        if item["status"] == 2:
+            day["hold_count"] += 1
+        else:
+            day["ready_count"] += 1
+
+    data = sorted(daily_map.values(), key=lambda row: row["settle_date"], reverse=True)
+    for row in data:
+        row["total_amount"] = round(row["total_amount"], 2)
+        row["platform_fee"] = round(row["platform_fee"], 2)
+        row["settle_amount"] = round(row["settle_amount"], 2)
+        if row["hold_count"] > 0:
+            row["status"] = 2
+            row["status_text"] = "部分挂起待补资料"
+        else:
+            row["status"] = 0
+            row["status_text"] = "待打款"
+
+    return {"code": 200, "data": data, "operator_records": operator_data}
 
 @api_router.post("/admin/finance/settle", tags=["admin"])
 async def admin_trigger_settle(payload: dict, db: Session = Depends(get_db)):
-    """管理员手动触发某日的全局清分"""
-    from app.services.settlement_service import settle_t_plus_1
+    """管理员手动触发某日清分"""
     from datetime import datetime, timedelta
     
     target_date_str = payload.get("date")
@@ -745,12 +888,33 @@ async def admin_trigger_settle(payload: dict, db: Session = Depends(get_db)):
         target_date = datetime.now().date() - timedelta(days=1)
         
     try:
-        # 调用你之前写好的真实清分引擎
-        processed = settle_t_plus_1(target_date, db=db)
-        if processed == 0:
-            return {"code": 200, "message": f"{target_date} 没有需要清分的已完成订单", "processed": 0}
-            
-        return {"code": 200, "message": f"清分成功！共处理全网 {processed} 笔订单", "processed": processed}
+        detail = settle_t_plus_1_by_operator(
+            target_date,
+            db=db,
+            platform_rate_percent=system_param_store.get("settlement_platform_rate", 10),
+        )
+        if detail["processed_order_count"] == 0:
+            return {
+                "code": 200,
+                "message": (
+                    f"{target_date} 没有符合条件的订单，或该日运营商批次已全部生成。"
+                ),
+                "processed": 0,
+                "operator_count": 0,
+                "data": detail,
+            }
+
+        return {
+            "code": 200,
+            "message": (
+                f"清分成功：处理订单 {detail['processed_order_count']} 笔，"
+                f"覆盖运营商 {detail['processed_operator_count']} 个。"
+            ),
+            "processed": detail["processed_order_count"],
+            "operator_count": detail["processed_operator_count"],
+            "skipped_operator_count": detail["skipped_operator_count"],
+            "data": detail,
+        }
     except Exception as e:
         return {"code": 500, "message": f"清分引擎执行失败: {str(e)}"}
 
