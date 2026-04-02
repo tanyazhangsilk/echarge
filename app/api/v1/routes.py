@@ -1,16 +1,19 @@
-import logging
+﻿import logging
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from app.db.database import get_db
 from app.models.models import (
     Charger,
     Fleet,
+    Invoice,
     Operator,
+    OperatorBankCard,
     OperatorSettlementRecord,
     Order,
     PriceTemplate,
@@ -33,6 +36,7 @@ from app.services.order_service import (
     serialize_order,
     force_stop_order,
 )
+from app.services.notification_service import send_invoice_email
 from app.services.settlement_service import settle_t_plus_1_by_operator
 from app.services.wallet_service import get_wallet_summary, get_wallet_transaction_list
 
@@ -107,6 +111,13 @@ class SystemParamsPayload(BaseModel):
     support_email: str
 
 
+class BankCardSubmitPayload(BaseModel):
+    account_name: str
+    bank_name: str
+    bank_account: str
+    is_default: bool = True
+
+
 class RoleContext(BaseModel):
     role: str
     operator_id: int | None = None
@@ -167,7 +178,7 @@ def scoped_operator_id(context: RoleContext) -> int | None:
 
 
 def user_display_name(user: User) -> str:
-    return user.nickname or f"用户{str(user.phone)[-4:]}"
+    return user.nickname or f"鐢ㄦ埛{str(user.phone)[-4:]}"
 
 
 SETTLEMENT_STATUS_TEXT = {
@@ -175,6 +186,67 @@ SETTLEMENT_STATUS_TEXT = {
     1: "已打款",
     2: "挂起待补资料",
 }
+
+INVOICE_STATUS_TEXT = {
+    0: "待开票",
+    1: "已开票",
+    2: "已驳回",
+}
+
+BANK_CARD_STATUS_TEXT = {
+    0: "待审核",
+    1: "已通过",
+    2: "已驳回",
+}
+
+
+def mask_bank_account(bank_account: str | None) -> str:
+    if not bank_account:
+        return ""
+    digits = bank_account.replace(" ", "")
+    if len(digits) < 8:
+        return digits
+    return f"{digits[:4]} **** **** {digits[-4:]}"
+
+
+def serialize_bank_card(card: OperatorBankCard) -> dict:
+    return {
+        "id": card.id,
+        "operator_id": card.operator_id,
+        "account_name": card.account_name,
+        "bank_name": card.bank_name,
+        "bank_account": card.bank_account,
+        "bank_account_masked": mask_bank_account(card.bank_account),
+        "is_default": bool(card.is_default),
+        "bind_status": card.bind_status,
+        "bind_status_text": BANK_CARD_STATUS_TEXT.get(card.bind_status, "未知状态"),
+        "created_at": card.created_at.strftime("%Y-%m-%d %H:%M:%S") if card.created_at else "",
+        "updated_at": card.updated_at.strftime("%Y-%m-%d %H:%M:%S") if card.updated_at else "",
+    }
+
+
+def resolve_bank_card_audit_status(cards: list[OperatorBankCard]) -> tuple[str, str]:
+    if not cards:
+        return "unbound", "未绑定"
+    if any(card.bind_status == 1 for card in cards):
+        return "approved", "已通过"
+    if any(card.bind_status == 0 for card in cards):
+        return "pending", "待审核"
+    return "rejected", "已驳回"
+
+
+def resolve_settlement_qualification(operator: Operator | None, cards: list[OperatorBankCard]) -> tuple[bool, str]:
+    is_verified = bool(operator and operator.is_verified)
+    approved_default_card = next((card for card in cards if card.is_default and card.bind_status == 1), None)
+    if is_verified and approved_default_card:
+        return True, "已具备 T+1 清分资格"
+
+    missing_parts: list[str] = []
+    if not is_verified:
+        missing_parts.append("运营商未认证")
+    if not approved_default_card:
+        missing_parts.append("未配置默认且审核通过的收款卡")
+    return False, "，".join(missing_parts) if missing_parts else "暂不具备清分资格"
 
 
 def serialize_operator_settlement(record: OperatorSettlementRecord) -> dict:
@@ -197,106 +269,141 @@ def serialize_operator_settlement(record: OperatorSettlementRecord) -> dict:
     }
 
 
+def serialize_invoice_record(invoice: Invoice, can_process: bool) -> dict:
+    invoice_no = f"INV{invoice.created_at.strftime('%Y%m%d')}{str(invoice.id).zfill(4)}"
+    return {
+        "id": invoice.id,
+        "invoice_no": invoice_no,
+        "user_id": invoice.user_id,
+        "user_phone": invoice.user.phone if invoice.user else "",
+        "operator_id": invoice.operator_id,
+        "operator_name": invoice.operator.name if invoice.operator else "",
+        "order_id": invoice.order_id,
+        "order_no": invoice.related_order.order_no if invoice.related_order else None,
+        "invoice_title": invoice.invoice_title,
+        "amount": float(invoice.amount or 0),
+        "email": invoice.email,
+        "status": invoice.status,
+        "status_text": INVOICE_STATUS_TEXT.get(invoice.status, "未知状态"),
+        "file_url": invoice.file_url,
+        "remark": invoice.remark,
+        "created_at": invoice.created_at.strftime("%Y-%m-%d %H:%M:%S") if invoice.created_at else "",
+        "uploaded_at": invoice.uploaded_at.strftime("%Y-%m-%d %H:%M:%S") if invoice.uploaded_at else None,
+        "updated_at": invoice.updated_at.strftime("%Y-%m-%d %H:%M:%S") if invoice.updated_at else "",
+        "can_process": can_process,
+    }
+
+
 def seed_runtime_data(db: Session) -> None:
     operator = get_current_operator(db)
     operator_id = operator.id if operator else 0
 
     if not template_store:
-      db_templates = db.query(PriceTemplate).filter(PriceTemplate.operator_id == operator_id).order_by(PriceTemplate.created_at.desc()).all()
-      if db_templates:
-        for item in db_templates:
-          template_store.append({
-              "id": item.id,
-              "name": item.name,
-              "peak_price": 1.82,
-              "flat_price": 1.26,
-              "valley_price": 0.68,
-              "service_price": 0.8,
-              "scope": "全站",
-              "status": "active",
-              "updated_at": item.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
-          })
-      else:
-        template_store.extend([
-            {
-                "id": 1,
-                "name": "城市快充标准模板",
-                "peak_price": 1.88,
-                "flat_price": 1.34,
-                "valley_price": 0.76,
-                "service_price": 0.8,
-                "scope": "全站",
-                "status": "active",
-                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            },
-            {
-                "id": 2,
-                "name": "园区夜充模板",
-                "peak_price": 1.56,
-                "flat_price": 1.12,
-                "valley_price": 0.58,
-                "service_price": 0.65,
-                "scope": "指定站点",
-                "status": "draft",
-                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            },
-        ])
+        template_store.extend(
+            [
+                {
+                    "id": 1,
+                    "name": "城市快充标准模板",
+                    "peak_price": 1.88,
+                    "flat_price": 1.34,
+                    "valley_price": 0.76,
+                    "service_price": 0.8,
+                    "scope": "全站",
+                    "status": "active",
+                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+                {
+                    "id": 2,
+                    "name": "园区夜充模板",
+                    "peak_price": 1.56,
+                    "flat_price": 1.12,
+                    "valley_price": 0.58,
+                    "service_price": 0.65,
+                    "scope": "指定站点",
+                    "status": "draft",
+                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            ]
+        )
 
     if not tag_store:
-      tag_store.extend([
-          {"id": 1, "name": "高频通勤", "color": "#409EFF", "description": "近30天充电6次以上", "user_count": 86},
-          {"id": 2, "name": "夜间充电", "color": "#67C23A", "description": "夜间活跃用户", "user_count": 43},
-          {"id": 3, "name": "待召回", "color": "#E6A23C", "description": "近14天未复购", "user_count": 27},
-      ])
+        tag_store.extend(
+            [
+                {"id": 1, "name": "高频通勤", "color": "#409EFF", "description": "近30天充电20次以上", "user_count": 86},
+                {"id": 2, "name": "夜间充电", "color": "#67C23A", "description": "夜间活跃用户", "user_count": 43},
+                {"id": 3, "name": "待召回", "color": "#E6A23C", "description": "近14天未复购", "user_count": 27},
+            ]
+        )
 
     if not discount_campaign_store:
-      discount_campaign_store.extend([
-          {
-              "id": 1,
-              "name": "工作日午间充电折扣",
-              "campaign_type": "满减",
-              "discount_value": 8.8,
-              "threshold": 30,
-              "audience": "企业车队",
-              "status": "active",
-              "redeem_count": 326,
-              "conversion_rate": 24.5,
-          },
-          {
-              "id": 2,
-              "name": "新用户首充礼",
-              "campaign_type": "立减",
-              "discount_value": 12,
-              "threshold": 0,
-              "audience": "新用户",
-              "status": "draft",
-              "redeem_count": 0,
-              "conversion_rate": 0,
-          },
-      ])
+        discount_campaign_store.extend(
+            [
+                {
+                    "id": 1,
+                    "name": "工作日午间充电折扣",
+                    "campaign_type": "满减",
+                    "discount_value": 8.8,
+                    "threshold": 30,
+                    "audience": "企业车队",
+                    "status": "active",
+                    "redeem_count": 326,
+                    "conversion_rate": 24.5,
+                },
+                {
+                    "id": 2,
+                    "name": "新用户首充礼",
+                    "campaign_type": "立减",
+                    "discount_value": 12,
+                    "threshold": 0,
+                    "audience": "新用户",
+                    "status": "draft",
+                    "redeem_count": 0,
+                    "conversion_rate": 0,
+                },
+            ]
+        )
 
     if not coupon_campaign_store:
-      coupon_campaign_store.extend([
-          {"id": 1, "name": "春季园区通勤券", "discount_value": 10, "inventory": 1000, "dispatched": 640, "used": 381, "status": "active"},
-          {"id": 2, "name": "夜充满减券", "discount_value": 15, "inventory": 500, "dispatched": 120, "used": 39, "status": "paused"},
-      ])
+        coupon_campaign_store.extend(
+            [
+                {
+                    "id": 1,
+                    "name": "春季园区通勤券",
+                    "discount_value": 10,
+                    "inventory": 1000,
+                    "dispatched": 640,
+                    "used": 381,
+                    "status": "active",
+                },
+                {
+                    "id": 2,
+                    "name": "夜充满减券",
+                    "discount_value": 15,
+                    "inventory": 500,
+                    "dispatched": 120,
+                    "used": 39,
+                    "status": "paused",
+                },
+            ]
+        )
 
     operators = db.query(Operator).order_by(Operator.created_at.desc()).all()
     if not operator_audit_store:
-      for item in operators:
-        operator_audit_store[item.id] = {
-            "status": "approved" if item.is_verified else "pending",
-            "remark": "",
-            "contact_email": f"bd{item.id}@echarge.com",
-            "contact_phone": f"1380000{str(item.id).zfill(4)}",
-        }
+        for item in operators:
+            operator_audit_store[item.id] = {
+                "status": "approved" if item.is_verified else "pending",
+                "remark": "",
+                "contact_email": f"bd{item.id}@echarge.com",
+                "contact_phone": f"1380000{str(item.id).zfill(4)}",
+            }
 
     if not marketing_audit_store:
-      for item in discount_campaign_store:
-        marketing_audit_store[item["id"]] = {
-            "status": "approved" if item["status"] == "active" else "pending",
-            "remark": "",
-        }
+        for item in discount_campaign_store:
+            marketing_audit_store[item["id"]] = {
+                "status": "approved" if item["status"] == "active" else "pending",
+                "remark": "",
+            }
+
 
 @api_router.get("/health", tags=["system"])
 async def health_check() -> dict:
@@ -434,7 +541,7 @@ async def get_settlements(
             "platform_fee": float(r.platform_fee),
             "settle_amount": float(r.settle_amount),
             "status": r.status,
-            "status_text": SETTLEMENT_STATUS_TEXT.get(r.status, "未知"),
+            "status_text": SETTLEMENT_STATUS_TEXT.get(r.status, "鏈煡"),
             "operator_id": None,
             "operator_name": "全网汇总",
             "platform_rate": None,
@@ -471,7 +578,7 @@ async def trigger_settle(db: Session = Depends(get_db)):
         }
     except Exception as e:
         logger.exception("finance_settle_failed", extra={"date": str(target)})
-        return {"code": 500, "message": f"清分失败: {str(e)}", "processed": 0}
+        return {"code": 500, "message": f"娓呭垎澶辫触: {str(e)}", "processed": 0}
 
 
 @api_router.get("/orders/all", tags=["orders"])
@@ -569,7 +676,7 @@ async def force_stop_order_api(
 ):
     order = force_stop_order(db, order_id, operator_id=context.operator_id)
     if not order:
-        return {"code": 400, "message": "订单不存在、无权限或当前不是充电中状态"}
+        return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
 
     return {
         "code": 200,
@@ -587,7 +694,7 @@ async def mark_order_abnormal_api(
 ):
     order = mark_order_abnormal(db, order_id, payload.abnormal_reason, operator_id=context.operator_id)
     if not order:
-        return {"code": 400, "message": "订单不存在、无权限或当前不是充电中状态"}
+        return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
 
     return {
         "code": 200,
@@ -668,7 +775,7 @@ async def operator_force_stop_order(
 ):
     order = force_stop_order(db, order_id, operator_id=context.operator_id)
     if not order:
-        return {"code": 400, "message": "订单不存在、无权限或当前不是充电中状态"}
+        return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
     return {"code": 200, "message": "订单已强制停止", "data": serialize_order(order)}
 
 
@@ -681,53 +788,203 @@ async def operator_mark_order_abnormal(
 ):
     order = mark_order_abnormal(db, order_id, payload.abnormal_reason, operator_id=context.operator_id)
     if not order:
-        return {"code": 400, "message": "订单不存在、无权限或当前不是充电中状态"}
+        return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
     return {"code": 200, "message": "订单已标记异常", "data": serialize_order(order)}
 
 
+@api_router.get("/finance/cards", tags=["finance"])
+async def get_operator_bank_cards(
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = db.query(Operator).filter(Operator.id == context.operator_id).first()
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+
+    cards = (
+        db.query(OperatorBankCard)
+        .filter(OperatorBankCard.operator_id == context.operator_id)
+        .order_by(OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
+        .all()
+    )
+
+    audit_status, audit_status_text = resolve_bank_card_audit_status(cards)
+    settlement_eligible, settlement_tip = resolve_settlement_qualification(operator, cards)
+
+    default_card_raw = next((card for card in cards if card.is_default and card.bind_status == 1), None)
+    if default_card_raw is None:
+        default_card_raw = next((card for card in cards if card.bind_status == 1), None)
+
+    return {
+        "code": 200,
+        "data": {
+            "operator_id": operator.id,
+            "operator_name": operator.name,
+            "operator_verified": bool(operator.is_verified),
+            "audit_status": audit_status,
+            "audit_status_text": audit_status_text,
+            "cards": [serialize_bank_card(card) for card in cards],
+            "default_card": serialize_bank_card(default_card_raw) if default_card_raw else None,
+            "settlement_eligible": settlement_eligible,
+            "settlement_tip": settlement_tip,
+            "settlement_notice": "绑卡审核通过后才可启动 T+1 清分；如遇法定节假日，打款按清算规则顺延至下一工作日。",
+        },
+    }
+
+
+@api_router.post("/finance/cards", tags=["finance"])
+async def submit_operator_bank_card(
+    payload: BankCardSubmitPayload,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = db.query(Operator).filter(Operator.id == context.operator_id).first()
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+
+    account_name = payload.account_name.strip()
+    bank_name = payload.bank_name.strip()
+    bank_account = payload.bank_account.replace(" ", "").strip()
+
+    if not account_name or not bank_name or len(bank_account) < 8:
+        return {"code": 400, "message": "请填写完整且有效的绑卡信息"}
+
+    existing_cards = (
+        db.query(OperatorBankCard)
+        .filter(OperatorBankCard.operator_id == context.operator_id)
+        .order_by(OperatorBankCard.created_at.desc())
+        .all()
+    )
+
+    is_default = bool(payload.is_default or not existing_cards)
+    if is_default:
+        for card in existing_cards:
+            card.is_default = False
+
+    card = OperatorBankCard(
+        operator_id=context.operator_id,
+        account_name=account_name,
+        bank_name=bank_name,
+        bank_account=bank_account,
+        is_default=is_default,
+        bind_status=0,
+    )
+
+    db.add(card)
+    db.commit()
+    db.refresh(card)
+
+    return {
+        "code": 200,
+        "message": "绑卡资料已提交，等待平台审核",
+        "data": {
+            "card": serialize_bank_card(card),
+            "audit_status": "pending",
+            "audit_status_text": "待审核",
+        },
+    }
+
+
+@api_router.get("/finance/cards/audit-status", tags=["finance"])
+async def get_operator_bank_card_audit_status(
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = db.query(Operator).filter(Operator.id == context.operator_id).first()
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+
+    cards = (
+        db.query(OperatorBankCard)
+        .filter(OperatorBankCard.operator_id == context.operator_id)
+        .order_by(OperatorBankCard.created_at.desc())
+        .all()
+    )
+    audit_status, audit_status_text = resolve_bank_card_audit_status(cards)
+    settlement_eligible, settlement_tip = resolve_settlement_qualification(operator, cards)
+
+    return {
+        "code": 200,
+        "data": {
+            "audit_status": audit_status,
+            "audit_status_text": audit_status_text,
+            "operator_verified": bool(operator.is_verified),
+            "settlement_eligible": settlement_eligible,
+            "settlement_tip": settlement_tip,
+        },
+    }
 
 
 @api_router.get("/finance/invoices", tags=["finance"])
-async def get_invoices(db: Session = Depends(get_db)):
-    from app.models.models import Invoice
-    
-    invoices = (
+async def get_invoices(
+    status: int | None = None,
+    keyword: str | None = None,
+    context: RoleContext = Depends(get_role_context),
+    db: Session = Depends(get_db),
+):
+    query = (
         db.query(Invoice)
-        .options(joinedload(Invoice.user), joinedload(Invoice.related_order))
+        .options(joinedload(Invoice.user), joinedload(Invoice.operator), joinedload(Invoice.related_order))
         .order_by(Invoice.created_at.desc())
-        .all()
     )
-    
+
+    if context.role == "operator" and context.operator_id is not None:
+        query = query.filter(Invoice.operator_id == context.operator_id)
+
+    if status in (0, 1, 2):
+        query = query.filter(Invoice.status == status)
+
+    if keyword and keyword.strip():
+        kw = f"%{keyword.strip()}%"
+        query = query.join(User, Invoice.user_id == User.id).filter(
+            or_(
+                User.phone.like(kw),
+                Invoice.email.like(kw),
+                Invoice.invoice_title.like(kw),
+            )
+        )
+
+    invoices = query.all()
+    data = [
+        serialize_invoice_record(
+            inv,
+            can_process=(context.role == "operator" and inv.operator_id == context.operator_id and inv.status == 0),
+        )
+        for inv in invoices
+    ]
+
     return {
         "code": 200,
-        "data": [{
-            "id": inv.id,
-            "invoice_no": f"INV{inv.created_at.strftime('%Y%m%d')}{str(inv.id).zfill(4)}",
-            "user_phone": inv.user.phone if inv.user else "未知用户",
-            "user_id": inv.user_id,
-            "order_id": inv.order_id,
-            "order_no": inv.related_order.order_no if inv.related_order else None,
-            "invoice_title": inv.invoice_title,
-            "amount": float(inv.amount),
-            "email": inv.email,
-            "status": inv.status,
-            "created_at": inv.created_at.strftime("%Y-%m-%d %H:%M:%S") if inv.created_at else "",
-            "uploaded_at": inv.uploaded_at.strftime("%Y-%m-%d %H:%M:%S") if inv.uploaded_at else None,
-            "file_url": inv.file_url,
-            "remark": inv.remark,
-        } for inv in invoices]
+        "data": data,
+        "summary": {
+            "pending_count": sum(1 for item in data if item["status"] == 0),
+            "issued_count": sum(1 for item in data if item["status"] == 1),
+            "rejected_count": sum(1 for item in data if item["status"] == 2),
+            "issued_amount": round(sum(item["amount"] for item in data if item["status"] == 1), 2),
+        },
+        "scope": context.role,
     }
+
 
 @api_router.post("/finance/invoices/apply", tags=["finance"])
 async def apply_invoice(payload: InvoiceApplySchema, db: Session = Depends(get_db)):
-    from app.models.models import Invoice
+    operator = db.query(Operator).filter(Operator.id == payload.operator_id).first()
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+
+    if payload.order_id:
+        order = db.query(Order).filter(Order.id == payload.order_id).first()
+        if not order:
+            return {"code": 404, "message": "订单不存在"}
+        if order.operator_id != payload.operator_id:
+            return {"code": 400, "message": "订单与运营商不匹配"}
 
     invoice = Invoice(
         user_id=payload.user_id,
         operator_id=payload.operator_id,
         order_id=payload.order_id,
-        invoice_title=payload.invoice_title,
-        amount=payload.amount,
+        invoice_title=(payload.invoice_title or "个人")[:100],
+        amount=Decimal(str(payload.amount)),
         email=payload.email,
         status=0,
         remark=payload.remark or None,
@@ -742,10 +999,13 @@ async def apply_invoice(payload: InvoiceApplySchema, db: Session = Depends(get_d
         "data": {"id": invoice.id},
     }
 
-@api_router.get("/finance/invoices/{invoice_id}", tags=["finance"])
-async def get_invoice_detail(invoice_id: int, db: Session = Depends(get_db)):
-    from app.models.models import Invoice
 
+@api_router.get("/finance/invoices/{invoice_id}", tags=["finance"])
+async def get_invoice_detail(
+    invoice_id: int,
+    context: RoleContext = Depends(get_role_context),
+    db: Session = Depends(get_db),
+):
     inv = (
         db.query(Invoice)
         .options(joinedload(Invoice.user), joinedload(Invoice.operator), joinedload(Invoice.related_order))
@@ -755,51 +1015,75 @@ async def get_invoice_detail(invoice_id: int, db: Session = Depends(get_db)):
     if not inv:
         return {"code": 404, "message": "发票申请不存在"}
 
+    if context.role == "operator" and inv.operator_id != context.operator_id:
+        return {"code": 403, "message": "无权限查看该发票"}
+
     return {
         "code": 200,
-        "data": {
-            "id": inv.id,
-            "invoice_no": f"INV{inv.created_at.strftime('%Y%m%d')}{str(inv.id).zfill(4)}",
-            "user_id": inv.user_id,
-            "user_phone": inv.user.phone if inv.user else "",
-            "operator_id": inv.operator_id,
-            "order_id": inv.order_id,
-            "order_no": inv.related_order.order_no if inv.related_order else None,
-            "invoice_title": inv.invoice_title,
-            "amount": float(inv.amount),
-            "email": inv.email,
-            "status": inv.status,
-            "file_url": inv.file_url,
-            "remark": inv.remark,
-            "created_at": inv.created_at.strftime("%Y-%m-%d %H:%M:%S") if inv.created_at else "",
-            "uploaded_at": inv.uploaded_at.strftime("%Y-%m-%d %H:%M:%S") if inv.uploaded_at else None,
-            "updated_at": inv.updated_at.strftime("%Y-%m-%d %H:%M:%S") if inv.updated_at else "",
-        },
+        "data": serialize_invoice_record(
+            inv,
+            can_process=(context.role == "operator" and inv.operator_id == context.operator_id and inv.status == 0),
+        ),
     }
 
+
 @api_router.post("/finance/invoices/{invoice_id}/process", tags=["finance"])
-async def process_invoice(invoice_id: int, payload: InvoiceProcessSchema, db: Session = Depends(get_db)):
-    from app.models.models import Invoice
-    from datetime import datetime
-    
-    action = payload.action
-    file_url = payload.file_url
-    
-    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+async def process_invoice(
+    invoice_id: int,
+    payload: InvoiceProcessSchema,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    action = (payload.action or "").strip().lower()
+    if action not in {"approve", "reject"}:
+        return {"code": 400, "message": "不支持的处理动作"}
+
+    invoice = (
+        db.query(Invoice)
+        .options(joinedload(Invoice.operator), joinedload(Invoice.user))
+        .filter(Invoice.id == invoice_id, Invoice.operator_id == context.operator_id)
+        .first()
+    )
     if not invoice:
-        return {"code": 404, "message": "发票申请不存在"}
-        
+        return {"code": 404, "message": "发票申请不存在或无权限处理"}
+
+    if invoice.status != 0:
+        return {"code": 400, "message": "该发票申请已处理，请勿重复操作"}
+
+    now = datetime.now()
     if action == "approve":
+        file_url = (payload.file_url or "").strip()
+        if not file_url:
+            return {"code": 400, "message": "请上传发票文件后再提交"}
         invoice.status = 1
         invoice.file_url = file_url
-        invoice.uploaded_at = datetime.now()
-        invoice.remark = payload.remark or invoice.remark
-    elif action == "reject":
+        invoice.uploaded_at = now
+        invoice.remark = payload.remark or "运营商已开票"
+        notify_status = "已开票"
+    else:
         invoice.status = 2
-        invoice.remark = payload.remark or invoice.remark
-        
+        invoice.remark = payload.remark or "运营商驳回"
+        notify_status = "已驳回"
+
     db.commit()
-    return {"code": 200, "message": "处理成功"}
+    db.refresh(invoice)
+
+    send_invoice_email(
+        to_email=invoice.email,
+        invoice_no=f"INV{invoice.created_at.strftime('%Y%m%d')}{str(invoice.id).zfill(4)}",
+        status=notify_status,
+        operator_name=invoice.operator.name if invoice.operator else f"运营商#{invoice.operator_id}",
+        amount=float(invoice.amount or 0),
+        file_url=invoice.file_url,
+        remark=invoice.remark,
+    )
+
+    return {
+        "code": 200,
+        "message": f"发票申请处理成功（{notify_status}），已触发邮件通知",
+        "data": serialize_invoice_record(invoice, can_process=False),
+    }
+
 
 @api_router.get("/admin/finance/settlements", tags=["admin"])
 async def admin_get_settlements(db: Session = Depends(get_db)):
@@ -875,18 +1159,16 @@ async def admin_get_settlements(db: Session = Depends(get_db)):
 
     return {"code": 200, "data": data, "operator_records": operator_data}
 
+
 @api_router.post("/admin/finance/settle", tags=["admin"])
 async def admin_trigger_settle(payload: dict, db: Session = Depends(get_db)):
-    """管理员手动触发某日清分"""
-    from datetime import datetime, timedelta
-    
+    """管理员手动触发某日清分。"""
     target_date_str = payload.get("date")
     if target_date_str:
         target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
     else:
-        # 默认清分昨天
         target_date = datetime.now().date() - timedelta(days=1)
-        
+
     try:
         detail = settle_t_plus_1_by_operator(
             target_date,
@@ -896,9 +1178,7 @@ async def admin_trigger_settle(payload: dict, db: Session = Depends(get_db)):
         if detail["processed_order_count"] == 0:
             return {
                 "code": 200,
-                "message": (
-                    f"{target_date} 没有符合条件的订单，或该日运营商批次已全部生成。"
-                ),
+                "message": f"{target_date} 没有可清分订单，或该日运营商批次已全部生成。",
                 "processed": 0,
                 "operator_count": 0,
                 "data": detail,
@@ -921,79 +1201,79 @@ async def admin_trigger_settle(payload: dict, db: Session = Depends(get_db)):
 
 @api_router.get("/admin/audit/stations", tags=["admin"])
 async def get_station_audits(db: Session = Depends(get_db)):
-    """获取待审核与已驳回的电站列表"""
-    from sqlalchemy.orm import joinedload
-    from app.models.models import Station
-    import random
-    
-    # 查询状态为 3(待审核) 和 4(已驳回) 的电站
-    stations = db.query(Station).options(joinedload(Station.operator)).filter(
-        Station.status.in_([3, 4])
-    ).order_by(Station.created_at.desc()).all()
-    
+    """获取待审核与已驳回的站点列表。"""
+    stations = (
+        db.query(Station)
+        .options(joinedload(Station.operator))
+        .filter(Station.status.in_([3, 4]))
+        .order_by(Station.created_at.desc())
+        .all()
+    )
+
     return {
         "code": 200,
-        "data": [{
-            "id": s.id,
-            "operator_name": s.operator.name if s.operator else "未知运营商",
-            "station_name": s.name,
-            "lng": float(s.longitude),
-            "lat": float(s.latitude),
-            "status": s.status,
-            "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "",
-            # 以下为丰富前端展示的模拟扩展字段 (现实中应该存在 Station 扩展表里)
-            "planned_piles": (s.id % 20) + 5,
-            "total_power": ((s.id % 20) + 5) * 120,
-            "address": f"深圳市某某区{s.name}附近"
-        } for s in stations]
+        "data": [
+            {
+                "id": s.id,
+                "operator_name": s.operator.name if s.operator else "未知运营商",
+                "station_name": s.name,
+                "lng": float(s.longitude),
+                "lat": float(s.latitude),
+                "status": s.status,
+                "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "",
+                "planned_piles": (s.id % 20) + 5,
+                "total_power": ((s.id % 20) + 5) * 120,
+                "address": f"示例地址 - {s.name}",
+            }
+            for s in stations
+        ],
     }
+
 
 @api_router.post("/admin/audit/stations/{station_id}/process", tags=["admin"])
 async def process_station_audit(station_id: int, payload: dict, db: Session = Depends(get_db)):
-    """处理电站审核 (通过/驳回)"""
-    from app.models.models import Station
-    
-    action = payload.get("action") # 'approve' or 'reject'
-    remark = payload.get("remark", "")
-    
+    """处理站点审核（通过/驳回）。"""
+    action = payload.get("action")
+
     station = db.query(Station).filter(Station.id == station_id).first()
     if not station:
-        return {"code": 404, "message": "电站不存在"}
-        
+        return {"code": 404, "message": "站点不存在"}
+
     if action == "approve":
-        station.status = 0 # 0 表示正式运营中
-        station.visibility = "public" # 审核通过，对 C 端公开可见
+        station.status = 0
+        station.visibility = "public"
     elif action == "reject":
-        station.status = 4 # 4 表示被驳回
-        
+        station.status = 4
+
     db.commit()
-    return {"code": 200, "message": "电站审核处理成功"}
+    return {"code": 200, "message": "站点审核处理成功"}
+
 
 @api_router.post("/operator/stations/apply", tags=["operator"])
 async def operator_apply_station(payload: dict, db: Session = Depends(get_db)):
-    """运营商提交新建电站申请"""
-    from app.models.models import Station, Operator
-    
-    # 模拟获取当前登录的运营商 (真实情况应从 Token 中解析)
+    """运营商提交新建站点申请。"""
     operator = db.query(Operator).first()
     if not operator:
         return {"code": 404, "message": "当前运营商未找到，请先入驻"}
-        
+
     try:
         new_station = Station(
             operator_id=operator.id,
             name=payload.get("name"),
-            # 真实业务中经纬度由前端地图组件选点获取，这里用传入值
-            longitude=payload.get("lng", 114.0), 
+            longitude=payload.get("lng", 114.0),
             latitude=payload.get("lat", 22.5),
-            status=3,  # 核心：3 代表“待审核”
-            visibility="private" # 未过审前，C端不可见
+            status=3,
+            visibility="private",
         )
         db.add(new_station)
         db.commit()
         db.refresh(new_station)
-        
-        return {"code": 200, "message": "电站资料提交成功，已进入平台审核队列", "station_id": new_station.id}
+
+        return {
+            "code": 200,
+            "message": "站点资料提交成功，已进入平台审核队列",
+            "station_id": new_station.id,
+        }
     except Exception as e:
         db.rollback()
         return {"code": 500, "message": f"提交失败: {str(e)}"}
