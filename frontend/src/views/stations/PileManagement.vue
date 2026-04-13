@@ -66,8 +66,8 @@ const statusTagType = (status) => {
 const loadStations = async () => {
   stationLoading.value = true
   try {
-    const { data } = await fetchOperatorStations()
-    stations.value = data.data || []
+    const { data } = await fetchOperatorStations({ page: 1, page_size: 100 })
+    stations.value = data.data?.items || []
 
     const queryId = Number(route.query.stationId || 0) || null
     if (queryId && stations.value.some((item) => item.id === queryId)) {

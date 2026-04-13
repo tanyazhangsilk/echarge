@@ -36,8 +36,8 @@ const routes = [
       { path: 'users', name: 'AdminUsers', component: () => import('../views/admin/UserManagement.vue'), meta: { role: ROLES.ADMIN, title: '用户列表', section: '用户管理', description: '查看平台用户资料、状态与账户信息' } },
       { path: 'users/blacklist', name: 'AdminUsersBlacklist', component: () => import('../views/admin/UserBlacklist.vue'), meta: { role: ROLES.ADMIN, title: '黑名单管理', section: '用户管理', description: '管理高风险账户和限制对象' } },
       { path: 'marketing', name: 'AdminMarketing', component: () => import('../views/admin/MarketingAudit.vue'), meta: { role: ROLES.ADMIN, title: '营销合规审计', section: '系统配置', description: '审核营销活动、优惠策略和平台规则' } },
-      { path: 'settings', name: 'AdminSettings', component: () => import('../views/RoleBlueprint.vue'), meta: { role: ROLES.ADMIN, title: '权限控制', section: '系统配置', description: '查看系统管理配置与权限控制规则' } },
-      { path: 'settings/params', name: 'AdminSettingsParams', component: () => import('../views/admin/SystemParams.vue'), meta: { role: ROLES.ADMIN, title: '系统参数设置', section: '系统配置', description: '维护平台参数、规则阈值与基础配置' } },
+      { path: 'settings', name: 'AdminSettings', component: () => import('../views/admin/SystemParams.vue'), meta: { role: ROLES.ADMIN, title: '系统设置', section: '系统配置', description: '维护平台参数、规则配置与基础设置' } },
+      { path: 'settings/params', name: 'AdminSettingsParams', component: () => import('../views/admin/SystemParams.vue'), meta: { role: ROLES.ADMIN, title: '平台参数', section: '系统配置', description: '维护平台参数、阈值与规则配置' } },
     ],
   },
   {

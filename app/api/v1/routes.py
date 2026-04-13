@@ -5,7 +5,7 @@ from typing import Any
 
 import random
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
@@ -30,6 +30,7 @@ from app.services.order_service import (
     get_abnormal_order_list,
     get_all_order_list,
     get_history_order_list,
+    get_order_page,
     get_order_detail_data,
     get_order_stats,
     get_realtime_order_list,
@@ -44,6 +45,7 @@ from app.services.operator_demo_service import (
     ensure_operator_demo_assets,
     ensure_operator_price_templates,
     ensure_station_chargers,
+    get_operator_station_page,
     infer_charger_power_kw,
     serialize_operator_charger,
     serialize_operator_station,
@@ -769,18 +771,59 @@ async def mark_order_abnormal_api(
 
 @api_router.get("/admin/orders", tags=["orders", "admin"])
 async def get_admin_orders(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    keyword: str | None = None,
+    status: int | None = None,
+    station_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     _context: RoleContext = Depends(require_admin_context),
     db: Session = Depends(get_db),
 ):
-    return {"code": 200, "data": get_all_order_list(db, limit=200)}
+    return {
+        "code": 200,
+        "data": get_order_page(
+            db,
+            page=page,
+            page_size=page_size,
+            keyword=keyword,
+            status=status,
+            station_id=station_id,
+            start_date=start_date,
+            end_date=end_date,
+        ),
+    }
 
 
 @api_router.get("/admin/orders/abnormal", tags=["orders", "admin"])
 async def get_admin_abnormal_orders(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    keyword: str | None = None,
+    status: int | None = None,
+    station_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    abnormal_reason: str | None = None,
     _context: RoleContext = Depends(require_admin_context),
     db: Session = Depends(get_db),
 ):
-    return {"code": 200, "data": get_abnormal_order_list(db, limit=200)}
+    return {
+        "code": 200,
+        "data": get_order_page(
+            db,
+            page=page,
+            page_size=page_size,
+            keyword=keyword,
+            status=status,
+            station_id=station_id,
+            start_date=start_date,
+            end_date=end_date,
+            abnormal_reason=abnormal_reason,
+            default_status=2,
+        ),
+    }
 
 
 @api_router.get("/admin/orders/{order_id}", tags=["orders", "admin"])
@@ -797,6 +840,11 @@ async def get_admin_order_detail(
 
 @api_router.get("/operator/stations", tags=["operator"])
 async def get_operator_stations(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    keyword: str | None = None,
+    status: int | None = None,
+    visibility: str | None = None,
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
@@ -805,18 +853,18 @@ async def get_operator_stations(
         return {"code": 404, "message": "运营商不存在"}
 
     ensure_operator_demo_assets(db, operator)
-    stations = (
-        db.query(Station)
-        .options(
-            joinedload(Station.operator),
-            joinedload(Station.price_template),
-            joinedload(Station.chargers),
-        )
-        .filter(Station.operator_id == operator.id, Station.is_deleted.is_(False))
-        .order_by(Station.updated_at.desc(), Station.id.desc())
-        .all()
-    )
-    return {"code": 200, "data": [serialize_operator_station(item) for item in stations]}
+    return {
+        "code": 200,
+        "data": get_operator_station_page(
+            db,
+            operator_id=operator.id,
+            page=page,
+            page_size=page_size,
+            keyword=keyword,
+            status=status,
+            visibility=visibility,
+        ),
+    }
 
 
 @api_router.get("/operator/stations/{station_id}/chargers", tags=["operator"])
@@ -1011,26 +1059,91 @@ async def operator_demo_start_order(
 
 @api_router.get("/operator/orders/history", tags=["orders", "operator"])
 async def get_operator_history_orders(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    keyword: str | None = None,
+    status: int | None = None,
+    station_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    return {"code": 200, "data": get_history_order_list(db, limit=100, operator_id=context.operator_id)}
+    return {
+        "code": 200,
+        "data": get_order_page(
+            db,
+            operator_id=context.operator_id,
+            page=page,
+            page_size=page_size,
+            keyword=keyword,
+            status=status,
+            station_id=station_id,
+            start_date=start_date,
+            end_date=end_date,
+            default_status=1,
+        ),
+    }
 
 
 @api_router.get("/operator/orders/realtime", tags=["orders", "operator"])
 async def get_operator_realtime_orders(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    keyword: str | None = None,
+    status: int | None = None,
+    station_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    return {"code": 200, "data": get_realtime_order_list(db, limit=100, operator_id=context.operator_id)}
+    return {
+        "code": 200,
+        "data": get_order_page(
+            db,
+            operator_id=context.operator_id,
+            page=page,
+            page_size=page_size,
+            keyword=keyword,
+            status=status,
+            station_id=station_id,
+            start_date=start_date,
+            end_date=end_date,
+            default_status=0,
+        ),
+    }
 
 
 @api_router.get("/operator/orders/abnormal", tags=["orders", "operator"])
 async def get_operator_abnormal_orders(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    keyword: str | None = None,
+    status: int | None = None,
+    station_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    abnormal_reason: str | None = None,
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    return {"code": 200, "data": get_abnormal_order_list(db, limit=100, operator_id=context.operator_id)}
+    return {
+        "code": 200,
+        "data": get_order_page(
+            db,
+            operator_id=context.operator_id,
+            page=page,
+            page_size=page_size,
+            keyword=keyword,
+            status=status,
+            station_id=station_id,
+            start_date=start_date,
+            end_date=end_date,
+            abnormal_reason=abnormal_reason,
+            default_status=2,
+        ),
+    }
 
 
 @api_router.get("/operator/orders/{order_id}", tags=["orders", "operator"])
@@ -1562,9 +1675,12 @@ async def process_station_audit(
 
 
 @api_router.post("/operator/stations/apply", tags=["operator"])
-async def operator_apply_station(payload: dict, db: Session = Depends(get_db)):
-    """运营商提交新建站点申请。"""
-    operator = db.query(Operator).first()
+async def operator_apply_station(
+    payload: dict,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = get_operator_by_context(db, context)
     if not operator:
         return {"code": 404, "message": "当前运营商未找到，请先入驻"}
 

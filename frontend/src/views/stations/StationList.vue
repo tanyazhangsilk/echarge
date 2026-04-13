@@ -1,10 +1,11 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Connection,
   Grid,
   OfficeBuilding,
+  Plus,
   RefreshRight,
   View,
 } from '@element-plus/icons-vue'
@@ -13,6 +14,7 @@ import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import {
+  applyOperatorStation,
   bindStationTemplate,
   fetchOperatorPricingTemplates,
   fetchOperatorStations,
@@ -21,15 +23,24 @@ import {
 } from '../../api/operator'
 
 const loading = ref(false)
+const errorMessage = ref('')
 const stations = ref([])
+const total = ref(0)
 const chargerLoading = ref(false)
 const chargers = ref([])
 const templateLoading = ref(false)
 const templates = ref([])
 const chargerDrawerVisible = ref(false)
 const templateDialogVisible = ref(false)
+const applyDialogVisible = ref(false)
 const currentStation = ref(null)
 const bindSubmitting = ref(false)
+const applySubmitting = ref(false)
+
+const pagination = reactive({
+  page: 1,
+  pageSize: 10,
+})
 
 const filters = reactive({
   keyword: '',
@@ -37,9 +48,24 @@ const filters = reactive({
   visibility: '',
 })
 
+const summary = reactive({
+  total_count: 0,
+  online_count: 0,
+  pending_count: 0,
+  private_count: 0,
+})
+
 const bindForm = reactive({
   templateId: null,
 })
+
+const applyForm = reactive({
+  name: '',
+  lng: 114.0579,
+  lat: 22.5431,
+})
+
+let searchTimer = null
 
 const statusOptions = [
   { label: '全部状态', value: '' },
@@ -54,64 +80,44 @@ const visibilityOptions = [
   { label: '私有站点', value: 'private' },
 ]
 
-const filteredStations = computed(() => {
-  const keyword = filters.keyword.trim().toLowerCase()
-  return stations.value.filter((item) => {
-    const matchKeyword =
-      !keyword ||
-      [item.station_name, item.operator_name, item.address, item.price_template_name]
-        .filter(Boolean)
-        .some((field) => String(field).toLowerCase().includes(keyword))
-    const matchStatus = filters.status === '' || Number(filters.status) === item.status
-    const matchVisibility = !filters.visibility || filters.visibility === item.visibility
-    return matchKeyword && matchStatus && matchVisibility
-  })
-})
-
-const stats = computed(() => {
-  const total = stations.value.length
-  const online = stations.value.filter((item) => item.status === 0).length
-  const pending = stations.value.filter((item) => item.status === 3).length
-  const privateCount = stations.value.filter((item) => item.visibility === 'private').length
-  return [
-    {
-      label: '总电站',
-      value: total,
-      suffix: ' 座',
-      trend: '运营商场站规模',
-      trendLabel: '适合后台总览截图',
-      tone: 'primary',
-      icon: OfficeBuilding,
-    },
-    {
-      label: '已上线',
-      value: online,
-      suffix: ' 座',
-      trend: '可对外运营',
-      trendLabel: '审核通过后可设为公开',
-      tone: 'success',
-      icon: Grid,
-    },
-    {
-      label: '待审核',
-      value: pending,
-      suffix: ' 座',
-      trend: '等待平台审核',
-      trendLabel: '未通过前不能公开',
-      tone: 'warning',
-      icon: View,
-    },
-    {
-      label: '私有站点',
-      value: privateCount,
-      suffix: ' 座',
-      trend: '内部可见',
-      trendLabel: '支持运营中切换回显',
-      tone: 'info',
-      icon: Connection,
-    },
-  ]
-})
+const stats = computed(() => [
+  {
+    label: '总电站',
+    value: summary.total_count,
+    suffix: ' 座',
+    trend: '运营商电站总量',
+    trendLabel: '统计范围为当前账号下全部电站',
+    tone: 'primary',
+    icon: OfficeBuilding,
+  },
+  {
+    label: '已上线',
+    value: summary.online_count,
+    suffix: ' 座',
+    trend: '已通过审核并可运营',
+    trendLabel: '仅已上线电站允许设置为公开',
+    tone: 'success',
+    icon: Grid,
+  },
+  {
+    label: '待审核',
+    value: summary.pending_count,
+    suffix: ' 座',
+    trend: '等待平台审核',
+    trendLabel: '审核通过后方可公开展示',
+    tone: 'warning',
+    icon: View,
+  },
+  {
+    label: '私有站点',
+    value: summary.private_count,
+    suffix: ' 座',
+    trend: '当前未对外公开',
+    trendLabel: '支持按需调整站点可见性',
+    tone: 'info',
+    icon: Connection,
+  },
+])
 
 const selectedTemplate = computed(() =>
   templates.value.find((item) => item.id === bindForm.templateId) || null,
@@ -141,12 +147,34 @@ const chargerStatusType = (status) => {
 
 const loadStations = async () => {
   loading.value = true
+  errorMessage.value = ''
   try {
-    const { data } = await fetchOperatorStations()
-    stations.value = data.data || []
+    const { data } = await fetchOperatorStations({
+      page: pagination.page,
+      page_size: pagination.pageSize,
+      keyword: filters.keyword.trim() || undefined,
+      status: filters.status === '' ? undefined : Number(filters.status),
+      visibility: filters.visibility || undefined,
+    })
+
+    const payload = data.data || {}
+    stations.value = payload.items || []
+    total.value = Number(payload.total || 0)
+    pagination.page = Number(payload.page || pagination.page)
+    pagination.pageSize = Number(payload.page_size || pagination.pageSize)
+    Object.assign(summary, payload.summary || {})
   } catch (error) {
     console.error(error)
-    ElMessage.error('电站列表加载失败')
+    stations.value = []
+    total.value = 0
+    Object.assign(summary, {
+      total_count: 0,
+      online_count: 0,
+      pending_count: 0,
+      private_count: 0,
+    })
+    errorMessage.value = error?.response?.data?.message || '电站列表加载失败，请稍后重试。'
+    ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
   }
@@ -159,7 +187,7 @@ const loadTemplates = async () => {
     templates.value = data.data || []
   } catch (error) {
     console.error(error)
-    ElMessage.error('电价模板加载失败')
+    ElMessage.error(error?.response?.data?.message || '电价模板加载失败')
   } finally {
     templateLoading.value = false
   }
@@ -174,7 +202,8 @@ const openChargerDrawer = async (station) => {
     chargers.value = data.data || []
   } catch (error) {
     console.error(error)
-    ElMessage.error('电桩列表加载失败')
+    chargers.value = []
+    ElMessage.error(error?.response?.data?.message || '电桩列表加载失败')
   } finally {
     chargerLoading.value = false
   }
@@ -185,7 +214,7 @@ const handleVisibilityChange = async (station, visibility) => {
   try {
     await ElMessageBox.confirm(`确认将“${station.station_name}”设置为${actionText}吗？`, '修改可见性', {
       type: 'warning',
-      confirmButtonText: '确认修改',
+      confirmButtonText: '确认',
       cancelButtonText: '取消',
     })
     const { data } = await updateStationVisibility(station.id, visibility)
@@ -194,7 +223,7 @@ const handleVisibilityChange = async (station, visibility) => {
   } catch (error) {
     if (error !== 'cancel') {
       console.error(error)
-      ElMessage.error(error?.response?.data?.message || '修改失败')
+      ElMessage.error(error?.response?.data?.message || '可见性修改失败')
     }
   }
 }
@@ -210,9 +239,10 @@ const openBindDialog = async (station) => {
 
 const submitBindTemplate = async () => {
   if (!currentStation.value || !bindForm.templateId) {
-    ElMessage.warning('请先选择一个模板')
+    ElMessage.warning('请选择电价模板')
     return
   }
+
   bindSubmitting.value = true
   try {
     const { data } = await bindStationTemplate(currentStation.value.id, bindForm.templateId)
@@ -227,26 +257,89 @@ const submitBindTemplate = async () => {
   }
 }
 
+const openApplyDialog = () => {
+  applyForm.name = ''
+  applyForm.lng = 114.0579
+  applyForm.lat = 22.5431
+  applyDialogVisible.value = true
+}
+
+const submitApplyStation = async () => {
+  if (!applyForm.name.trim()) {
+    ElMessage.warning('请输入电站名称')
+    return
+  }
+
+  applySubmitting.value = true
+  try {
+    const { data } = await applyOperatorStation({
+      name: applyForm.name.trim(),
+      lng: Number(applyForm.lng),
+      lat: Number(applyForm.lat),
+    })
+    ElMessage.success(data.message || '站点申请已提交')
+    applyDialogVisible.value = false
+    pagination.page = 1
+    await loadStations()
+  } catch (error) {
+    console.error(error)
+    ElMessage.error(error?.response?.data?.message || '站点申请提交失败')
+  } finally {
+    applySubmitting.value = false
+  }
+}
+
 const resetFilters = () => {
   filters.keyword = ''
   filters.status = ''
   filters.visibility = ''
 }
 
+const handlePageChange = (page) => {
+  pagination.page = page
+  loadStations()
+}
+
+const handleSizeChange = (size) => {
+  pagination.page = 1
+  pagination.pageSize = size
+  loadStations()
+}
+
+watch(
+  () => [filters.keyword, filters.status, filters.visibility],
+  () => {
+    if (searchTimer) {
+      clearTimeout(searchTimer)
+    }
+    searchTimer = setTimeout(() => {
+      pagination.page = 1
+      loadStations()
+    }, 300)
+  },
+)
+
 onMounted(async () => {
   await Promise.all([loadStations(), loadTemplates()])
+})
+
+onBeforeUnmount(() => {
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+  }
 })
 </script>
 
 <template>
   <div class="page-shell station-page">
     <PageSectionHeader
-      eyebrow="Operator Stations"
+      eyebrow="资产管理"
       title="电站管理"
-      description="展示电站、充电桩与电价模板的绑定关系，适合作为毕业论文中的运营后台页面截图。"
-      chip="运营商资产管理"
+      description="维护电站档案、可见性和电价模板绑定信息。"
+      chip="电站中心"
     >
       <template #actions>
+        <el-button type="primary" :icon="Plus" @click="openApplyDialog">申请新建电站</el-button>
         <el-button :icon="RefreshRight" :loading="loading" @click="loadStations">刷新列表</el-button>
       </template>
     </PageSectionHeader>
@@ -269,20 +362,25 @@ onMounted(async () => {
       <div class="panel-heading">
         <div>
           <h3 class="panel-heading__title">筛选条件</h3>
-          <p class="panel-heading__desc">支持按电站名称、状态和可见性快速筛选。</p>
+          <p class="panel-heading__desc">支持按电站名称、状态和可见性进行查询。</p>
         </div>
         <div class="toolbar-actions">
           <el-button @click="resetFilters">重置</el-button>
-          <el-button type="primary" :loading="loading" @click="loadStations">重新加载</el-button>
+          <el-button :loading="loading" @click="loadStations">重新加载</el-button>
         </div>
       </div>
 
       <div class="filter-row">
-        <el-input v-model="filters.keyword" clearable placeholder="搜索电站名称 / 运营商 / 地址 / 模板" style="width: 340px" />
-        <el-select v-model="filters.status" placeholder="选择状态" style="width: 160px">
+        <el-input
+          v-model="filters.keyword"
+          clearable
+          placeholder="搜索电站名称、运营商或模板名称"
+          style="width: 340px"
+        />
+        <el-select v-model="filters.status" placeholder="选择状态" clearable style="width: 160px">
           <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <el-select v-model="filters.visibility" placeholder="选择可见性" style="width: 160px">
+        <el-select v-model="filters.visibility" placeholder="选择可见性" clearable style="width: 160px">
           <el-option v-for="item in visibilityOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </div>
@@ -292,11 +390,24 @@ onMounted(async () => {
       <div class="panel-heading">
         <div>
           <h3 class="panel-heading__title">电站列表</h3>
-          <p class="panel-heading__desc">共 {{ filteredStations.length }} 座电站，支持查看电桩、切换可见性和绑定电价模板。</p>
+          <p class="panel-heading__desc">共 {{ total }} 条记录。</p>
         </div>
       </div>
 
-      <el-table v-if="filteredStations.length" :data="filteredStations" v-loading="loading" stripe>
+      <el-alert
+        v-if="errorMessage"
+        :title="errorMessage"
+        type="error"
+        show-icon
+        :closable="false"
+        class="panel-alert"
+      >
+        <template #default>
+          <el-button link type="primary" @click="loadStations">重新获取</el-button>
+        </template>
+      </el-alert>
+
+      <el-table v-if="stations.length" :data="stations" v-loading="loading" stripe>
         <el-table-column prop="station_name" label="电站名称" min-width="220" show-overflow-tooltip />
         <el-table-column prop="operator_name" label="运营商" min-width="180" show-overflow-tooltip />
         <el-table-column prop="address" label="地址" min-width="280" show-overflow-tooltip />
@@ -312,6 +423,7 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column prop="price_template_name" label="绑定模板" min-width="180" show-overflow-tooltip />
         <el-table-column prop="charger_count" label="充电桩数量" width="110" align="center" />
+        <el-table-column prop="created_at" label="创建时间" width="170" />
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openChargerDrawer(row)">查看电桩</el-button>
@@ -330,11 +442,23 @@ onMounted(async () => {
       <EmptyStateBlock
         v-else-if="!loading"
         title="暂无电站数据"
-        description="当前没有符合条件的电站记录。"
+        description="当前筛选条件下没有找到电站记录。"
       />
+
+      <div class="pager">
+        <el-pagination
+          :current-page="pagination.page"
+          :page-size="pagination.pageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @current-change="handlePageChange"
+          @size-change="handleSizeChange"
+        />
+      </div>
     </section>
 
-    <el-drawer v-model="chargerDrawerVisible" size="780px" :title="currentStation?.station_name || '电桩管理'">
+    <el-drawer v-model="chargerDrawerVisible" size="780px" :title="currentStation?.station_name || '电桩列表'">
       <template v-if="currentStation">
         <div class="drawer-header-card">
           <div>
@@ -348,7 +472,7 @@ onMounted(async () => {
         </div>
 
         <el-descriptions :column="4" border class="drawer-descriptions">
-          <el-descriptions-item label="充电桩总数">{{ chargerSummary.total }}</el-descriptions-item>
+          <el-descriptions-item label="总数量">{{ chargerSummary.total }}</el-descriptions-item>
           <el-descriptions-item label="充电中">{{ chargerSummary.charging }}</el-descriptions-item>
           <el-descriptions-item label="空闲">{{ chargerSummary.idle }}</el-descriptions-item>
           <el-descriptions-item label="故障">{{ chargerSummary.fault }}</el-descriptions-item>
@@ -373,7 +497,7 @@ onMounted(async () => {
       <EmptyStateBlock
         v-if="!chargerLoading && !chargers.length"
         title="暂无电桩数据"
-        description="当前电站下还没有可展示的充电桩。"
+        description="当前电站下暂无可展示的电桩记录。"
       />
     </el-drawer>
 
@@ -424,13 +548,32 @@ onMounted(async () => {
 
       <EmptyStateBlock
         v-else
-        title="请选择一个模板"
-        description="选择模板后会在这里展示模板价格详情。"
+        title="请选择模板"
+        description="选择后将在此处展示模板价格信息。"
       />
 
       <template #footer>
         <el-button @click="templateDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="bindSubmitting" @click="submitBindTemplate">确认绑定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="applyDialogVisible" width="560px" title="申请新建电站">
+      <el-form label-width="90px">
+        <el-form-item label="电站名称">
+          <el-input v-model="applyForm.name" placeholder="请输入电站名称" />
+        </el-form-item>
+        <el-form-item label="经度">
+          <el-input-number v-model="applyForm.lng" :precision="6" :step="0.001" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="纬度">
+          <el-input-number v-model="applyForm.lat" :precision="6" :step="0.001" style="width: 100%" />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="applyDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="applySubmitting" @click="submitApplyStation">提交申请</el-button>
       </template>
     </el-dialog>
   </div>
@@ -456,6 +599,16 @@ onMounted(async () => {
   gap: 12px;
 }
 
+.panel-alert {
+  margin-bottom: 16px;
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 .drawer-header-card,
 .dialog-station-card {
   display: flex;
@@ -465,7 +618,7 @@ onMounted(async () => {
   padding: 18px;
   margin-bottom: 16px;
   border-radius: 18px;
-  background: linear-gradient(135deg, rgba(47, 116, 255, 0.08), rgba(73, 187, 174, 0.1));
+  background: linear-gradient(135deg, rgba(47, 116, 255, 0.08), rgba(73, 187, 174, 0.10));
 }
 
 .drawer-header-card strong,

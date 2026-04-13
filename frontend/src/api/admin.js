@@ -16,6 +16,6 @@ export const updateSystemParams = (payload) => http.put('/admin/settings/params'
 export const fetchStationAudits = () => http.get('/admin/audit/stations')
 export const processStationAudit = (stationId, payload) => http.post(`/admin/audit/stations/${stationId}/process`, payload)
 
-export const fetchAdminOrders = () => http.get('/admin/orders')
-export const fetchAdminAbnormalOrders = () => http.get('/admin/orders/abnormal')
+export const fetchAdminOrders = (params = {}) => http.get('/admin/orders', { params })
+export const fetchAdminAbnormalOrders = (params = {}) => http.get('/admin/orders/abnormal', { params })
 export const fetchAdminOrderDetail = (orderId) => http.get(`/admin/orders/${orderId}`)

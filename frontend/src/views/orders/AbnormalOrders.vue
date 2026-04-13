@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Bell, Money, RefreshRight, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -13,88 +13,109 @@ import { ROLES } from '../../config/permissions'
 
 const route = useRoute()
 const router = useRouter()
+
 const loading = ref(false)
+const errorMessage = ref('')
 const orders = ref([])
+const total = ref(0)
+
+const pagination = reactive({
+  page: 1,
+  pageSize: 10,
+})
 
 const filters = reactive({
   keyword: '',
   reason: '',
+  dateRange: [],
 })
 
-const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
+const summary = reactive({
+  total_count: 0,
+  total_amount: 0,
+  reason_count: 0,
+  abnormal_count: 0,
+})
+
+let searchTimer = null
+
 const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
+const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
 
-const filteredOrders = computed(() => {
-  const keyword = filters.keyword.trim().toLowerCase()
-  const reasonKeyword = filters.reason.trim().toLowerCase()
-  return orders.value.filter((item) => {
-    const matchKeyword =
-      !keyword ||
-      [item.order_no, item.user_phone, item.user_nickname, item.vin, item.station_name]
-        .filter(Boolean)
-        .some((field) => String(field).toLowerCase().includes(keyword))
-    const matchReason =
-      !reasonKeyword || String(item.abnormal_reason || '').toLowerCase().includes(reasonKeyword)
-    return matchKeyword && matchReason
-  })
-})
+const stats = computed(() => [
+  {
+    label: '异常订单',
+    value: summary.total_count,
+    suffix: ' 单',
+    trend: '当前筛选条件下的异常订单',
+    trendLabel: '支持按原因和时间范围查询',
+    tone: 'danger',
+    icon: WarningFilled,
+  },
+  {
+    label: '异常金额',
+    value: Number(summary.total_amount || 0).toFixed(2),
+    prefix: '¥',
+    trend: '异常订单涉及金额',
+    trendLabel: '便于财务复核',
+    tone: 'warning',
+    icon: Money,
+  },
+  {
+    label: '异常类型',
+    value: summary.reason_count,
+    suffix: ' 类',
+    trend: '异常原因种类数',
+    trendLabel: '统计口径来自服务端',
+    tone: 'info',
+    icon: Bell,
+  },
+  {
+    label: '待处理数量',
+    value: summary.abnormal_count,
+    suffix: ' 单',
+    trend: '异常状态订单数量',
+    trendLabel: '用于快速识别处理规模',
+    tone: 'primary',
+    icon: RefreshRight,
+  },
+])
 
-const stats = computed(() => {
-  const totalCount = filteredOrders.value.length
-  const totalAmount = filteredOrders.value.reduce((sum, item) => sum + Number(item.total_amount || 0), 0)
-  const reasonCount = new Set(filteredOrders.value.map((item) => item.abnormal_reason).filter(Boolean)).size
-  const highRiskCount = filteredOrders.value.filter((item) =>
-    ['断连', '故障', '支付', '异常'].some((keyword) => String(item.abnormal_reason || '').includes(keyword)),
-  ).length
-
-  return [
-    {
-      label: '异常订单',
-      value: totalCount,
-      suffix: ' 单',
-      trend: '待复核订单',
-      trendLabel: '用于风控和答辩展示',
-      tone: 'danger',
-      icon: WarningFilled,
-    },
-    {
-      label: '异常金额',
-      value: totalAmount.toFixed(2),
-      prefix: '¥',
-      trend: '异常订单涉及金额',
-      trendLabel: '便于展示财务影响',
-      tone: 'warning',
-      icon: Money,
-    },
-    {
-      label: '异常类型',
-      value: reasonCount,
-      suffix: ' 类',
-      trend: '异常原因种类',
-      trendLabel: '可做论文图表说明',
-      tone: 'info',
-      icon: Bell,
-    },
-    {
-      label: '高风险异常',
-      value: highRiskCount,
-      suffix: ' 单',
-      trend: '支付/设备相关',
-      trendLabel: '建议重点展示原因',
-      tone: 'primary',
-      icon: RefreshRight,
-    },
-  ]
+const buildQueryParams = () => ({
+  page: pagination.page,
+  page_size: pagination.pageSize,
+  keyword: filters.keyword.trim() || undefined,
+  abnormal_reason: filters.reason.trim() || undefined,
+  start_date: filters.dateRange?.[0] || undefined,
+  end_date: filters.dateRange?.[1] || undefined,
 })
 
 const loadOrders = async () => {
   loading.value = true
+  errorMessage.value = ''
   try {
-    const response = isAdmin.value ? await fetchAdminAbnormalOrders() : await fetchOperatorAbnormalOrders()
-    orders.value = response.data.data || []
+    const response = isAdmin.value
+      ? await fetchAdminAbnormalOrders(buildQueryParams())
+      : await fetchOperatorAbnormalOrders(buildQueryParams())
+
+    const payload = response.data.data || {}
+    orders.value = payload.items || []
+    total.value = Number(payload.total || 0)
+    pagination.page = Number(payload.page || pagination.page)
+    pagination.pageSize = Number(payload.page_size || pagination.pageSize)
+    Object.assign(summary, payload.summary || {})
   } catch (error) {
     console.error(error)
-    ElMessage.error('异常订单加载失败')
+    orders.value = []
+    total.value = 0
+    Object.assign(summary, {
+      total_count: 0,
+      total_amount: 0,
+      reason_count: 0,
+      abnormal_count: 0,
+    })
+    errorMessage.value = error?.response?.data?.message || '异常订单加载失败，请稍后重试。'
+    ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
   }
@@ -103,35 +124,58 @@ const loadOrders = async () => {
 const resetFilters = () => {
   filters.keyword = ''
   filters.reason = ''
+  filters.dateRange = []
 }
 
 const openDetail = (row) => {
   router.push(isAdmin.value ? `/admin/orders/detail/${row.id}` : `/operator/orders/detail/${row.id}`)
 }
 
+const handlePageChange = (page) => {
+  pagination.page = page
+  loadOrders()
+}
+
+const handleSizeChange = (size) => {
+  pagination.page = 1
+  pagination.pageSize = size
+  loadOrders()
+}
+
+watch(
+  () => [filters.keyword, filters.reason, JSON.stringify(filters.dateRange)],
+  () => {
+    if (searchTimer) {
+      clearTimeout(searchTimer)
+    }
+    searchTimer = setTimeout(() => {
+      pagination.page = 1
+      loadOrders()
+    }, 300)
+  },
+)
+
 onMounted(loadOrders)
+
+onBeforeUnmount(() => {
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+  }
+})
 </script>
 
 <template>
   <div class="page-shell abnormal-page">
     <PageSectionHeader
-      eyebrow="Abnormal Orders"
-      :title="isAdmin ? '全局异常订单' : '异常订单'"
-      :description="isAdmin ? '管理员查看全平台异常订单。' : '突出展示异常原因与异常金额，便于论文截图和答辩时说明订单异常处理闭环。'"
-      :chip="isAdmin ? '管理员订单管理' : '运营商订单管理'"
+      eyebrow="订单中心"
+      :title="isAdmin ? '异常订单管理' : '异常订单'"
+      description="查询异常订单及异常原因，跟踪处理情况。"
+      :chip="isAdmin ? '平台订单' : '订单中心'"
     >
       <template #actions>
         <el-button :icon="RefreshRight" :loading="loading" @click="loadOrders">刷新列表</el-button>
       </template>
     </PageSectionHeader>
-
-    <el-alert
-      title="异常原因在列表中采用高亮色块展示，便于截图时一眼看出问题点。"
-      type="warning"
-      show-icon
-      :closable="false"
-      class="risk-alert"
-    />
 
     <section class="stats-grid stats-grid--abnormal">
       <MetricCard
@@ -152,7 +196,7 @@ onMounted(loadOrders)
       <div class="panel-heading">
         <div>
           <h3 class="panel-heading__title">筛选条件</h3>
-          <p class="panel-heading__desc">支持按订单号、用户、VIN 和异常原因关键词筛选。</p>
+          <p class="panel-heading__desc">支持按订单、用户、异常原因和时间范围查询。</p>
         </div>
         <div class="toolbar-actions">
           <el-button @click="resetFilters">重置</el-button>
@@ -162,18 +206,39 @@ onMounted(loadOrders)
       <div class="filter-row">
         <el-input v-model="filters.keyword" clearable placeholder="订单号 / 用户账号 / VIN / 电站" style="width: 320px" />
         <el-input v-model="filters.reason" clearable placeholder="输入异常原因关键词" style="width: 240px" />
+        <el-date-picker
+          v-model="filters.dateRange"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+        />
       </div>
     </section>
 
     <section class="page-panel surface-card table-shell">
       <div class="panel-heading">
         <div>
-          <h3 class="panel-heading__title">异常订单列表</h3>
-          <p class="panel-heading__desc">共 {{ filteredOrders.length }} 条记录，支持跳转订单详情页查看完整信息。</p>
+          <h3 class="panel-heading__title">订单列表</h3>
+          <p class="panel-heading__desc">共 {{ total }} 条记录。</p>
         </div>
       </div>
 
-      <el-table v-if="filteredOrders.length" :data="filteredOrders" v-loading="loading" stripe>
+      <el-alert
+        v-if="errorMessage"
+        :title="errorMessage"
+        type="error"
+        show-icon
+        :closable="false"
+        class="panel-alert"
+      >
+        <template #default>
+          <el-button link type="primary" @click="loadOrders">重新获取</el-button>
+        </template>
+      </el-alert>
+
+      <el-table v-if="orders.length" :data="orders" v-loading="loading" stripe>
         <el-table-column prop="order_no" label="订单编号" min-width="190" show-overflow-tooltip />
         <el-table-column label="用户" min-width="160">
           <template #default="{ row }">
@@ -211,8 +276,20 @@ onMounted(loadOrders)
       <EmptyStateBlock
         v-else-if="!loading"
         title="暂无异常订单"
-        description="当前没有异常订单，可以先在实时订单页把一条订单标记为异常。"
+        description="当前筛选条件下没有异常订单记录。"
       />
+
+      <div class="pager">
+        <el-pagination
+          :current-page="pagination.page"
+          :page-size="pagination.pageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @current-change="handlePageChange"
+          @size-change="handleSizeChange"
+        />
+      </div>
     </section>
   </div>
 </template>
@@ -220,10 +297,6 @@ onMounted(loadOrders)
 <style scoped>
 .abnormal-page {
   padding-bottom: 8px;
-}
-
-.risk-alert {
-  margin-bottom: 18px;
 }
 
 .stats-grid--abnormal {
@@ -239,6 +312,16 @@ onMounted(loadOrders)
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.panel-alert {
+  margin-bottom: 16px;
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 .user-cell {

@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.models import Charger, Operator, PriceTemplate, Station
@@ -63,10 +65,16 @@ def _now_text(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else ""
 
 
+def _normalize_page(page: int | None, page_size: int | None, *, default_size: int = 10, max_size: int = 100) -> tuple[int, int]:
+    safe_page = max(int(page or 1), 1)
+    safe_page_size = max(int(page_size or default_size), 1)
+    return safe_page, min(safe_page_size, max_size)
+
+
 def _looks_like_mojibake(value: str | None) -> bool:
     if not value:
         return False
-    return any(flag in value for flag in ["鍩", "鍥", "绔", "妯", "鍏", "绀"])
+    return any(flag in value for flag in ("鍩", "鍥", "绔", "妯", "鍏", "绀"))
 
 
 def station_status_text(status: int) -> str:
@@ -82,7 +90,8 @@ def charger_status_text(status: int) -> str:
 
 
 def infer_station_address(station: Station) -> str:
-    district = ["南山区", "福田区", "宝安区", "龙华区", "龙岗区"][station.id % 5]
+    districts = ["南山区", "福田区", "宝安区", "龙华区", "龙岗区"]
+    district = districts[station.id % len(districts)]
     return f"深圳市{district}示范路{station.id}号 · {station.name}"
 
 
@@ -96,12 +105,12 @@ def infer_charger_power_kw(charger: Charger) -> int:
 
 
 def infer_charger_name(charger: Charger) -> str:
-    station_name = charger.station.name[:8] if charger.station and charger.station.name else "示范站"
+    station_name = charger.station.name[:8] if charger.station and charger.station.name else "示范电站"
     suffix = charger.sn_code[-4:] if charger.sn_code else f"{charger.id:04d}"
     return f"{station_name}-{suffix}号桩"
 
 
-def parse_price_template_rules(template: PriceTemplate | None) -> dict:
+def parse_price_template_rules(template: PriceTemplate | None) -> dict[str, Any]:
     defaults = {
         "peak_price": 1.68,
         "flat_price": 1.18,
@@ -112,6 +121,7 @@ def parse_price_template_rules(template: PriceTemplate | None) -> dict:
     }
     if not template or not template.rules_json:
         return defaults
+
     try:
         data = json.loads(template.rules_json)
     except Exception:
@@ -152,13 +162,13 @@ def ensure_operator_price_templates(db: Session, operator: Operator) -> list[Pri
 
     created: list[PriceTemplate] = []
     for preset in DEFAULT_TEMPLATE_PRESETS:
-        item = PriceTemplate(
+        template = PriceTemplate(
             operator_id=operator.id,
             name=preset["name"],
             rules_json=json.dumps(preset, ensure_ascii=False),
         )
-        db.add(item)
-        created.append(item)
+        db.add(template)
+        created.append(template)
 
     db.commit()
     for item in created:
@@ -186,7 +196,7 @@ def ensure_station_chargers(db: Session, station: Station, count: int = 4) -> li
     return station.chargers
 
 
-def ensure_operator_demo_assets(db: Session, operator: Operator) -> dict:
+def ensure_operator_demo_assets(db: Session, operator: Operator) -> dict[str, Any]:
     templates = ensure_operator_price_templates(db, operator)
     stations = (
         db.query(Station)
@@ -196,24 +206,39 @@ def ensure_operator_demo_assets(db: Session, operator: Operator) -> dict:
     )
 
     if not stations:
+        seeds = [
+            ("科技园旗舰站", 0, "public"),
+            ("湾区综合补能站", 3, "private"),
+            ("城际枢纽示范站", 4, "private"),
+        ]
         stations = []
-        seed_statuses = [0, 3, 4]
-        seed_names = ["科技园旗舰站", "湾区综合补能站", "城际枢纽示范站"]
-        for index, status in enumerate(seed_statuses):
+        for index, (name, status, visibility) in enumerate(seeds, start=1):
             station = Station(
                 operator_id=operator.id,
                 template_id=templates[0].id if status == 0 else None,
-                name=f"{operator.name[:6]}{seed_names[index]}",
-                longitude=Decimal(f"113.9{index + 1}1234"),
-                latitude=Decimal(f"22.5{index + 1}1234"),
+                name=f"{operator.name[:6]}{name}",
+                longitude=Decimal(f"113.9{index}1234"),
+                latitude=Decimal(f"22.5{index}1234"),
                 status=status,
-                visibility="public" if status == 0 else "private",
+                visibility=visibility,
             )
             db.add(station)
             stations.append(station)
         db.commit()
-        for station in stations:
-            db.refresh(station)
+        for item in stations:
+            db.refresh(item)
+    else:
+        dirty = False
+        rename_presets = ["科技园旗舰站", "湾区综合补能站", "城际枢纽示范站"]
+        for index, station in enumerate(stations):
+            if _looks_like_mojibake(station.name):
+                preset_name = rename_presets[min(index, len(rename_presets) - 1)]
+                station.name = f"{operator.name[:6]}{preset_name}"
+                dirty = True
+        if dirty:
+            db.commit()
+            for item in stations:
+                db.refresh(item)
 
     for station in stations:
         ensure_station_chargers(db, station)
@@ -221,7 +246,7 @@ def ensure_operator_demo_assets(db: Session, operator: Operator) -> dict:
     return {"stations": stations, "templates": templates}
 
 
-def serialize_price_template(template: PriceTemplate) -> dict:
+def serialize_price_template(template: PriceTemplate) -> dict[str, Any]:
     rules = parse_price_template_rules(template)
     return {
         "id": template.id,
@@ -232,11 +257,12 @@ def serialize_price_template(template: PriceTemplate) -> dict:
         "service_price": rules["service_price"],
         "scope": rules["scope"],
         "status": rules["status"],
-        "updated_at": _now_text(template.updated_at),
+        "updated_at": _now_text(template.updated_at or template.created_at),
     }
 
 
-def serialize_operator_station(station: Station) -> dict:
+def serialize_operator_station(station: Station, charger_count: int | None = None) -> dict[str, Any]:
+    resolved_charger_count = charger_count if charger_count is not None else len(station.chargers or [])
     return {
         "id": station.id,
         "station_name": station.name,
@@ -246,7 +272,7 @@ def serialize_operator_station(station: Station) -> dict:
         "status_text": station_status_text(station.status),
         "visibility": station.visibility,
         "visibility_text": visibility_text(station.visibility),
-        "charger_count": len(station.chargers),
+        "charger_count": int(resolved_charger_count),
         "price_template_id": station.template_id,
         "price_template_name": station.price_template.name if station.price_template else "未绑定模板",
         "created_at": _now_text(station.created_at),
@@ -254,7 +280,7 @@ def serialize_operator_station(station: Station) -> dict:
     }
 
 
-def serialize_operator_charger(charger: Charger) -> dict:
+def serialize_operator_charger(charger: Charger) -> dict[str, Any]:
     return {
         "id": charger.id,
         "sn_code": charger.sn_code,
@@ -266,4 +292,105 @@ def serialize_operator_charger(charger: Charger) -> dict:
         "station_id": charger.station_id,
         "station_name": charger.station.name if charger.station else "",
         "updated_at": _now_text(charger.updated_at),
+    }
+
+
+def get_operator_station_page(
+    db: Session,
+    *,
+    operator_id: int,
+    page: int = 1,
+    page_size: int = 10,
+    keyword: str | None = None,
+    status: int | None = None,
+    visibility: str | None = None,
+) -> dict[str, Any]:
+    safe_page, safe_page_size = _normalize_page(page, page_size)
+    charger_count_subquery = (
+        db.query(
+            Charger.station_id.label("station_id"),
+            func.count(Charger.id).label("charger_count"),
+        )
+        .group_by(Charger.station_id)
+        .subquery()
+    )
+
+    query = (
+        db.query(
+            Station,
+            func.coalesce(charger_count_subquery.c.charger_count, 0).label("charger_count"),
+        )
+        .outerjoin(charger_count_subquery, charger_count_subquery.c.station_id == Station.id)
+        .filter(Station.operator_id == operator_id, Station.is_deleted.is_(False))
+    )
+
+    if keyword and keyword.strip():
+        search = f"%{keyword.strip()}%"
+        query = query.join(Operator, Station.operator_id == Operator.id).outerjoin(
+            PriceTemplate,
+            Station.template_id == PriceTemplate.id,
+        )
+        query = query.filter(
+            or_(
+                Station.name.like(search),
+                Operator.name.like(search),
+                PriceTemplate.name.like(search),
+            )
+        )
+
+    if status is not None:
+        query = query.filter(Station.status == status)
+
+    if visibility and visibility.strip():
+        query = query.filter(Station.visibility == visibility.strip().lower())
+
+    total = query.order_by(None).count()
+    rows = (
+        query.order_by(Station.updated_at.desc(), Station.id.desc())
+        .offset((safe_page - 1) * safe_page_size)
+        .limit(safe_page_size)
+        .all()
+    )
+
+    station_ids = [station.id for station, _ in rows]
+    station_map = {
+        station.id: station
+        for station in (
+            db.query(Station)
+            .filter(Station.id.in_(station_ids))
+            .all()
+            if station_ids
+            else []
+        )
+    }
+    for station in station_map.values():
+        ensure_station_chargers(db, station)
+
+    summary_row = (
+        db.query(
+            func.count(Station.id),
+            func.coalesce(func.sum(case((Station.status == 0, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Station.status == 3, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Station.visibility == "private", 1), else_=0)), 0),
+        )
+        .filter(Station.operator_id == operator_id, Station.is_deleted.is_(False))
+        .one()
+    )
+
+    items = []
+    for base_station, charger_count in rows:
+        station = station_map.get(base_station.id, base_station)
+        items.append(serialize_operator_station(station, charger_count=int(charger_count or 0)))
+
+    return {
+        "items": items,
+        "total": total,
+        "page": safe_page,
+        "page_size": safe_page_size,
+        "summary": {
+            "total_count": int(summary_row[0] or 0),
+            "online_count": int(summary_row[1] or 0),
+            "pending_count": int(summary_row[2] or 0),
+            "private_count": int(summary_row[3] or 0),
+        },
     }

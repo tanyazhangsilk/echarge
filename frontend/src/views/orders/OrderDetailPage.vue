@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Clock, Document, Money, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
@@ -25,8 +25,8 @@ const summaryCards = computed(() => {
     {
       label: '订单状态',
       value: order.value.status_text,
-      trend: '生命周期节点',
-      trendLabel: '充电中 / 已完成 / 异常结束',
+      trend: '当前订单处理结果',
+      trendLabel: '状态与列表页保持一致',
       tone: order.value.status === 2 ? 'danger' : order.value.status === 1 ? 'success' : 'warning',
       icon: Document,
     },
@@ -34,8 +34,8 @@ const summaryCards = computed(() => {
       label: '充电时长',
       value: order.value.charge_duration,
       suffix: ' 分钟',
-      trend: '本次会话时长',
-      trendLabel: '适合展示充电过程',
+      trend: '本次充电持续时间',
+      trendLabel: '结束后由系统自动计算',
       tone: 'primary',
       icon: Clock,
     },
@@ -43,16 +43,16 @@ const summaryCards = computed(() => {
       label: '总费用',
       value: Number(order.value.total_amount || 0).toFixed(2),
       prefix: '¥',
-      trend: '电费 + 服务费',
-      trendLabel: '结算字段自动生成',
+      trend: '电费与服务费合计',
+      trendLabel: '金额统一保留两位小数',
       tone: 'warning',
       icon: Money,
     },
     {
       label: '异常标记',
-      value: order.value.abnormal_reason ? '已记录' : '无',
-      trend: order.value.abnormal_reason || '当前无异常说明',
-      trendLabel: '异常订单会显示具体原因',
+      value: order.value.abnormal_reason ? '已记录' : '正常',
+      trend: order.value.abnormal_reason || '当前无异常记录',
+      trendLabel: '异常订单会展示具体原因',
       tone: order.value.abnormal_reason ? 'danger' : 'info',
       icon: WarningFilled,
     },
@@ -66,23 +66,23 @@ const timelineItems = computed(() => {
       type: 'primary',
       title: '开始充电',
       time: order.value.start_time,
-      content: `电站：${order.value.station_name}，电桩：${order.value.charger_name}`,
+      content: `电站：${order.value.station_name || '-'}，电桩：${order.value.charger_name || '-'}`,
     },
   ]
 
   if (order.value.end_time) {
     items.push({
       type: order.value.status === 2 ? 'danger' : 'success',
-      title: order.value.status === 2 ? '异常结束' : '完成订单',
+      title: order.value.status === 2 ? '异常结束' : '订单完成',
       time: order.value.end_time,
-      content: order.value.status === 2 ? order.value.abnormal_reason || '运营商手动标记异常' : '订单已转入历史订单',
+      content: order.value.status === 2 ? order.value.abnormal_reason || '已记录异常原因' : '订单已完成并进入历史订单',
     })
   } else {
     items.push({
       type: 'warning',
       title: '充电进行中',
       time: order.value.updated_at,
-      content: '当前订单仍处于实时充电状态，可结束充电或标记异常。',
+      content: '当前订单仍处于实时充电状态。',
     })
   }
 
@@ -98,13 +98,18 @@ const loadOrder = async () => {
     order.value = response.data.data || null
   } catch (error) {
     console.error(error)
-    ElMessage.error('订单详情加载失败')
+    order.value = null
+    ElMessage.error(error?.response?.data?.message || '订单详情加载失败')
   } finally {
     loading.value = false
   }
 }
 
 const goBack = () => {
+  if (window.history.length > 1) {
+    router.back()
+    return
+  }
   router.push(isAdmin.value ? '/admin/orders' : '/operator/orders/history')
 }
 
@@ -114,10 +119,10 @@ onMounted(loadOrder)
 <template>
   <div class="page-shell detail-page">
     <PageSectionHeader
-      eyebrow="Order Detail"
+      eyebrow="订单中心"
       title="订单详情"
-      description="通过卡片、金额区块、描述列表和时间线展示完整订单信息，适合单独截图。"
-      :chip="isAdmin ? '管理员订单管理' : '运营商订单管理'"
+      description="查看订单的用户、费用、设备与状态流转信息。"
+      :chip="isAdmin ? '平台订单' : '订单中心'"
     >
       <template #actions>
         <el-button @click="goBack">返回列表</el-button>
@@ -174,16 +179,16 @@ onMounted(loadOrder)
             <el-descriptions-item label="用户账号">{{ order.user_phone }}</el-descriptions-item>
             <el-descriptions-item label="用户昵称">{{ order.user_nickname }}</el-descriptions-item>
             <el-descriptions-item label="VIN">{{ order.vin || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="运营商名称">{{ order.operator_name }}</el-descriptions-item>
-            <el-descriptions-item label="开始时间">{{ order.start_time }}</el-descriptions-item>
+            <el-descriptions-item label="运营商名称">{{ order.operator_name || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="开始时间">{{ order.start_time || '-' }}</el-descriptions-item>
             <el-descriptions-item label="结束时间">{{ order.end_time || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="充电时长">{{ order.charge_duration }} 分钟</el-descriptions-item>
-            <el-descriptions-item label="充电电量">{{ Number(order.charge_amount).toFixed(2) }} kWh</el-descriptions-item>
+            <el-descriptions-item label="充电时长">{{ order.charge_duration_text || `${order.charge_duration} 分钟` }}</el-descriptions-item>
+            <el-descriptions-item label="充电电量">{{ Number(order.charge_amount || 0).toFixed(2) }} kWh</el-descriptions-item>
             <el-descriptions-item label="支付状态">{{ order.pay_status_text }}</el-descriptions-item>
-            <el-descriptions-item label="电站名称">{{ order.station_name }}</el-descriptions-item>
-            <el-descriptions-item label="电桩名称">{{ order.charger_name }}</el-descriptions-item>
+            <el-descriptions-item label="电站名称">{{ order.station_name || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="电桩名称">{{ order.charger_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="异常原因" :span="2">
-              {{ order.abnormal_reason || '无异常原因' }}
+              {{ order.abnormal_reason || '无' }}
             </el-descriptions-item>
           </el-descriptions>
         </article>
@@ -192,7 +197,7 @@ onMounted(loadOrder)
           <div class="panel-heading">
             <div>
               <h3 class="panel-heading__title">状态流转</h3>
-              <p class="panel-heading__desc">按时间线展示订单从开始充电到结束的关键节点。</p>
+              <p class="panel-heading__desc">按时间顺序展示订单关键节点。</p>
             </div>
           </div>
 
@@ -214,8 +219,8 @@ onMounted(loadOrder)
       </section>
     </template>
 
-    <section v-else class="page-panel surface-card">
-      <EmptyStateBlock title="未找到订单" description="当前订单不存在，或没有权限查看该订单。" />
+    <section v-else-if="!loading" class="page-panel surface-card">
+      <EmptyStateBlock title="未找到订单" description="当前订单不存在或无权查看。" />
     </section>
   </div>
 </template>
@@ -231,47 +236,48 @@ onMounted(loadOrder)
 
 .detail-grid {
   display: grid;
-  grid-template-columns: 1.35fr 0.85fr;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
   gap: 20px;
 }
 
 .amount-banner {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
   margin-bottom: 18px;
 }
 
 .amount-banner__item {
-  display: grid;
-  gap: 8px;
-  padding: 16px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(47, 116, 255, 0.08), rgba(73, 187, 174, 0.1));
-}
-
-.amount-banner__item--highlight {
-  background: linear-gradient(135deg, rgba(255, 176, 32, 0.16), rgba(255, 115, 0, 0.16));
+  padding: 18px;
+  border-radius: 18px;
+  background: #f7fafc;
+  border: 1px solid rgba(15, 23, 42, 0.06);
 }
 
 .amount-banner__item span {
+  display: block;
+  margin-bottom: 10px;
   color: var(--color-text-2);
-  font-size: 13px;
 }
 
 .amount-banner__item strong {
-  font-size: 26px;
-  color: var(--color-text);
+  font-size: 24px;
 }
 
-.detail-descriptions :deep(.el-descriptions__label) {
-  width: 120px;
+.amount-banner__item--highlight {
+  background: linear-gradient(135deg, rgba(47, 116, 255, 0.12), rgba(73, 187, 174, 0.14));
+  border-color: rgba(47, 116, 255, 0.16);
+}
+
+.detail-descriptions {
+  margin-top: 4px;
 }
 
 .timeline-card {
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(47, 116, 255, 0.06), rgba(73, 187, 174, 0.08));
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.06);
 }
 
 .timeline-card strong {

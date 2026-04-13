@@ -5,21 +5,10 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy import case, func, or_
+from sqlalchemy.orm import Session, joinedload
 
-from app.crud.order_crud import (
-    count_abnormal_orders,
-    count_charging_orders,
-    count_today_completed_orders,
-    get_order_by_id,
-    list_abnormal_orders,
-    list_all_orders,
-    list_history_orders,
-    list_realtime_orders,
-    sum_today_charge_amount,
-    sum_today_total_amount,
-)
-from app.models.models import Order
+from app.models.models import Charger, Order, Station, User
 
 
 ORDER_STATUS_LABELS = {
@@ -50,6 +39,32 @@ DEFAULT_FLAT_PRICE = Decimal("1.18")
 DEFAULT_SERVICE_PRICE = Decimal("0.72")
 
 
+def _normalize_page(page: int | None, page_size: int | None, *, default_size: int = 10, max_size: int = 100) -> tuple[int, int]:
+    safe_page = max(int(page or 1), 1)
+    safe_page_size = max(int(page_size or default_size), 1)
+    return safe_page, min(safe_page_size, max_size)
+
+
+def _to_decimal(value: Any) -> Decimal:
+    return Decimal(str(value or 0))
+
+
+def _quantize_decimal(value: Decimal) -> Decimal:
+    return value.quantize(Decimal("0.01"))
+
+
+def _parse_date_text(value: str | None, *, end_of_day: bool = False) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.strptime(value.strip(), "%Y-%m-%d")
+    except ValueError:
+        return None
+    if end_of_day:
+        return parsed + timedelta(days=1)
+    return parsed
+
+
 def get_station_name(order: Order) -> str:
     if order.station:
         return order.station.name
@@ -61,7 +76,7 @@ def get_station_name(order: Order) -> str:
 def get_charger_name(order: Order) -> str:
     if not order.charger:
         return ""
-    station_name = get_station_name(order)[:8] or "示范站"
+    station_name = get_station_name(order)[:8] or "示范电站"
     suffix = order.charger.sn_code[-4:] if order.charger.sn_code else f"{order.charger.id:04d}"
     return f"{station_name}-{suffix}号桩"
 
@@ -87,10 +102,6 @@ def order_duration_minutes(order: Order) -> int:
     return 0
 
 
-def _quantize_decimal(value: Decimal) -> Decimal:
-    return value.quantize(Decimal("0.01"))
-
-
 def _resolve_template_rates(order: Order) -> tuple[Decimal, Decimal]:
     template = order.station.price_template if order.station else None
     if template and template.rules_json:
@@ -101,7 +112,7 @@ def _resolve_template_rates(order: Order) -> tuple[Decimal, Decimal]:
                 Decimal(str(data.get("service_price", DEFAULT_SERVICE_PRICE))),
             )
         except Exception:
-            pass
+            return DEFAULT_FLAT_PRICE, DEFAULT_SERVICE_PRICE
     return DEFAULT_FLAT_PRICE, DEFAULT_SERVICE_PRICE
 
 
@@ -143,7 +154,11 @@ def serialize_order(order: Order) -> dict[str, Any]:
         "order_no": order.order_no,
         "user_id": order.user_id,
         "user_phone": order.user.phone if order.user else "",
-        "user_nickname": order.user.nickname if order.user and order.user.nickname else f"用户{str(order.user.phone)[-4:]}" if order.user else "",
+        "user_nickname": (
+            order.user.nickname
+            if order.user and order.user.nickname
+            else f"用户{str(order.user.phone)[-4:]}" if order.user else ""
+        ),
         "operator_id": order.operator_id,
         "operator_name": order.operator.name if order.operator else "",
         "station_id": order.station_id,
@@ -156,12 +171,12 @@ def serialize_order(order: Order) -> dict[str, Any]:
         "end_time": order.end_time.strftime("%Y-%m-%d %H:%M:%S") if order.end_time else "",
         "charge_duration": duration,
         "charge_duration_text": f"{duration} 分钟",
-        "charge_amount": float(order.charge_amount),
-        "electricity_fee": float(order.electricity_fee),
-        "ele_fee": float(order.electricity_fee),
-        "service_fee": float(order.service_fee),
-        "total_amount": float(order.total_amount),
-        "total_fee": float(order.total_amount),
+        "charge_amount": float(order.charge_amount or 0),
+        "electricity_fee": float(order.electricity_fee or 0),
+        "ele_fee": float(order.electricity_fee or 0),
+        "service_fee": float(order.service_fee or 0),
+        "total_amount": float(order.total_amount or 0),
+        "total_fee": float(order.total_amount or 0),
         "pay_status": order.pay_status,
         "pay_status_label": PAY_STATUS_LABELS.get(order.pay_status, "unknown"),
         "pay_status_text": PAY_STATUS_TEXTS.get(order.pay_status, "未知"),
@@ -177,31 +192,211 @@ def serialize_order(order: Order) -> dict[str, Any]:
     }
 
 
+def _build_filtered_order_query(
+    db: Session,
+    *,
+    operator_id: int | None = None,
+    keyword: str | None = None,
+    status: int | None = None,
+    station_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    abnormal_reason: str | None = None,
+    default_status: int | None = None,
+):
+    query = (
+        db.query(Order)
+        .outerjoin(User, Order.user_id == User.id)
+        .outerjoin(Station, Order.station_id == Station.id)
+        .outerjoin(Charger, Order.charger_id == Charger.id)
+    )
+
+    if operator_id is not None:
+        query = query.filter(Order.operator_id == operator_id)
+
+    effective_status = status if status is not None else default_status
+    if effective_status is not None:
+        query = query.filter(Order.status == effective_status)
+
+    if station_id is not None:
+        query = query.filter(Order.station_id == station_id)
+
+    if keyword and keyword.strip():
+        search = f"%{keyword.strip()}%"
+        query = query.filter(
+            or_(
+                Order.order_no.like(search),
+                User.phone.like(search),
+                User.nickname.like(search),
+                Order.vin.like(search),
+                Station.name.like(search),
+                Charger.sn_code.like(search),
+            )
+        )
+
+    if abnormal_reason and abnormal_reason.strip():
+        query = query.filter(Order.abnormal_reason.like(f"%{abnormal_reason.strip()}%"))
+
+    start_value = _parse_date_text(start_date)
+    if start_value:
+        query = query.filter(Order.start_time >= start_value)
+
+    end_value = _parse_date_text(end_date, end_of_day=True)
+    if end_value:
+        query = query.filter(Order.start_time < end_value)
+
+    return query
+
+
+def _load_orders_by_ids(db: Session, order_ids: list[int]) -> list[Order]:
+    if not order_ids:
+        return []
+
+    order_map = {
+        item.id: item
+        for item in (
+            db.query(Order)
+            .options(
+                joinedload(Order.user),
+                joinedload(Order.operator),
+                joinedload(Order.station).joinedload(Station.price_template),
+                joinedload(Order.charger).joinedload(Charger.station),
+            )
+            .filter(Order.id.in_(order_ids))
+            .all()
+        )
+    }
+    return [order_map[item_id] for item_id in order_ids if item_id in order_map]
+
+
+def _build_order_summary(query, total: int) -> dict[str, Any]:
+    summary_row = query.with_entities(
+        func.coalesce(func.sum(Order.total_kwh), 0),
+        func.coalesce(func.sum(Order.ele_fee), 0),
+        func.coalesce(func.sum(Order.service_fee), 0),
+        func.coalesce(func.sum(Order.total_fee), 0),
+        func.coalesce(func.sum(case((Order.status == 0, 1), else_=0)), 0),
+        func.coalesce(func.sum(case((Order.status == 1, 1), else_=0)), 0),
+        func.coalesce(func.sum(case((Order.status == 2, 1), else_=0)), 0),
+        func.count(func.distinct(Order.station_id)),
+        func.count(func.distinct(Order.abnormal_reason)),
+    ).one()
+
+    return {
+        "total_count": int(total),
+        "total_charge_amount": float(_to_decimal(summary_row[0])),
+        "total_ele_fee": float(_to_decimal(summary_row[1])),
+        "total_service_fee": float(_to_decimal(summary_row[2])),
+        "total_amount": float(_to_decimal(summary_row[3])),
+        "charging_count": int(summary_row[4] or 0),
+        "completed_count": int(summary_row[5] or 0),
+        "abnormal_count": int(summary_row[6] or 0),
+        "station_count": int(summary_row[7] or 0),
+        "reason_count": int(summary_row[8] or 0),
+    }
+
+
+def get_order_page(
+    db: Session,
+    *,
+    operator_id: int | None = None,
+    page: int = 1,
+    page_size: int = 10,
+    keyword: str | None = None,
+    status: int | None = None,
+    station_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    abnormal_reason: str | None = None,
+    default_status: int | None = None,
+) -> dict[str, Any]:
+    safe_page, safe_page_size = _normalize_page(page, page_size)
+    filtered_query = _build_filtered_order_query(
+        db,
+        operator_id=operator_id,
+        keyword=keyword,
+        status=status,
+        station_id=station_id,
+        start_date=start_date,
+        end_date=end_date,
+        abnormal_reason=abnormal_reason,
+        default_status=default_status,
+    )
+
+    total = filtered_query.with_entities(func.count(Order.id)).order_by(None).scalar() or 0
+    summary = _build_order_summary(filtered_query.order_by(None), total)
+
+    effective_status = status if status is not None else default_status
+    if effective_status == 0:
+        order_column = Order.start_time.desc()
+    elif effective_status in {1, 2}:
+        order_column = Order.end_time.desc()
+    else:
+        order_column = Order.updated_at.desc()
+    order_ids = [
+        item[0]
+        for item in (
+            filtered_query.with_entities(Order.id)
+            .order_by(order_column, Order.id.desc())
+            .offset((safe_page - 1) * safe_page_size)
+            .limit(safe_page_size)
+            .all()
+        )
+    ]
+    items = [serialize_order(order) for order in _load_orders_by_ids(db, order_ids)]
+
+    return {
+        "items": items,
+        "total": int(total),
+        "page": safe_page,
+        "page_size": safe_page_size,
+        "summary": summary,
+    }
+
+
 def get_all_order_list(db: Session, limit: int = 100, operator_id: int | None = None) -> list[dict[str, Any]]:
-    return [serialize_order(order) for order in list_all_orders(db, limit=limit, operator_id=operator_id)]
+    return get_order_page(db, operator_id=operator_id, page=1, page_size=limit)["items"]
 
 
 def get_realtime_order_list(db: Session, limit: int = 50, operator_id: int | None = None) -> list[dict[str, Any]]:
-    return [serialize_order(order) for order in list_realtime_orders(db, limit=limit, operator_id=operator_id)]
+    return get_order_page(db, operator_id=operator_id, page=1, page_size=limit, default_status=0)["items"]
 
 
 def get_history_order_list(db: Session, limit: int = 100, operator_id: int | None = None) -> list[dict[str, Any]]:
-    return [serialize_order(order) for order in list_history_orders(db, limit=limit, operator_id=operator_id)]
+    return get_order_page(db, operator_id=operator_id, page=1, page_size=limit, default_status=1)["items"]
 
 
 def get_abnormal_order_list(db: Session, limit: int = 50, operator_id: int | None = None) -> list[dict[str, Any]]:
-    return [serialize_order(order) for order in list_abnormal_orders(db, limit=limit, operator_id=operator_id)]
+    return get_order_page(db, operator_id=operator_id, page=1, page_size=limit, default_status=2)["items"]
 
 
 def get_order_detail_data(db: Session, order_id: int, operator_id: int | None = None) -> dict[str, Any] | None:
-    order = get_order_by_id(db, order_id, operator_id=operator_id)
+    query = (
+        db.query(Order)
+        .options(
+            joinedload(Order.user),
+            joinedload(Order.operator),
+            joinedload(Order.station).joinedload(Station.price_template),
+            joinedload(Order.charger).joinedload(Charger.station),
+        )
+        .filter(Order.id == order_id)
+    )
+    if operator_id is not None:
+        query = query.filter(Order.operator_id == operator_id)
+
+    order = query.first()
     if not order:
         return None
     return serialize_order(order)
 
 
 def force_stop_order(db: Session, order_id: int, operator_id: int | None = None) -> Order | None:
-    order = get_order_by_id(db, order_id, operator_id=operator_id)
+    query = db.query(Order).options(joinedload(Order.user), joinedload(Order.station).joinedload(Station.price_template), joinedload(Order.charger))
+    query = query.filter(Order.id == order_id)
+    if operator_id is not None:
+        query = query.filter(Order.operator_id == operator_id)
+
+    order = query.first()
     if not order or order.status != 0:
         return None
 
@@ -226,7 +421,12 @@ def finish_order(db: Session, order_id: int, operator_id: int | None = None) -> 
 
 
 def mark_order_abnormal(db: Session, order_id: int, abnormal_reason: str, operator_id: int | None = None) -> Order | None:
-    order = get_order_by_id(db, order_id, operator_id=operator_id)
+    query = db.query(Order).options(joinedload(Order.user), joinedload(Order.station).joinedload(Station.price_template), joinedload(Order.charger))
+    query = query.filter(Order.id == order_id)
+    if operator_id is not None:
+        query = query.filter(Order.operator_id == operator_id)
+
+    order = query.first()
     if not order or order.status != 0:
         return None
 
@@ -234,7 +434,7 @@ def mark_order_abnormal(db: Session, order_id: int, abnormal_reason: str, operat
     order.end_time = now
     recalculate_order_amounts(order, now=now)
     order.status = 2
-    order.abnormal_reason = abnormal_reason.strip() or "运营商手动标记异常"
+    order.abnormal_reason = abnormal_reason.strip() or "运营中断，已转入异常订单"
     if order.station_id is None and order.charger and order.charger.station_id:
         order.station_id = order.charger.station_id
     if not order.vin and order.user and order.user.vin_code:
@@ -251,16 +451,22 @@ def get_order_stats(db: Session, operator_id: int | None = None) -> dict[str, An
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
 
-    charging_count = count_charging_orders(db, operator_id=operator_id)
-    abnormal_count = count_abnormal_orders(db, operator_id=operator_id)
-    today_completed = count_today_completed_orders(db, today_start, today_end, operator_id=operator_id)
-    today_charge_amount = sum_today_charge_amount(db, today_start, today_end, operator_id=operator_id)
-    today_total_amount = sum_today_total_amount(db, today_start, today_end, operator_id=operator_id)
+    query = db.query(Order).filter(Order.start_time >= today_start, Order.start_time < today_end)
+    if operator_id is not None:
+        query = query.filter(Order.operator_id == operator_id)
+
+    summary = query.with_entities(
+        func.coalesce(func.sum(case((Order.status == 0, 1), else_=0)), 0),
+        func.coalesce(func.sum(case((Order.status == 1, 1), else_=0)), 0),
+        func.coalesce(func.sum(case((Order.status == 2, 1), else_=0)), 0),
+        func.coalesce(func.sum(Order.total_kwh), 0),
+        func.coalesce(func.sum(Order.total_fee), 0),
+    ).one()
 
     return {
-        "charging_count": charging_count,
-        "today_completed_count": today_completed,
-        "today_charge_amount": float(Decimal(str(today_charge_amount))),
-        "today_total_amount": float(Decimal(str(today_total_amount))),
-        "abnormal_count": abnormal_count,
+        "charging_count": int(summary[0] or 0),
+        "today_completed_count": int(summary[1] or 0),
+        "abnormal_count": int(summary[2] or 0),
+        "today_charge_amount": float(_to_decimal(summary[3])),
+        "today_total_amount": float(_to_decimal(summary[4])),
     }
