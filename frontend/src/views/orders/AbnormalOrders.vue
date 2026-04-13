@@ -1,232 +1,132 @@
-﻿<script setup lang="ts">
+<script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { Bell, Money, RefreshRight, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search, WarningFilled, DataAnalysis, Money, Bell } from '@element-plus/icons-vue'
+
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
-import { ROLES, getStoredOperatorId } from '../../config/permissions'
-import { useOrderStore } from '../../stores/order'
-import type { Order } from '../../types/order'
-
-interface FilterForm {
-  orderNo: string
-  keyword: string
-  stationName: string
-  abnormalReason: string
-}
+import { fetchAdminAbnormalOrders } from '../../api/admin'
+import { fetchOperatorAbnormalOrders } from '../../api/operator'
+import { ROLES } from '../../config/permissions'
 
 const route = useRoute()
 const router = useRouter()
-const orderStore = useOrderStore()
-
-const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
-const scope = computed(() => ({
-  role: isAdmin.value ? ROLES.ADMIN : ROLES.OPERATOR,
-  operatorId: getStoredOperatorId(),
-}))
-
 const loading = ref(false)
-const allOrders = ref<Order[]>([])
-const currentPage = ref(1)
-const pageSize = ref(10)
+const orders = ref([])
 
-const searchForm = reactive<FilterForm>({
-  orderNo: '',
+const filters = reactive({
   keyword: '',
-  stationName: '',
-  abnormalReason: '',
+  reason: '',
 })
 
-const appliedFilters = reactive<FilterForm>({
-  orderNo: '',
-  keyword: '',
-  stationName: '',
-  abnormalReason: '',
-})
-
-const stationOptions = computed(() => {
-  const names = Array.from(new Set(allOrders.value.map((item) => item.stationName)))
-  return names.filter(Boolean)
-})
+const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
+const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
 
 const filteredOrders = computed(() => {
-  const orderNoKw = appliedFilters.orderNo.trim().toLowerCase()
-  const keyword = appliedFilters.keyword.trim().toLowerCase()
-  const station = appliedFilters.stationName
-  const abnormalReason = appliedFilters.abnormalReason.trim().toLowerCase()
-
-  return allOrders.value.filter((order) => {
-    const orderNoOk = !orderNoKw || order.orderNo.toLowerCase().includes(orderNoKw)
-    const keywordOk =
+  const keyword = filters.keyword.trim().toLowerCase()
+  const reasonKeyword = filters.reason.trim().toLowerCase()
+  return orders.value.filter((item) => {
+    const matchKeyword =
       !keyword ||
-      order.phone.toLowerCase().includes(keyword) ||
-      order.userName.toLowerCase().includes(keyword) ||
-      (isAdmin.value && order.operatorName.toLowerCase().includes(keyword))
-    const stationOk = !station || order.stationName === station
-    const abnormalOk = !abnormalReason || (order.abnormalReason || '').toLowerCase().includes(abnormalReason)
-
-    return orderNoOk && keywordOk && stationOk && abnormalOk
+      [item.order_no, item.user_phone, item.user_nickname, item.vin, item.station_name]
+        .filter(Boolean)
+        .some((field) => String(field).toLowerCase().includes(keyword))
+    const matchReason =
+      !reasonKeyword || String(item.abnormal_reason || '').toLowerCase().includes(reasonKeyword)
+    return matchKeyword && matchReason
   })
 })
 
-const total = computed(() => filteredOrders.value.length)
-
-const tableData = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredOrders.value.slice(start, start + pageSize.value)
-})
-
-const summaryCards = computed(() => {
-  const totalAmount = filteredOrders.value.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0)
-  const highRiskCount = filteredOrders.value.filter((item) => {
-    const reason = String(item.abnormalReason || '')
-    return reason.includes('支付') || reason.includes('中断') || reason.includes('校验')
-  }).length
-
-  const reasonSet = new Set(filteredOrders.value.map((item) => item.abnormalReason || '未知'))
+const stats = computed(() => {
+  const totalCount = filteredOrders.value.length
+  const totalAmount = filteredOrders.value.reduce((sum, item) => sum + Number(item.total_amount || 0), 0)
+  const reasonCount = new Set(filteredOrders.value.map((item) => item.abnormal_reason).filter(Boolean)).size
+  const highRiskCount = filteredOrders.value.filter((item) =>
+    ['断连', '故障', '支付', '异常'].some((keyword) => String(item.abnormal_reason || '').includes(keyword)),
+  ).length
 
   return [
     {
-      label: '异常订单总数',
-      value: filteredOrders.value.length,
+      label: '异常订单',
+      value: totalCount,
       suffix: ' 单',
-      trend: '异常工单池',
-      trendLabel: '待人工复核处理',
+      trend: '待复核订单',
+      trendLabel: '用于风控和答辩展示',
       tone: 'danger',
       icon: WarningFilled,
+    },
+    {
+      label: '异常金额',
+      value: totalAmount.toFixed(2),
+      prefix: '¥',
+      trend: '异常订单涉及金额',
+      trendLabel: '便于展示财务影响',
+      tone: 'warning',
+      icon: Money,
+    },
+    {
+      label: '异常类型',
+      value: reasonCount,
+      suffix: ' 类',
+      trend: '异常原因种类',
+      trendLabel: '可做论文图表说明',
+      tone: 'info',
+      icon: Bell,
     },
     {
       label: '高风险异常',
       value: highRiskCount,
       suffix: ' 单',
-      trend: '建议优先处理',
-      trendLabel: '支付/中断类异常',
-      tone: 'warning',
-      icon: Bell,
-    },
-    {
-      label: '涉异常金额',
-      value: totalAmount.toFixed(2),
-      prefix: '¥',
-      trend: '金额影响范围',
-      trendLabel: '用于财务风险评估',
+      trend: '支付/设备相关',
+      trendLabel: '建议重点展示原因',
       tone: 'primary',
-      icon: Money,
-    },
-    {
-      label: '异常类型数',
-      value: reasonSet.size,
-      suffix: ' 类',
-      trend: '问题覆盖面',
-      trendLabel: '用于运营改进追踪',
-      tone: 'info',
-      icon: DataAnalysis,
+      icon: RefreshRight,
     },
   ]
 })
 
-const reasonDistribution = computed(() => {
-  const map = new Map<string, number>()
-  filteredOrders.value.forEach((item) => {
-    const reason = item.abnormalReason || '未知异常'
-    map.set(reason, (map.get(reason) || 0) + 1)
-  })
-  const list = Array.from(map.entries()).map(([reason, count]) => ({ reason, count }))
-  const totalCount = list.reduce((sum, item) => sum + item.count, 0)
-  return list
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5)
-    .map((item) => ({
-      ...item,
-      percent: totalCount ? Math.round((item.count / totalCount) * 100) : 0,
-    }))
-})
-
-const formatMoney = (value: number): string =>
-  `¥${Number(value || 0).toLocaleString('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`
-
-const maskPhone = (phone: string): string => {
-  if (!phone || phone.length < 7) return phone
-  return `${phone.slice(0, 3)}****${phone.slice(-4)}`
-}
-
 const loadOrders = async () => {
   loading.value = true
   try {
-    await new Promise((resolve) => {
-      window.setTimeout(resolve, 120)
-    })
-    allOrders.value = orderStore.getAbnormalOrders(scope.value)
+    const response = isAdmin.value ? await fetchAdminAbnormalOrders() : await fetchOperatorAbnormalOrders()
+    orders.value = response.data.data || []
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('异常订单加载失败')
   } finally {
     loading.value = false
   }
 }
 
-const handleSearch = async () => {
-  appliedFilters.orderNo = searchForm.orderNo
-  appliedFilters.keyword = searchForm.keyword
-  appliedFilters.stationName = searchForm.stationName
-  appliedFilters.abnormalReason = searchForm.abnormalReason
-  currentPage.value = 1
-  await loadOrders()
+const resetFilters = () => {
+  filters.keyword = ''
+  filters.reason = ''
 }
 
-const handleReset = async () => {
-  searchForm.orderNo = ''
-  searchForm.keyword = ''
-  searchForm.stationName = ''
-  searchForm.abnormalReason = ''
-
-  appliedFilters.orderNo = ''
-  appliedFilters.keyword = ''
-  appliedFilters.stationName = ''
-  appliedFilters.abnormalReason = ''
-  currentPage.value = 1
-
-  await loadOrders()
+const openDetail = (row) => {
+  router.push(isAdmin.value ? `/admin/orders/detail/${row.id}` : `/operator/orders/detail/${row.id}`)
 }
 
-const handleSizeChange = (val: number): void => {
-  pageSize.value = val
-  currentPage.value = 1
-}
-
-const handleCurrentChange = (val: number): void => {
-  currentPage.value = val
-}
-
-const openDetail = (id: string): void => {
-  const path = isAdmin.value ? `/admin/orders/detail/${id}` : `/operator/orders/detail/${id}`
-  router.push(path)
-}
-
-onMounted(async () => {
-  await loadOrders()
-  ElMessage.success(isAdmin.value ? '全局异常订单监管数据已加载' : '本机构异常订单已加载')
-})
+onMounted(loadOrders)
 </script>
 
 <template>
-  <div class="page-shell abnormal-orders-page">
+  <div class="page-shell abnormal-page">
     <PageSectionHeader
       eyebrow="Abnormal Orders"
-      :title="isAdmin ? '异常订单监管' : '异常订单处理'"
-      :description="isAdmin ? '全平台异常订单监管与复核看板。' : '本机构异常订单筛查与处理看板。'"
-      :chip="isAdmin ? '管理员风控视角' : '运营商风控视角'"
+      :title="isAdmin ? '全局异常订单' : '异常订单'"
+      :description="isAdmin ? '管理员查看全平台异常订单。' : '突出展示异常原因与异常金额，便于论文截图和答辩时说明订单异常处理闭环。'"
+      :chip="isAdmin ? '管理员订单管理' : '运营商订单管理'"
     >
       <template #actions>
-        <el-button type="primary" :icon="Search" :loading="loading" @click="handleSearch">查询</el-button>
-        <el-button :icon="Refresh" :disabled="loading" @click="handleReset">重置</el-button>
+        <el-button :icon="RefreshRight" :loading="loading" @click="loadOrders">刷新列表</el-button>
       </template>
     </PageSectionHeader>
 
     <el-alert
-      :title="isAdmin ? '全平台异常订单监管中，请及时复核' : '本机构存在异常订单，请及时处理并复核'"
+      title="异常原因在列表中采用高亮色块展示，便于截图时一眼看出问题点。"
       type="warning"
       show-icon
       :closable="false"
@@ -235,7 +135,7 @@ onMounted(async () => {
 
     <section class="stats-grid stats-grid--abnormal">
       <MetricCard
-        v-for="item in summaryCards"
+        v-for="item in stats"
         :key="item.label"
         :label="item.label"
         :value="item.value"
@@ -248,108 +148,62 @@ onMounted(async () => {
       />
     </section>
 
-    <section class="panel-grid panel-grid--wide">
-      <article class="page-panel surface-card">
-        <div class="panel-heading">
-          <div>
-            <h3 class="panel-heading__title">筛选条件</h3>
-            <p class="panel-heading__desc">支持按订单号、用户、场站和异常原因筛选。</p>
-          </div>
+    <section class="page-panel surface-card">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">筛选条件</h3>
+          <p class="panel-heading__desc">支持按订单号、用户、VIN 和异常原因关键词筛选。</p>
         </div>
-
-        <el-form :model="searchForm" class="filter-form" label-width="auto">
-          <div class="filter-row">
-            <el-form-item label="订单号" class="form-item">
-              <el-input v-model="searchForm.orderNo" placeholder="支持模糊查询" clearable style="width: 210px" />
-            </el-form-item>
-            <el-form-item :label="isAdmin ? '手机号/用户/运营商' : '手机号/用户'" class="form-item">
-              <el-input v-model="searchForm.keyword" placeholder="支持手机号、用户名关键词" clearable style="width: 220px" />
-            </el-form-item>
-            <el-form-item label="场站" class="form-item">
-              <el-select v-model="searchForm.stationName" placeholder="全部场站" clearable style="width: 200px">
-                <el-option v-for="s in stationOptions" :key="s" :label="s" :value="s" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="异常原因" class="form-item">
-              <el-input v-model="searchForm.abnormalReason" placeholder="输入异常关键词" clearable style="width: 220px" />
-            </el-form-item>
-          </div>
-        </el-form>
-      </article>
-
-      <article class="page-panel surface-card">
-        <div class="panel-heading">
-          <div>
-            <h3 class="panel-heading__title">异常原因分布</h3>
-            <p class="panel-heading__desc">按当前筛选结果统计 Top 异常原因，用于优先级排序。</p>
-          </div>
+        <div class="toolbar-actions">
+          <el-button @click="resetFilters">重置</el-button>
         </div>
+      </div>
 
-        <div class="reason-list" v-if="reasonDistribution.length">
-          <div v-for="item in reasonDistribution" :key="item.reason" class="reason-item">
-            <div class="reason-item__head">
-              <strong>{{ item.reason }}</strong>
-              <span>{{ item.count }} 单 / {{ item.percent }}%</span>
-            </div>
-            <el-progress :percentage="item.percent" :show-text="false" :stroke-width="10" color="#f56c6c" />
-          </div>
-        </div>
-
-        <EmptyStateBlock
-          v-else
-          title="暂无异常类型分布"
-          description="当前筛选条件下没有异常记录。"
-        />
-      </article>
+      <div class="filter-row">
+        <el-input v-model="filters.keyword" clearable placeholder="订单号 / 用户账号 / VIN / 电站" style="width: 320px" />
+        <el-input v-model="filters.reason" clearable placeholder="输入异常原因关键词" style="width: 240px" />
+      </div>
     </section>
 
     <section class="page-panel surface-card table-shell">
       <div class="panel-heading">
         <div>
           <h3 class="panel-heading__title">异常订单列表</h3>
-          <p class="panel-heading__desc">共 {{ total }} 条记录，支持进入详情页处理。</p>
+          <p class="panel-heading__desc">共 {{ filteredOrders.length }} 条记录，支持跳转订单详情页查看完整信息。</p>
         </div>
       </div>
 
-      <el-table
-        v-if="tableData.length"
-        :data="tableData"
-        stripe
-        highlight-current-row
-        v-loading="loading"
-        element-loading-text="加载中..."
-      >
-        <el-table-column prop="orderNo" label="订单编号" width="190" show-overflow-tooltip />
-        <el-table-column label="用户" width="110" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.userName }}</template>
-        </el-table-column>
-        <el-table-column label="手机号" width="130">
-          <template #default="{ row }">{{ maskPhone(row.phone) }}</template>
-        </el-table-column>
-        <el-table-column v-if="isAdmin" prop="operatorName" label="运营商" width="180" show-overflow-tooltip />
-        <el-table-column prop="vin" label="VIN" width="160" show-overflow-tooltip />
-        <el-table-column prop="stationName" label="电站名称" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="chargerName" label="电桩名称" width="160" show-overflow-tooltip />
-        <el-table-column prop="startTime" label="开始时间" width="170" />
-        <el-table-column prop="chargeAmount" label="充电量(kWh)" width="120" align="right">
+      <el-table v-if="filteredOrders.length" :data="filteredOrders" v-loading="loading" stripe>
+        <el-table-column prop="order_no" label="订单编号" min-width="190" show-overflow-tooltip />
+        <el-table-column label="用户" min-width="160">
           <template #default="{ row }">
-            <span class="num">{{ Number(row.chargeAmount).toFixed(2) }}</span>
+            <div class="user-cell">
+              <strong>{{ row.user_nickname }}</strong>
+              <span>{{ row.user_phone }}</span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column prop="totalAmount" label="总金额" width="120" align="right">
+        <el-table-column prop="vin" label="VIN" min-width="170" show-overflow-tooltip />
+        <el-table-column prop="start_time" label="开始时间" width="170" />
+        <el-table-column prop="end_time" label="结束时间" width="170" />
+        <el-table-column prop="station_name" label="电站" min-width="170" show-overflow-tooltip />
+        <el-table-column prop="charger_name" label="电桩" min-width="160" show-overflow-tooltip />
+        <el-table-column label="异常原因" min-width="260">
           <template #default="{ row }">
-            <span class="money">{{ formatMoney(row.totalAmount) }}</span>
+            <div class="reason-pill">{{ row.abnormal_reason || '未记录异常原因' }}</div>
           </template>
         </el-table-column>
-        <el-table-column prop="abnormalReason" label="异常原因" min-width="170" show-overflow-tooltip />
+        <el-table-column prop="total_amount" label="总费用" width="110" align="right">
+          <template #default="{ row }">{{ formatMoney(row.total_amount) }}</template>
+        </el-table-column>
         <el-table-column label="状态" width="100" align="center">
-          <template #default>
-            <el-tag type="danger" effect="light">异常</el-tag>
+          <template #default="{ row }">
+            <el-tag type="danger">{{ row.status_text }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="90" fixed="right" align="center">
+        <el-table-column label="操作" width="100" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openDetail(row.id)">详情</el-button>
+            <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -357,96 +211,52 @@ onMounted(async () => {
       <EmptyStateBlock
         v-else-if="!loading"
         title="暂无异常订单"
-        description="当前筛选条件下无异常订单。"
+        description="当前没有异常订单，可以先在实时订单页把一条订单标记为异常。"
       />
-
-      <div class="pagination-wrap">
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          :page-sizes="[10, 20, 50]"
-          layout="total, sizes, prev, pager, next, jumper"
-          :total="total"
-          @size-change="handleSizeChange"
-          @current-change="handleCurrentChange"
-        />
-      </div>
     </section>
   </div>
 </template>
 
 <style scoped>
-.abnormal-orders-page {
+.abnormal-page {
   padding-bottom: 8px;
 }
 
 .risk-alert {
-  border-radius: 10px;
+  margin-bottom: 18px;
 }
 
 .stats-grid--abnormal {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.filter-form {
-  width: 100%;
+.toolbar-actions {
+  display: flex;
+  gap: 10px;
 }
 
 .filter-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 12px;
 }
 
-.form-item {
-  margin-bottom: 0;
-}
-
-.reason-list {
+.user-cell {
   display: grid;
-  gap: 10px;
+  gap: 4px;
 }
 
-.reason-item {
-  padding: 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(245, 108, 108, 0.18);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 248, 248, 0.9));
-}
-
-.reason-item__head {
-  margin-bottom: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.reason-item__head strong {
-  color: var(--color-text);
-  font-size: 13px;
-}
-
-.reason-item__head span {
+.user-cell span {
   color: var(--color-text-2);
-  font-size: 12px;
 }
 
-.num {
-  font-variant-numeric: tabular-nums;
-}
-
-.money {
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: #303133;
-}
-
-.pagination-wrap {
-  margin-top: 16px;
-  display: flex;
-  justify-content: flex-end;
+.reason-pill {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(245, 108, 108, 0.18), rgba(255, 182, 93, 0.22));
+  color: #b42318;
+  font-weight: 600;
+  line-height: 1.5;
 }
 
 @media (max-width: 1280px) {

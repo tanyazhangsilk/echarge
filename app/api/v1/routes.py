@@ -3,6 +3,8 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import random
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
@@ -24,6 +26,7 @@ from app.models.models import (
 from app.schemas import InvoiceApplySchema, InvoiceProcessSchema, OrderActionSchema
 from app.services.order_service import (
     ORDER_STATUS_LABELS,
+    finish_order,
     get_abnormal_order_list,
     get_all_order_list,
     get_history_order_list,
@@ -33,8 +36,20 @@ from app.services.order_service import (
     get_station_name,
     mark_order_abnormal,
     order_duration_minutes,
+    recalculate_order_amounts,
     serialize_order,
     force_stop_order,
+)
+from app.services.operator_demo_service import (
+    ensure_operator_demo_assets,
+    ensure_operator_price_templates,
+    ensure_station_chargers,
+    infer_charger_power_kw,
+    serialize_operator_charger,
+    serialize_operator_station,
+    serialize_price_template,
+    station_status_text,
+    visibility_text,
 )
 from app.services.notification_service import send_invoice_email
 from app.services.settlement_service import settle_t_plus_1_by_operator
@@ -118,6 +133,20 @@ class BankCardSubmitPayload(BaseModel):
     is_default: bool = True
 
 
+class StationVisibilityPayload(BaseModel):
+    visibility: str
+
+
+class BindTemplatePayload(BaseModel):
+    template_id: int
+
+
+class DemoStartOrderPayload(BaseModel):
+    user_id: int | None = None
+    station_id: int | None = None
+    charger_id: int | None = None
+
+
 class RoleContext(BaseModel):
     role: str
     operator_id: int | None = None
@@ -175,6 +204,41 @@ def require_operator_context(context: RoleContext = Depends(get_role_context)) -
 
 def scoped_operator_id(context: RoleContext) -> int | None:
     return None if context.role == "admin" else context.operator_id
+
+
+def get_operator_by_context(db: Session, context: RoleContext) -> Operator | None:
+    if context.operator_id is not None:
+        operator = db.query(Operator).filter(Operator.id == context.operator_id).first()
+        if operator:
+            return operator
+    return get_current_operator(db)
+
+
+def get_or_create_demo_user(db: Session) -> User:
+    user = db.query(User).order_by(User.id.asc()).first()
+    if user:
+        return user
+
+    user = User(
+        phone="13800138000",
+        nickname="演示车主",
+        password_hash="demo-password",
+        vin_code="DEMOEV20260001",
+        status=0,
+        role="user",
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def generate_demo_order_no(db: Session) -> str:
+    while True:
+        order_no = f"EC{datetime.now():%Y%m%d%H%M%S}{random.randint(1000, 9999)}"
+        exists = db.query(Order.id).filter(Order.order_no == order_no).first()
+        if not exists:
+            return order_no
 
 
 def user_display_name(user: User) -> str:
@@ -731,6 +795,220 @@ async def get_admin_order_detail(
     return {"code": 200, "data": order_data}
 
 
+@api_router.get("/operator/stations", tags=["operator"])
+async def get_operator_stations(
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = get_operator_by_context(db, context)
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+
+    ensure_operator_demo_assets(db, operator)
+    stations = (
+        db.query(Station)
+        .options(
+            joinedload(Station.operator),
+            joinedload(Station.price_template),
+            joinedload(Station.chargers),
+        )
+        .filter(Station.operator_id == operator.id, Station.is_deleted.is_(False))
+        .order_by(Station.updated_at.desc(), Station.id.desc())
+        .all()
+    )
+    return {"code": 200, "data": [serialize_operator_station(item) for item in stations]}
+
+
+@api_router.get("/operator/stations/{station_id}/chargers", tags=["operator"])
+async def get_operator_station_chargers(
+    station_id: int,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = get_operator_by_context(db, context)
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+
+    station = (
+        db.query(Station)
+        .options(joinedload(Station.chargers).joinedload(Charger.station))
+        .filter(Station.id == station_id, Station.operator_id == operator.id, Station.is_deleted.is_(False))
+        .first()
+    )
+    if not station:
+        return {"code": 404, "message": "电站不存在或无权限访问"}
+
+    ensure_station_chargers(db, station)
+    db.refresh(station)
+    return {"code": 200, "data": [serialize_operator_charger(item) for item in station.chargers]}
+
+
+@api_router.post("/operator/stations/{station_id}/visibility", tags=["operator"])
+async def update_operator_station_visibility(
+    station_id: int,
+    payload: StationVisibilityPayload,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    station = (
+        db.query(Station)
+        .filter(Station.id == station_id, Station.operator_id == context.operator_id, Station.is_deleted.is_(False))
+        .first()
+    )
+    if not station:
+        return {"code": 404, "message": "电站不存在或无权限访问"}
+
+    visibility = (payload.visibility or "").strip().lower()
+    if visibility not in {"public", "private"}:
+        return {"code": 400, "message": "visibility 仅支持 public/private"}
+    if visibility == "public" and station.status != 0:
+        return {"code": 400, "message": "电站未审核通过，不能设置为公开站点"}
+
+    station.visibility = visibility
+    db.commit()
+    db.refresh(station)
+    return {
+        "code": 200,
+        "message": "电站可见性已更新",
+        "data": {
+            "id": station.id,
+            "visibility": station.visibility,
+            "visibility_text": visibility_text(station.visibility),
+            "status": station.status,
+            "status_text": station_status_text(station.status),
+        },
+    }
+
+
+@api_router.post("/operator/stations/{station_id}/bind-template", tags=["operator"])
+async def bind_operator_station_template(
+    station_id: int,
+    payload: BindTemplatePayload,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = get_operator_by_context(db, context)
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+
+    ensure_operator_price_templates(db, operator)
+    station = (
+        db.query(Station)
+        .options(joinedload(Station.price_template), joinedload(Station.operator), joinedload(Station.chargers))
+        .filter(Station.id == station_id, Station.operator_id == operator.id, Station.is_deleted.is_(False))
+        .first()
+    )
+    if not station:
+        return {"code": 404, "message": "电站不存在或无权限访问"}
+
+    template = (
+        db.query(PriceTemplate)
+        .filter(
+            PriceTemplate.id == payload.template_id,
+            PriceTemplate.operator_id == operator.id,
+            PriceTemplate.is_deleted.is_(False),
+        )
+        .first()
+    )
+    if not template:
+        return {"code": 404, "message": "电价模板不存在"}
+
+    station.template_id = template.id
+    db.commit()
+    db.refresh(station)
+    return {"code": 200, "message": "模板绑定成功", "data": serialize_operator_station(station)}
+
+
+@api_router.get("/operator/pricing/templates", tags=["operator"])
+async def get_operator_pricing_templates(
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = get_operator_by_context(db, context)
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+
+    templates = ensure_operator_price_templates(db, operator)
+    return {"code": 200, "data": [serialize_price_template(item) for item in templates]}
+
+
+@api_router.post("/operator/orders/demo-start", tags=["orders", "operator"])
+async def operator_demo_start_order(
+    payload: DemoStartOrderPayload,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = get_operator_by_context(db, context)
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+
+    ensure_operator_demo_assets(db, operator)
+    base_station_query = (
+        db.query(Station)
+        .options(joinedload(Station.price_template), joinedload(Station.chargers).joinedload(Charger.station))
+        .filter(Station.operator_id == operator.id, Station.is_deleted.is_(False))
+    )
+    if payload.station_id:
+        station = base_station_query.filter(Station.id == payload.station_id).first()
+    else:
+        station = base_station_query.order_by(Station.status.asc(), Station.id.asc()).first()
+    if not station:
+        return {"code": 400, "message": "当前运营商暂无可用电站"}
+
+    ensure_station_chargers(db, station)
+    db.refresh(station)
+    active_charger_ids = {
+        item[0]
+        for item in db.query(Order.charger_id)
+        .filter(Order.operator_id == operator.id, Order.status == 0)
+        .all()
+    }
+    if payload.charger_id:
+        charger = next((item for item in station.chargers if item.id == payload.charger_id), None)
+    else:
+        charger = next(
+            (item for item in station.chargers if item.id not in active_charger_ids and item.status != 2),
+            None,
+        )
+    if not charger:
+        charger = next((item for item in station.chargers if item.status != 2), None)
+    if not charger:
+        return {"code": 400, "message": "当前电站暂无可用充电桩"}
+
+    user = (
+        db.query(User).filter(User.id == payload.user_id).first()
+        if payload.user_id
+        else get_or_create_demo_user(db)
+    )
+    if not user:
+        user = get_or_create_demo_user(db)
+
+    start_time = datetime.now() - timedelta(minutes=random.randint(12, 45))
+    order = Order(
+        order_no=generate_demo_order_no(db),
+        user_id=user.id,
+        operator_id=operator.id,
+        station_id=station.id,
+        charger_id=charger.id,
+        vin=user.vin_code or f"VIN{user.id:08d}",
+        start_time=start_time,
+        pay_status=0,
+        status=0,
+        abnormal_reason=None,
+        settle_status=0,
+    )
+    order.user = user
+    order.operator = operator
+    order.station = station
+    order.charger = charger
+    db.add(order)
+    recalculate_order_amounts(order, minimum_charge_kwh=Decimal(str(random.randint(8, 36))))
+    charger.status = 1
+    db.commit()
+    db.refresh(order)
+    return {"code": 200, "message": "已创建实时订单", "data": serialize_order(order)}
+
+
 @api_router.get("/operator/orders/history", tags=["orders", "operator"])
 async def get_operator_history_orders(
     context: RoleContext = Depends(require_operator_context),
@@ -767,6 +1045,18 @@ async def get_operator_order_detail(
     return {"code": 200, "data": order_data}
 
 
+@api_router.post("/operator/orders/{order_id}/finish", tags=["orders", "operator"])
+async def operator_finish_order(
+    order_id: int,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    order = finish_order(db, order_id, operator_id=context.operator_id)
+    if not order:
+        return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
+    return {"code": 200, "message": "订单已完成并转入历史订单", "data": serialize_order(order)}
+
+
 @api_router.post("/operator/orders/{order_id}/force-stop", tags=["orders", "operator"])
 async def operator_force_stop_order(
     order_id: int,
@@ -789,7 +1079,7 @@ async def operator_mark_order_abnormal(
     order = mark_order_abnormal(db, order_id, payload.abnormal_reason, operator_id=context.operator_id)
     if not order:
         return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
-    return {"code": 200, "message": "订单已标记异常", "data": serialize_order(order)}
+    return {"code": 200, "message": "订单已标记异常并转入异常订单", "data": serialize_order(order)}
 
 
 @api_router.get("/finance/cards", tags=["finance"])
@@ -1200,12 +1490,13 @@ async def admin_trigger_settle(payload: dict, db: Session = Depends(get_db)):
 
 
 @api_router.get("/admin/audit/stations", tags=["admin"])
-async def get_station_audits(db: Session = Depends(get_db)):
-    """获取待审核与已驳回的站点列表。"""
+async def get_station_audits(
+    _context: RoleContext = Depends(require_admin_context),
+    db: Session = Depends(get_db),
+):
     stations = (
         db.query(Station)
-        .options(joinedload(Station.operator))
-        .filter(Station.status.in_([3, 4]))
+        .options(joinedload(Station.operator), joinedload(Station.price_template), joinedload(Station.chargers))
         .order_by(Station.created_at.desc())
         .all()
     )
@@ -1217,13 +1508,17 @@ async def get_station_audits(db: Session = Depends(get_db)):
                 "id": s.id,
                 "operator_name": s.operator.name if s.operator else "未知运营商",
                 "station_name": s.name,
+                "address": f"深圳市演示区示范路{s.id}号 · {s.name}",
                 "lng": float(s.longitude),
                 "lat": float(s.latitude),
                 "status": s.status,
+                "status_text": station_status_text(s.status),
+                "visibility": s.visibility,
+                "visibility_text": visibility_text(s.visibility),
                 "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "",
-                "planned_piles": (s.id % 20) + 5,
-                "total_power": ((s.id % 20) + 5) * 120,
-                "address": f"示例地址 - {s.name}",
+                "planned_piles": len(s.chargers),
+                "total_power": sum(infer_charger_power_kw(item) for item in s.chargers) if s.chargers else 0,
+                "price_template_name": s.price_template.name if s.price_template else "未绑定模板",
             }
             for s in stations
         ],
@@ -1231,8 +1526,12 @@ async def get_station_audits(db: Session = Depends(get_db)):
 
 
 @api_router.post("/admin/audit/stations/{station_id}/process", tags=["admin"])
-async def process_station_audit(station_id: int, payload: dict, db: Session = Depends(get_db)):
-    """处理站点审核（通过/驳回）。"""
+async def process_station_audit(
+    station_id: int,
+    payload: dict,
+    _context: RoleContext = Depends(require_admin_context),
+    db: Session = Depends(get_db),
+):
     action = payload.get("action")
 
     station = db.query(Station).filter(Station.id == station_id).first()
@@ -1244,9 +1543,22 @@ async def process_station_audit(station_id: int, payload: dict, db: Session = De
         station.visibility = "public"
     elif action == "reject":
         station.status = 4
+        station.visibility = "private"
+    else:
+        return {"code": 400, "message": "action 仅支持 approve/reject"}
 
     db.commit()
-    return {"code": 200, "message": "站点审核处理成功"}
+    return {
+        "code": 200,
+        "message": "站点审核处理成功",
+        "data": {
+            "id": station.id,
+            "status": station.status,
+            "status_text": station_status_text(station.status),
+            "visibility": station.visibility,
+            "visibility_text": visibility_text(station.visibility),
+        },
+    }
 
 
 @api_router.post("/operator/stations/apply", tags=["operator"])

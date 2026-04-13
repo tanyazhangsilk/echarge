@@ -1,161 +1,160 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+<script setup>
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { VideoPlay, DataLine, Loading, WarningFilled, RefreshRight } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { DataAnalysis, Lightning, Money, RefreshRight } from '@element-plus/icons-vue'
+
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
-import { ROLES, getStoredOperatorId } from '../../config/permissions'
-import { useOrderStore } from '../../stores/order'
+import {
+  fetchOperatorRealtimeOrders,
+  finishOperatorOrder,
+  markOperatorOrderAbnormal,
+  startDemoCharging,
+} from '../../api/operator'
 
 const router = useRouter()
-const orderStore = useOrderStore()
+const loading = ref(false)
+const actionLoading = ref(false)
+const orders = ref([])
 
-const scope = {
-  role: ROLES.OPERATOR,
-  operatorId: getStoredOperatorId(),
-}
+const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
 
-const loading = ref(true)
-const tableData = ref(orderStore.getRealtimeOrders(scope))
-let refreshTimer: number | null = null
+const stats = computed(() => {
+  const totalCount = orders.value.length
+  const totalCharge = orders.value.reduce((sum, item) => sum + Number(item.charge_amount || 0), 0)
+  const totalEleFee = orders.value.reduce((sum, item) => sum + Number(item.electricity_fee || 0), 0)
+  const totalServiceFee = orders.value.reduce((sum, item) => sum + Number(item.service_fee || 0), 0)
 
-const refreshRealtimeOrders = async () => {
+  return [
+    {
+      label: '实时订单',
+      value: totalCount,
+      suffix: ' 单',
+      trend: '当前充电会话',
+      trendLabel: '支持实时状态演示',
+      tone: 'primary',
+      icon: Lightning,
+    },
+    {
+      label: '实时电量',
+      value: totalCharge.toFixed(2),
+      suffix: ' kWh',
+      trend: '在充订单累计',
+      trendLabel: '用于展示实时业务量',
+      tone: 'success',
+      icon: DataAnalysis,
+    },
+    {
+      label: '实时电费',
+      value: totalEleFee.toFixed(2),
+      prefix: '¥',
+      trend: '电费累计',
+      trendLabel: '结束时自动结算',
+      tone: 'warning',
+      icon: Money,
+    },
+    {
+      label: '实时服务费',
+      value: totalServiceFee.toFixed(2),
+      prefix: '¥',
+      trend: '服务费累计',
+      trendLabel: '总费用 = 电费 + 服务费',
+      tone: 'info',
+      icon: RefreshRight,
+    },
+  ]
+})
+
+const loadOrders = async () => {
   loading.value = true
   try {
-    await new Promise((resolve) => {
-      window.setTimeout(resolve, 120)
-    })
-    tableData.value = orderStore.getRealtimeOrders(scope)
+    const { data } = await fetchOperatorRealtimeOrders()
+    orders.value = data.data || []
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('实时订单加载失败')
   } finally {
     loading.value = false
   }
 }
 
-const stats = computed(() => ({
-  active: tableData.value.length,
-  totalPower: tableData.value.reduce((sum, item) => sum + Number(item.chargeAmount || 0), 0).toFixed(1),
-  currentFee: tableData.value.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0).toFixed(2),
-  avgDuration: tableData.value.length
-    ? Math.round(tableData.value.reduce((sum, item) => sum + Number(item.chargeDuration || 0), 0) / tableData.value.length)
-    : 0,
-}))
-
-const statCards = computed(() => [
-  {
-    label: '当前充电中车辆',
-    value: stats.value.active,
-    suffix: ' 辆',
-    trend: '实时在线订单',
-    trendLabel: '每 30 秒自动刷新',
-    tone: 'primary',
-    icon: VideoPlay,
-  },
-  {
-    label: '实时总输出电量',
-    value: stats.value.totalPower,
-    suffix: ' kWh',
-    trend: '当前会话累计',
-    trendLabel: '用于判断站点负载',
-    tone: 'success',
-    icon: DataLine,
-  },
-  {
-    label: '当前预计总流水',
-    value: stats.value.currentFee,
-    prefix: '¥',
-    trend: '实时金额估算',
-    trendLabel: '按在充订单动态累计',
-    tone: 'warning',
-    icon: Loading,
-  },
-  {
-    label: '平均充电时长',
-    value: stats.value.avgDuration,
-    suffix: ' 分钟',
-    trend: '会话效率监控',
-    trendLabel: '用于判断异常波动',
-    tone: 'info',
-    icon: WarningFilled,
-  },
-])
-
-const handleForceStop = async (row: { id: string }) => {
+const handleDemoStart = async () => {
+  actionLoading.value = true
   try {
-    await ElMessageBox.confirm('确认强制停止该订单吗？', '强制停止', {
-      confirmButtonText: '确认停止',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-    const result = orderStore.finishOrder(row.id, scope)
-    if (!result) {
-      ElMessage.warning('仅本机构充电中订单可执行此操作')
-      return
-    }
-    ElMessage.success('订单已结束并归档到历史订单')
-    await refreshRealtimeOrders()
+    const { data } = await startDemoCharging()
+    ElMessage.success(data.message || '已创建实时订单')
+    await loadOrders()
   } catch (error) {
-    // cancel
+    console.error(error)
+    ElMessage.error(error?.response?.data?.message || '模拟开始充电失败')
+  } finally {
+    actionLoading.value = false
   }
 }
 
-const handleMarkAbnormal = async (row: { id: string }) => {
+const handleFinish = async (row) => {
   try {
-    const { value } = await ElMessageBox.prompt('请输入异常原因', '标记异常', {
+    await ElMessageBox.confirm(`确认结束订单 ${row.order_no} 吗？`, '结束充电', {
+      type: 'warning',
+      confirmButtonText: '确认结束',
+      cancelButtonText: '取消',
+    })
+    const { data } = await finishOperatorOrder(row.id)
+    ElMessage.success(data.message || '订单已完成')
+    await loadOrders()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error(error)
+      ElMessage.error(error?.response?.data?.message || '结束充电失败')
+    }
+  }
+}
+
+const handleMarkAbnormal = async (row) => {
+  try {
+    const result = await ElMessageBox.prompt('请输入异常原因', '标记异常', {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
       inputPlaceholder: '例如：充电枪中途断连',
-      inputValidator: (val) => (val && val.trim().length > 0 ? true : '请填写异常原因'),
+      inputValidator: (value) => (value && value.trim() ? true : '异常原因不能为空'),
     })
-    const result = orderStore.markOrderAbnormal(row.id, value, scope)
-    if (!result) {
-      ElMessage.warning('仅本机构充电中订单可执行此操作')
-      return
-    }
-    ElMessage.success('订单已转入本机构异常订单')
-    await refreshRealtimeOrders()
+    const { data } = await markOperatorOrderAbnormal(row.id, result.value.trim())
+    ElMessage.success(data.message || '订单已转入异常订单')
+    await loadOrders()
   } catch (error) {
-    // cancel
+    if (error !== 'cancel') {
+      console.error(error)
+      ElMessage.error(error?.response?.data?.message || '标记异常失败')
+    }
   }
 }
 
-const openDetail = (id: string) => {
-  router.push(`/operator/orders/detail/${id}`)
+const openDetail = (row) => {
+  router.push(`/operator/orders/detail/${row.id}`)
 }
 
-onMounted(() => {
-  refreshRealtimeOrders()
-  refreshTimer = window.setInterval(refreshRealtimeOrders, 30000)
-})
-
-onUnmounted(() => {
-  if (refreshTimer) window.clearInterval(refreshTimer)
-})
+onMounted(loadOrders)
 </script>
 
 <template>
-  <div class="page-shell realtime-orders-page">
+  <div class="page-shell realtime-page">
     <PageSectionHeader
       eyebrow="Realtime Orders"
-      title="实时订单监控"
-      description="聚焦当前在充订单状态，支持异常标记与强制停止处理。"
-      chip="运营商订单模块"
+      title="实时订单"
+      description="支持模拟开始充电、结束充电和标记异常，形成实时订单到历史订单、异常订单的完整流转闭环。"
+      chip="运营商订单管理"
     >
       <template #actions>
-        <div class="live-info">
-          <span class="live-indicator"></span>
-          <span>实时同步中（30s 刷新）</span>
-        </div>
-        <el-button plain @click="router.push('/operator/orders/abnormal')">异常订单</el-button>
-        <el-button plain @click="router.push('/operator/orders/history')">历史订单</el-button>
-        <el-button type="primary" :icon="RefreshRight" plain @click="refreshRealtimeOrders">手动刷新</el-button>
+        <el-button type="primary" :loading="actionLoading" @click="handleDemoStart">模拟开始充电</el-button>
+        <el-button :icon="RefreshRight" :loading="loading" @click="loadOrders">刷新列表</el-button>
       </template>
     </PageSectionHeader>
 
     <section class="stats-grid stats-grid--realtime">
       <MetricCard
-        v-for="item in statCards"
+        v-for="item in stats"
         :key="item.label"
         :label="item.label"
         :value="item.value"
@@ -171,49 +170,38 @@ onUnmounted(() => {
     <section class="page-panel surface-card table-shell">
       <div class="panel-heading">
         <div>
-          <h3 class="panel-heading__title">本机构实时订单列表</h3>
-          <p class="panel-heading__desc">展示实时电量进度与金额变化，便于值班人员快速处置。</p>
+          <h3 class="panel-heading__title">实时订单列表</h3>
+          <p class="panel-heading__desc">操作后列表会自动刷新，已完成订单进入历史订单，异常订单进入异常订单池。</p>
         </div>
       </div>
 
-      <el-table :data="tableData" v-loading="loading" stripe v-if="tableData.length">
-        <el-table-column prop="orderNo" label="订单编号" width="190">
-          <template #default="scopeRow">
-            <span class="order-no">{{ scopeRow.row.orderNo }}</span>
-          </template>
+      <el-table v-if="orders.length" :data="orders" v-loading="loading" stripe>
+        <el-table-column prop="order_no" label="订单编号" min-width="190" show-overflow-tooltip />
+        <el-table-column prop="user_phone" label="用户账号" width="130" />
+        <el-table-column prop="user_nickname" label="昵称" width="120" show-overflow-tooltip />
+        <el-table-column prop="vin" label="VIN" min-width="170" show-overflow-tooltip />
+        <el-table-column prop="start_time" label="开始时间" width="170" />
+        <el-table-column prop="station_name" label="电站" min-width="170" show-overflow-tooltip />
+        <el-table-column prop="charger_name" label="电桩" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="charge_amount" label="电量(kWh)" width="110" align="right">
+          <template #default="{ row }">{{ Number(row.charge_amount).toFixed(2) }}</template>
         </el-table-column>
-        <el-table-column prop="chargerName" label="充电终端" width="160" />
-        <el-table-column prop="phone" label="用户账号" width="120" />
-        <el-table-column prop="startTime" label="开始时间" width="180" />
-        <el-table-column label="已充时长" width="120" align="center">
-          <template #default="scopeRow">
-            <el-tag type="success" effect="plain">{{ scopeRow.row.chargeDuration }} 分钟</el-tag>
-          </template>
+        <el-table-column prop="electricity_fee" label="电费" width="100" align="right">
+          <template #default="{ row }">{{ formatMoney(row.electricity_fee) }}</template>
         </el-table-column>
-        <el-table-column label="当前电量(实时)" min-width="220">
-          <template #default="scopeRow">
-            <div class="kwh-progress">
-              <span>{{ scopeRow.row.chargeAmount }} kWh</span>
-              <el-progress
-                :percentage="Math.min(100, scopeRow.row.chargeAmount * 2)"
-                :show-text="false"
-                :stroke-width="8"
-                striped
-                striped-flow
-              />
-            </div>
-          </template>
+        <el-table-column prop="service_fee" label="服务费" width="100" align="right">
+          <template #default="{ row }">{{ formatMoney(row.service_fee) }}</template>
         </el-table-column>
-        <el-table-column prop="totalAmount" label="当前金额" width="110" align="right">
-          <template #default="scopeRow">
-            <strong class="money">¥{{ Number(scopeRow.row.totalAmount).toFixed(2) }}</strong>
+        <el-table-column label="状态" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag type="warning">{{ row.status_text }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="220" fixed="right">
-          <template #default="scopeRow">
-            <el-button link type="primary" size="small" @click="openDetail(scopeRow.row.id)">详情</el-button>
-            <el-button link type="warning" size="small" @click="handleMarkAbnormal(scopeRow.row)">标记异常</el-button>
-            <el-button link type="danger" size="small" @click="handleForceStop(scopeRow.row)">强制停止</el-button>
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
+            <el-button link type="success" @click="handleFinish(row)">结束充电</el-button>
+            <el-button link type="danger" @click="handleMarkAbnormal(row)">标记异常</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -221,71 +209,19 @@ onUnmounted(() => {
       <EmptyStateBlock
         v-else-if="!loading"
         title="当前暂无实时订单"
-        description="当前没有充电中的订单，会在有新会话时自动出现。"
+        description="点击“模拟开始充电”即可创建一条充电中的实时订单。"
       />
     </section>
   </div>
 </template>
 
 <style scoped>
-.realtime-orders-page {
+.realtime-page {
   padding-bottom: 8px;
 }
 
 .stats-grid--realtime {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.live-info {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-right: 6px;
-  color: var(--color-text-2);
-  font-size: 12px;
-}
-
-.live-indicator {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background-color: #67c23a;
-  box-shadow: 0 0 8px #67c23a;
-  animation: pulse 1.5s infinite;
-}
-
-.order-no {
-  font-family: var(--font-family-mono);
-  color: #2563eb;
-}
-
-.kwh-progress {
-  display: grid;
-  gap: 6px;
-}
-
-.kwh-progress span {
-  color: var(--color-text-2);
-  font-size: 12px;
-}
-
-.money {
-  color: #ef4444;
-}
-
-@keyframes pulse {
-  0% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(103, 194, 58, 0.7);
-  }
-  70% {
-    transform: scale(1);
-    box-shadow: 0 0 0 6px rgba(103, 194, 58, 0);
-  }
-  100% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(103, 194, 58, 0);
-  }
 }
 
 @media (max-width: 1280px) {

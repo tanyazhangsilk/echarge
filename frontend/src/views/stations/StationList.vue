@@ -1,261 +1,535 @@
 <script setup>
-import { ref, reactive } from 'vue'
-import { Search, Plus, OfficeBuilding, CircleCheck, Location, Warning, DocumentAdd } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import http from '../../api/http'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  Connection,
+  Grid,
+  OfficeBuilding,
+  RefreshRight,
+  View,
+} from '@element-plus/icons-vue'
 
-// 顶部统计数据
-const statCards = [
-  { title: '我的电站总数', value: '6', unit: '座', desc: '含 1 座待审核', icon: OfficeBuilding, color: '#409EFF', bgColor: '#ecf5ff' },
-  { title: '正式运营中', value: '4', unit: '座', desc: '当前在线率 92%', icon: CircleCheck, color: '#67C23A', bgColor: '#f0f9eb' },
-  { title: '平台驳回整改', value: '1', unit: '座', desc: '请及时更新资料', icon: Warning, color: '#F56C6C', bgColor: '#fef0f0' }
-]
+import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
+import MetricCard from '../../components/console/MetricCard.vue'
+import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
+import {
+  bindStationTemplate,
+  fetchOperatorPricingTemplates,
+  fetchOperatorStations,
+  fetchStationChargers,
+  updateStationVisibility,
+} from '../../api/operator'
 
-const searchQuery = ref({ name: '', status: '' })
+const loading = ref(false)
+const stations = ref([])
+const chargerLoading = ref(false)
+const chargers = ref([])
+const templateLoading = ref(false)
+const templates = ref([])
+const chargerDrawerVisible = ref(false)
+const templateDialogVisible = ref(false)
+const currentStation = ref(null)
+const bindSubmitting = ref(false)
 
-// 模拟表格数据 (包含各种审核状态)
-const tableData = ref([
-  { id: 1, name: '南山区高新园超级超充站', region: '南山区', piles: '20', power: '2400', revenue: '3450.50', status: '营业中' },
-  { id: 2, name: '福田区科创大厦充电站', region: '福田区', piles: '10', power: '1200', revenue: '1890.00', status: '营业中' },
-  { id: 3, name: '南山科技园地下二期扩建', region: '南山区', piles: '15', power: '1800', revenue: '0.00', status: '待审核', isNew: true },
-  { id: 4, name: '罗湖区国贸大厦超充站', region: '罗湖区', piles: '8', power: '960', revenue: '1200.00', status: '营业中' },
-  { id: 5, name: '福田高铁站临时配套站', region: '福田区', piles: '5', power: '600', revenue: '0.00', status: '已驳回', rejectReason: '现场实勘照片不清晰，无法确认消防设施位置，请重新拍摄上传。' }
-])
-
-// ================= 新增电站 (提交审核) 逻辑 =================
-const applyDialogVisible = ref(false)
-const isSubmitting = ref(false)
-const formRef = ref(null)
-
-const form = reactive({
-  name: '',
-  region: '南山区',
-  address: '',
-  piles: 10,
-  power: 1200,
-  lng: 113.943121,
-  lat: 22.541243
+const filters = reactive({
+  keyword: '',
+  status: '',
+  visibility: '',
 })
 
-const rules = {
-  name: [{ required: true, message: '请输入电站名称', trigger: 'blur' }],
-  address: [{ required: true, message: '请输入详细地址', trigger: 'blur' }]
-}
+const bindForm = reactive({
+  templateId: null,
+})
 
-const openApplyDialog = () => {
-  applyDialogVisible.value = true
-}
+const statusOptions = [
+  { label: '全部状态', value: '' },
+  { label: '已上线', value: 0 },
+  { label: '待审核', value: 3 },
+  { label: '已驳回', value: 4 },
+]
 
-const submitApply = async () => {
-  if (!formRef.value) return
-  await formRef.value.validate(async (valid) => {
-    if (valid) {
-      isSubmitting.value = true
-      try {
-        const res = await http.post('/operator/stations/apply', {
-          name: form.name,
-          lng: form.lng,
-          lat: form.lat
-        })
-        
-        if (res.data.code === 200) {
-          ElMessage.success(res.data.message)
-          applyDialogVisible.value = false
-          
-          // 前端直接伪造一条数据插入列表顶部，展现秒级响应体验
-          tableData.value.unshift({
-            id: res.data.station_id || 999,
-            name: form.name,
-            region: form.region,
-            piles: form.piles,
-            power: form.power,
-            revenue: '0.00',
-            status: '待审核',
-            isNew: true
-          })
-          
-          // 重置表单
-          formRef.value.resetFields()
-        }
-      } catch (err) {
-        ElMessage.error('提交失败，请检查网络')
-      } finally {
-        isSubmitting.value = false
-      }
-    }
+const visibilityOptions = [
+  { label: '全部可见性', value: '' },
+  { label: '公开站点', value: 'public' },
+  { label: '私有站点', value: 'private' },
+]
+
+const filteredStations = computed(() => {
+  const keyword = filters.keyword.trim().toLowerCase()
+  return stations.value.filter((item) => {
+    const matchKeyword =
+      !keyword ||
+      [item.station_name, item.operator_name, item.address, item.price_template_name]
+        .filter(Boolean)
+        .some((field) => String(field).toLowerCase().includes(keyword))
+    const matchStatus = filters.status === '' || Number(filters.status) === item.status
+    const matchVisibility = !filters.visibility || filters.visibility === item.visibility
+    return matchKeyword && matchStatus && matchVisibility
   })
+})
+
+const stats = computed(() => {
+  const total = stations.value.length
+  const online = stations.value.filter((item) => item.status === 0).length
+  const pending = stations.value.filter((item) => item.status === 3).length
+  const privateCount = stations.value.filter((item) => item.visibility === 'private').length
+  return [
+    {
+      label: '总电站',
+      value: total,
+      suffix: ' 座',
+      trend: '运营商场站规模',
+      trendLabel: '适合后台总览截图',
+      tone: 'primary',
+      icon: OfficeBuilding,
+    },
+    {
+      label: '已上线',
+      value: online,
+      suffix: ' 座',
+      trend: '可对外运营',
+      trendLabel: '审核通过后可设为公开',
+      tone: 'success',
+      icon: Grid,
+    },
+    {
+      label: '待审核',
+      value: pending,
+      suffix: ' 座',
+      trend: '等待平台审核',
+      trendLabel: '未通过前不能公开',
+      tone: 'warning',
+      icon: View,
+    },
+    {
+      label: '私有站点',
+      value: privateCount,
+      suffix: ' 座',
+      trend: '内部可见',
+      trendLabel: '支持运营中切换回显',
+      tone: 'info',
+      icon: Connection,
+    },
+  ]
+})
+
+const selectedTemplate = computed(() =>
+  templates.value.find((item) => item.id === bindForm.templateId) || null,
+)
+
+const chargerSummary = computed(() => ({
+  total: chargers.value.length,
+  charging: chargers.value.filter((item) => item.status === 1).length,
+  idle: chargers.value.filter((item) => item.status === 0).length,
+  fault: chargers.value.filter((item) => item.status === 2).length,
+}))
+
+const statusTagType = (status) => {
+  if (status === 0) return 'success'
+  if (status === 3) return 'warning'
+  if (status === 4) return 'danger'
+  return 'info'
 }
+
+const visibilityTagType = (visibility) => (visibility === 'public' ? 'success' : 'info')
+
+const chargerStatusType = (status) => {
+  if (status === 1) return 'warning'
+  if (status === 2) return 'danger'
+  return 'success'
+}
+
+const loadStations = async () => {
+  loading.value = true
+  try {
+    const { data } = await fetchOperatorStations()
+    stations.value = data.data || []
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('电站列表加载失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const loadTemplates = async () => {
+  templateLoading.value = true
+  try {
+    const { data } = await fetchOperatorPricingTemplates()
+    templates.value = data.data || []
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('电价模板加载失败')
+  } finally {
+    templateLoading.value = false
+  }
+}
+
+const openChargerDrawer = async (station) => {
+  currentStation.value = station
+  chargerDrawerVisible.value = true
+  chargerLoading.value = true
+  try {
+    const { data } = await fetchStationChargers(station.id)
+    chargers.value = data.data || []
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('电桩列表加载失败')
+  } finally {
+    chargerLoading.value = false
+  }
+}
+
+const handleVisibilityChange = async (station, visibility) => {
+  const actionText = visibility === 'public' ? '公开站点' : '私有站点'
+  try {
+    await ElMessageBox.confirm(`确认将“${station.station_name}”设置为${actionText}吗？`, '修改可见性', {
+      type: 'warning',
+      confirmButtonText: '确认修改',
+      cancelButtonText: '取消',
+    })
+    const { data } = await updateStationVisibility(station.id, visibility)
+    ElMessage.success(data.message || '可见性已更新')
+    await loadStations()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error(error)
+      ElMessage.error(error?.response?.data?.message || '修改失败')
+    }
+  }
+}
+
+const openBindDialog = async (station) => {
+  currentStation.value = station
+  bindForm.templateId = station.price_template_id || null
+  templateDialogVisible.value = true
+  if (!templates.value.length) {
+    await loadTemplates()
+  }
+}
+
+const submitBindTemplate = async () => {
+  if (!currentStation.value || !bindForm.templateId) {
+    ElMessage.warning('请先选择一个模板')
+    return
+  }
+  bindSubmitting.value = true
+  try {
+    const { data } = await bindStationTemplate(currentStation.value.id, bindForm.templateId)
+    ElMessage.success(data.message || '模板绑定成功')
+    templateDialogVisible.value = false
+    await loadStations()
+  } catch (error) {
+    console.error(error)
+    ElMessage.error(error?.response?.data?.message || '模板绑定失败')
+  } finally {
+    bindSubmitting.value = false
+  }
+}
+
+const resetFilters = () => {
+  filters.keyword = ''
+  filters.status = ''
+  filters.visibility = ''
+}
+
+onMounted(async () => {
+  await Promise.all([loadStations(), loadTemplates()])
+})
 </script>
 
 <template>
-  <div class="page-container">
-    <el-row :gutter="20" class="stat-row">
-      <el-col :span="8" v-for="(card, index) in statCards" :key="index">
-        <el-card shadow="hover" class="stat-card">
-          <div class="stat-content">
-            <div class="stat-info">
-              <div class="stat-title">{{ card.title }}</div>
-              <div class="stat-value" :style="{ color: card.color }">
-                {{ card.value }} <span class="unit">{{ card.unit }}</span>
-              </div>
-              <div class="stat-desc">{{ card.desc }}</div>
-            </div>
-            <div class="stat-icon-wrapper" :style="{ backgroundColor: card.bgColor, color: card.color }">
-              <el-icon :size="24"><component :is="card.icon" /></el-icon>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-card shadow="never" class="list-card">
-      <template #header>
-        <div class="flex justify-between items-center">
-          <span class="header-title">我的电站资产</span>
-          <el-button type="primary" :icon="Plus" @click="openApplyDialog">申请新建电站</el-button>
-        </div>
+  <div class="page-shell station-page">
+    <PageSectionHeader
+      eyebrow="Operator Stations"
+      title="电站管理"
+      description="展示电站、充电桩与电价模板的绑定关系，适合作为毕业论文中的运营后台页面截图。"
+      chip="运营商资产管理"
+    >
+      <template #actions>
+        <el-button :icon="RefreshRight" :loading="loading" @click="loadStations">刷新列表</el-button>
       </template>
+    </PageSectionHeader>
 
-      <el-table :data="tableData" stripe style="width: 100%" :header-cell-style="{ background: '#f8fafc', color: '#475569' }">
-        <el-table-column prop="name" label="电站名称" min-width="220">
-          <template #default="scope">
-            <div style="font-weight: 600; color: #1e293b; display: flex; align-items: center;">
-              {{ scope.row.name }}
-              <el-tag v-if="scope.row.isNew" type="danger" size="small" effect="dark" round style="margin-left: 8px;">新提报</el-tag>
-            </div>
+    <section class="stats-grid stats-grid--stations">
+      <MetricCard
+        v-for="item in stats"
+        :key="item.label"
+        :label="item.label"
+        :value="item.value"
+        :suffix="item.suffix"
+        :trend="item.trend"
+        :trend-label="item.trendLabel"
+        :tone="item.tone"
+        :icon="item.icon"
+      />
+    </section>
+
+    <section class="page-panel surface-card">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">筛选条件</h3>
+          <p class="panel-heading__desc">支持按电站名称、状态和可见性快速筛选。</p>
+        </div>
+        <div class="toolbar-actions">
+          <el-button @click="resetFilters">重置</el-button>
+          <el-button type="primary" :loading="loading" @click="loadStations">重新加载</el-button>
+        </div>
+      </div>
+
+      <div class="filter-row">
+        <el-input v-model="filters.keyword" clearable placeholder="搜索电站名称 / 运营商 / 地址 / 模板" style="width: 340px" />
+        <el-select v-model="filters.status" placeholder="选择状态" style="width: 160px">
+          <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+        <el-select v-model="filters.visibility" placeholder="选择可见性" style="width: 160px">
+          <el-option v-for="item in visibilityOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+      </div>
+    </section>
+
+    <section class="page-panel surface-card table-shell">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">电站列表</h3>
+          <p class="panel-heading__desc">共 {{ filteredStations.length }} 座电站，支持查看电桩、切换可见性和绑定电价模板。</p>
+        </div>
+      </div>
+
+      <el-table v-if="filteredStations.length" :data="filteredStations" v-loading="loading" stripe>
+        <el-table-column prop="station_name" label="电站名称" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="operator_name" label="运营商" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="address" label="地址" min-width="280" show-overflow-tooltip />
+        <el-table-column label="状态" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="statusTagType(row.status)">{{ row.status_text }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="region" label="所在地区" width="100" />
-        <el-table-column prop="piles" label="终端数量" width="100" align="center" />
-        <el-table-column prop="power" label="总功率" width="100" align="right">
-          <template #default="scope">{{ scope.row.power }} kW</template>
-        </el-table-column>
-        <el-table-column prop="revenue" label="今日流水" width="120" align="right">
-          <template #default="scope">
-            <span style="font-weight: bold;" :style="{ color: scope.row.revenue !== '0.00' ? '#F56C6C' : '#94a3b8' }">￥{{ scope.row.revenue }}</span>
+        <el-table-column label="可见性" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="visibilityTagType(row.visibility)">{{ row.visibility_text }}</el-tag>
           </template>
         </el-table-column>
-        
-        <el-table-column prop="status" label="运营状态" width="140" align="center">
-          <template #default="scope">
-            <el-tag v-if="scope.row.status === '营业中'" type="success" effect="plain"><el-icon><CircleCheck/></el-icon> 营业中</el-tag>
-            <el-tag v-else-if="scope.row.status === '待审核'" type="warning" effect="dark">平台审核中</el-tag>
-            <el-tooltip v-else-if="scope.row.status === '已驳回'" effect="dark" :content="scope.row.rejectReason" placement="top">
-              <el-tag type="danger" effect="plain" style="cursor: help;"><el-icon><Warning/></el-icon> 已驳回 (查看原因)</el-tag>
-            </el-tooltip>
-          </template>
-        </el-table-column>
-        
-        <el-table-column label="动作" width="180" fixed="right">
-          <template #default="scope">
-            <el-button v-if="scope.row.status === '营业中'" link type="primary" size="small">配置电价</el-button>
-            <el-button v-if="scope.row.status === '已驳回'" link type="danger" size="small" @click="openApplyDialog">修改资料重提</el-button>
-            <el-button link type="info" size="small">详情</el-button>
+        <el-table-column prop="price_template_name" label="绑定模板" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="charger_count" label="充电桩数量" width="110" align="center" />
+        <el-table-column label="操作" width="280" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openChargerDrawer(row)">查看电桩</el-button>
+            <el-button
+              link
+              :type="row.visibility === 'public' ? 'warning' : 'success'"
+              @click="handleVisibilityChange(row, row.visibility === 'public' ? 'private' : 'public')"
+            >
+              {{ row.visibility === 'public' ? '设为私有' : '设为公开' }}
+            </el-button>
+            <el-button link type="info" @click="openBindDialog(row)">绑定模板</el-button>
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
 
-    <el-dialog v-model="applyDialogVisible" title="提报新建电站申请" width="600px" destroy-on-close>
-      <el-alert title="平台规范：电站信息提交后需经管理员进行合规审核，预计 1-2 个工作日。审核通过后方可正式上线并配置电价。" type="info" show-icon class="mb-6" :closable="false" />
-      
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
-        <el-form-item label="电站名称" prop="name">
-          <el-input v-model="form.name" placeholder="例如：南山区XX地下停车场超充站" />
-        </el-form-item>
-        
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="所在行政区">
-              <el-select v-model="form.region" placeholder="请选择">
-                <el-option label="南山区" value="南山区" />
-                <el-option label="福田区" value="福田区" />
-                <el-option label="宝安区" value="宝安区" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="详细地址" prop="address">
-              <el-input v-model="form.address" placeholder="输入街道与门牌号" />
-            </el-form-item>
-          </el-col>
-        </el-row>
+      <EmptyStateBlock
+        v-else-if="!loading"
+        title="暂无电站数据"
+        description="当前没有符合条件的电站记录。"
+      />
+    </section>
 
-        <el-form-item label="地理坐标">
-          <div class="map-picker-mock">
-            <el-icon class="text-blue-500 mr-2" :size="20"><Location /></el-icon>
-            <span>已选坐标：E {{ form.lng }}, N {{ form.lat }}</span>
-            <el-button link type="primary" class="ml-auto">在地图上微调</el-button>
+    <el-drawer v-model="chargerDrawerVisible" size="780px" :title="currentStation?.station_name || '电桩管理'">
+      <template v-if="currentStation">
+        <div class="drawer-header-card">
+          <div>
+            <strong>{{ currentStation.station_name }}</strong>
+            <p>{{ currentStation.address }}</p>
           </div>
-        </el-form-item>
+          <div class="drawer-tags">
+            <el-tag :type="statusTagType(currentStation.status)">{{ currentStation.status_text }}</el-tag>
+            <el-tag :type="visibilityTagType(currentStation.visibility)">{{ currentStation.visibility_text }}</el-tag>
+          </div>
+        </div>
 
-        <el-divider content-position="left">硬件规划</el-divider>
-        
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="规划枪数">
-              <el-input-number v-model="form.piles" :min="1" :max="100" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="总功率(kW)">
-              <el-input-number v-model="form.power" :min="30" :step="120" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        
-        <el-form-item label="实勘照片">
-           <div class="upload-mock-area">
-             <el-icon :size="28" color="#94a3b8"><DocumentAdd /></el-icon>
-             <span class="mt-2 text-xs text-gray-500">点击上传现场照片 (道闸、变压器铭牌等)</span>
-           </div>
-        </el-form-item>
-      </el-form>
+        <el-descriptions :column="4" border class="drawer-descriptions">
+          <el-descriptions-item label="充电桩总数">{{ chargerSummary.total }}</el-descriptions-item>
+          <el-descriptions-item label="充电中">{{ chargerSummary.charging }}</el-descriptions-item>
+          <el-descriptions-item label="空闲">{{ chargerSummary.idle }}</el-descriptions-item>
+          <el-descriptions-item label="故障">{{ chargerSummary.fault }}</el-descriptions-item>
+        </el-descriptions>
+      </template>
+
+      <el-table :data="chargers" v-loading="chargerLoading" stripe class="drawer-table">
+        <el-table-column prop="sn_code" label="电桩编号" min-width="150" />
+        <el-table-column prop="charger_name" label="电桩名称" min-width="170" show-overflow-tooltip />
+        <el-table-column prop="type" label="类型" width="110" align="center" />
+        <el-table-column prop="power_kw" label="功率" width="110" align="center">
+          <template #default="{ row }">{{ row.power_kw }} kW</template>
+        </el-table-column>
+        <el-table-column label="状态" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="chargerStatusType(row.status)">{{ row.status_text }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="station_name" label="所属电站" min-width="170" show-overflow-tooltip />
+      </el-table>
+
+      <EmptyStateBlock
+        v-if="!chargerLoading && !chargers.length"
+        title="暂无电桩数据"
+        description="当前电站下还没有可展示的充电桩。"
+      />
+    </el-drawer>
+
+    <el-dialog v-model="templateDialogVisible" width="760px" title="绑定电价模板">
+      <template v-if="currentStation">
+        <div class="dialog-station-card">
+          <div>
+            <strong>{{ currentStation.station_name }}</strong>
+            <p>{{ currentStation.address }}</p>
+          </div>
+          <el-tag :type="statusTagType(currentStation.status)">{{ currentStation.status_text }}</el-tag>
+        </div>
+
+        <el-form label-width="96px" class="bind-form">
+          <el-form-item label="选择模板">
+            <el-select
+              v-model="bindForm.templateId"
+              placeholder="请选择电价模板"
+              style="width: 100%"
+              :loading="templateLoading"
+            >
+              <el-option v-for="item in templates" :key="item.id" :label="item.name" :value="item.id" />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </template>
+
+      <div v-if="selectedTemplate" class="template-detail-card">
+        <div class="template-detail-card__header">
+          <div>
+            <h4>{{ selectedTemplate.name }}</h4>
+            <p>适用范围：{{ selectedTemplate.scope }}</p>
+          </div>
+          <el-tag :type="selectedTemplate.status === 'active' ? 'success' : 'info'">
+            {{ selectedTemplate.status === 'active' ? '启用中' : '草稿' }}
+          </el-tag>
+        </div>
+
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="尖峰电价">¥{{ Number(selectedTemplate.peak_price).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="平段电价">¥{{ Number(selectedTemplate.flat_price).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="谷段电价">¥{{ Number(selectedTemplate.valley_price).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="服务费">¥{{ Number(selectedTemplate.service_price).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="模板状态">{{ selectedTemplate.status }}</el-descriptions-item>
+          <el-descriptions-item label="更新时间">{{ selectedTemplate.updated_at }}</el-descriptions-item>
+        </el-descriptions>
+      </div>
+
+      <EmptyStateBlock
+        v-else
+        title="请选择一个模板"
+        description="选择模板后会在这里展示模板价格详情。"
+      />
 
       <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="applyDialogVisible = false">暂存草稿</el-button>
-          <el-button type="primary" :loading="isSubmitting" @click="submitApply">
-            确认并提交平台审核
-          </el-button>
-        </span>
+        <el-button @click="templateDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="bindSubmitting" @click="submitBindTemplate">确认绑定</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.page-container { padding: 0; }
-.stat-row { margin-bottom: 24px; }
-.stat-card { border: none; border-radius: 8px; }
-.stat-content { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
-.stat-title { font-size: 14px; color: #64748b; margin-bottom: 8px; }
-.stat-value { font-size: 28px; font-weight: bold; font-family: 'DIN Alternate', sans-serif; margin-bottom: 4px; }
-.unit { font-size: 14px; color: #94a3b8; font-weight: normal; margin-left: 4px; }
-.stat-desc { font-size: 12px; color: #94a3b8; }
-.stat-icon-wrapper { width: 56px; height: 56px; border-radius: 50%; display: flex; justify-content: center; align-items: center; }
-
-.list-card { border: none; border-radius: 8px; }
-.header-title { font-size: 18px; font-weight: bold; color: #1e293b; }
-
-.flex { display: flex; }
-.items-center { align-items: center; }
-.justify-between { justify-content: space-between; }
-.mb-6 { margin-bottom: 24px; }
-.mr-2 { margin-right: 8px; }
-.ml-auto { margin-left: auto; }
-.mt-2 { margin-top: 8px; }
-
-.text-blue-500 { color: #3b82f6; }
-.text-xs { font-size: 12px; }
-.text-gray-500 { color: #64748b; }
-
-.map-picker-mock {
-  display: flex; align-items: center; background: #f1f5f9; padding: 10px 16px; border-radius: 6px; width: 100%; border: 1px solid #e2e8f0;
+.station-page {
+  padding-bottom: 8px;
 }
-.upload-mock-area {
-  width: 100%; height: 100px; border: 1px dashed #cbd5e1; border-radius: 6px; background: #f8fafc;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: all 0.3s;
+
+.stats-grid--stations {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
-.upload-mock-area:hover { border-color: #3b82f6; background: #eff6ff; }
+
+.toolbar-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.drawer-header-card,
+.dialog-station-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  margin-bottom: 16px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(47, 116, 255, 0.08), rgba(73, 187, 174, 0.1));
+}
+
+.drawer-header-card strong,
+.dialog-station-card strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 18px;
+}
+
+.drawer-header-card p,
+.dialog-station-card p,
+.template-detail-card__header p {
+  margin: 0;
+  color: var(--color-text-2);
+}
+
+.drawer-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.drawer-descriptions {
+  margin-bottom: 16px;
+}
+
+.bind-form {
+  margin-bottom: 12px;
+}
+
+.template-detail-card {
+  padding: 18px;
+  border-radius: 18px;
+  background: #f8fbff;
+  border: 1px solid rgba(47, 116, 255, 0.12);
+}
+
+.template-detail-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.template-detail-card__header h4 {
+  margin: 0 0 8px;
+}
+
+@media (max-width: 1280px) {
+  .stats-grid--stations {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .stats-grid--stations {
+    grid-template-columns: 1fr;
+  }
+
+  .drawer-header-card,
+  .dialog-station-card,
+  .template-detail-card__header {
+    flex-direction: column;
+  }
+}
 </style>

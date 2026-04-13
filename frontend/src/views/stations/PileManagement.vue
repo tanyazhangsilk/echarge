@@ -1,196 +1,248 @@
 <script setup>
-import { ref, computed } from 'vue'
-import { Lightning, Refresh, Select, CircleClose, SwitchButton, Tools } from '@element-plus/icons-vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { CircleCheck, Lightning, RefreshRight, WarningFilled } from '@element-plus/icons-vue'
 
-// 统计数据
-const overview = { total: 15, charging: 8, free: 5, fault: 2 }
+import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
+import MetricCard from '../../components/console/MetricCard.vue'
+import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
+import { fetchOperatorStations, fetchStationChargers } from '../../api/operator'
 
-// 生成假数据 (加入电桩类型)
-const allPiles = Array.from({ length: 15 }, (_, i) => {
-  const rand = Math.random()
-  let status = 'free'
-  if (rand < 0.6) status = 'charging'
-  else if (rand > 0.85) status = 'fault'
+const route = useRoute()
+const loading = ref(false)
+const stationLoading = ref(false)
+const stations = ref([])
+const selectedStationId = ref(null)
+const chargers = ref([])
 
-  return {
-    id: `DC-120KW-${String(i + 1).padStart(3, '0')}`,
-    type: i % 3 === 0 ? '交流慢充' : '直流快充',
-    status: status,
-    power: status === 'charging' ? (Math.random() * 80 + 30).toFixed(1) : 0,
-    progress: status === 'charging' ? Math.floor(Math.random() * 90 + 10) : 0,
-    voltage: status === 'charging' ? (Math.random() * 50 + 350).toFixed(0) : 0,
-    current: status === 'charging' ? (Math.random() * 100 + 50).toFixed(1) : 0,
-    duration: status === 'charging' ? `0${Math.floor(Math.random()*3)}:${Math.floor(Math.random()*50+10)}:00` : '--'
+const selectedStation = computed(() => stations.value.find((item) => item.id === selectedStationId.value) || null)
+
+const chargerStats = computed(() => [
+  {
+    label: '充电桩总数',
+    value: chargers.value.length,
+    suffix: ' 台',
+    trend: '当前电站设备规模',
+    trendLabel: '适合设备管理截图',
+    tone: 'primary',
+    icon: Lightning,
+  },
+  {
+    label: '充电中',
+    value: chargers.value.filter((item) => item.status === 1).length,
+    suffix: ' 台',
+    trend: '实时占用数量',
+    trendLabel: '用于展示设备状态',
+    tone: 'warning',
+    icon: RefreshRight,
+  },
+  {
+    label: '空闲可用',
+    value: chargers.value.filter((item) => item.status === 0).length,
+    suffix: ' 台',
+    trend: '可继续服务',
+    trendLabel: '体现设备供给能力',
+    tone: 'success',
+    icon: CircleCheck,
+  },
+  {
+    label: '故障告警',
+    value: chargers.value.filter((item) => item.status === 2).length,
+    suffix: ' 台',
+    trend: '待维护设备',
+    trendLabel: '适合运维管理展示',
+    tone: 'danger',
+    icon: WarningFilled,
+  },
+])
+
+const statusTagType = (status) => {
+  if (status === 1) return 'warning'
+  if (status === 2) return 'danger'
+  return 'success'
+}
+
+const loadStations = async () => {
+  stationLoading.value = true
+  try {
+    const { data } = await fetchOperatorStations()
+    stations.value = data.data || []
+
+    const queryId = Number(route.query.stationId || 0) || null
+    if (queryId && stations.value.some((item) => item.id === queryId)) {
+      selectedStationId.value = queryId
+    } else if (!selectedStationId.value && stations.value.length) {
+      selectedStationId.value = stations.value[0].id
+    }
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('电站列表加载失败')
+  } finally {
+    stationLoading.value = false
   }
+}
+
+const loadChargers = async () => {
+  if (!selectedStationId.value) {
+    chargers.value = []
+    return
+  }
+
+  loading.value = true
+  try {
+    const { data } = await fetchStationChargers(selectedStationId.value)
+    chargers.value = data.data || []
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('电桩数据加载失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+watch(selectedStationId, () => {
+  loadChargers()
 })
 
-// 筛选表单
-const searchForm = ref({ station: '南山区高新园站', group: '', status: 'all', pileType: '' })
-
-// 分页逻辑
-const currentPage = ref(1)
-const pageSize = ref(6)
-const displayPiles = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return allPiles.slice(start, start + pageSize.value)
+onMounted(async () => {
+  await loadStations()
+  await loadChargers()
 })
-
-const getStatusType = (status) => {
-  if (status === 'charging') return 'primary'
-  if (status === 'free') return 'success'
-  return 'danger'
-}
-const getStatusText = (status) => {
-  if (status === 'charging') return '充电中'
-  if (status === 'free') return '空闲可用'
-  return '设备故障'
-}
 </script>
 
 <template>
-  <div class="page-container">
-    <el-row :gutter="20" class="status-row">
-      <el-col :span="6">
-        <el-card shadow="hover" class="overview-card" style="border-left: 4px solid #909399;">
-          <div class="overview-title">总电桩数 (台)</div>
-          <div class="overview-num" style="color: #606266;">{{ overview.total }}</div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="overview-card" style="border-left: 4px solid #409EFF;">
-          <div class="overview-title">正在充电</div>
-          <div class="overview-num" style="color: #409EFF;">{{ overview.charging }}</div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="overview-card" style="border-left: 4px solid #67C23A;">
-          <div class="overview-title">空闲可用</div>
-          <div class="overview-num" style="color: #67C23A;">{{ overview.free }}</div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="overview-card" style="border-left: 4px solid #F56C6C;">
-          <div class="overview-title">离线/故障</div>
-          <div class="overview-num" style="color: #F56C6C;">{{ overview.fault }}</div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-card shadow="never" class="main-card">
-      <template #header>
-        <div class="card-header">
-          <span class="header-title">电桩列表</span>
-        </div>
+  <div class="page-shell charger-page">
+    <PageSectionHeader
+      eyebrow="Chargers"
+      title="电桩状态总览"
+      description="按电站查看充电桩编号、类型、功率与状态，用于支撑毕业设计中的设备管理展示。"
+      chip="运营商设备管理"
+    >
+      <template #actions>
+        <el-select
+          v-model="selectedStationId"
+          placeholder="请选择电站"
+          filterable
+          :loading="stationLoading"
+          style="width: 280px"
+        >
+          <el-option v-for="item in stations" :key="item.id" :label="item.station_name" :value="item.id" />
+        </el-select>
+        <el-button :icon="RefreshRight" :loading="loading" @click="loadChargers">刷新</el-button>
       </template>
+    </PageSectionHeader>
 
-      <div class="filter-bar">
-        <div class="filter-left">
-          <el-select v-model="searchForm.station" placeholder="所属电站" style="width: 200px">
-            <el-option label="南山区高新园站" value="南山区高新园站" />
-          </el-select>
-          <el-select v-model="searchForm.group" placeholder="分区" style="width: 120px">
-            <el-option label="全部" value="" />
-            <el-option label="A区快充" value="A" />
-          </el-select>
-          <el-select v-model="searchForm.pileType" placeholder="设备类型" style="width: 140px">
-            <el-option label="全部类型" value="" />
-            <el-option label="直流快充" value="DC" />
-            <el-option label="交流慢充" value="AC" />
-          </el-select>
-          <el-radio-group v-model="searchForm.status">
-            <el-radio-button label="all">全部状态</el-radio-button>
-            <el-radio-button label="charging">充电中</el-radio-button>
-            <el-radio-button label="free">空闲</el-radio-button>
-            <el-radio-button label="fault">故障</el-radio-button>
-          </el-radio-group>
-        </div>
-        <div class="filter-right">
-          <el-button type="primary" :icon="Refresh" plain>刷新状态</el-button>
+    <div class="station-banner surface-card" v-if="selectedStation">
+      <div>
+        <strong>{{ selectedStation.station_name }}</strong>
+        <p>{{ selectedStation.address }}</p>
+      </div>
+      <div class="station-banner__meta">
+        <el-tag :type="selectedStation.status === 0 ? 'success' : selectedStation.status === 3 ? 'warning' : 'danger'">
+          {{ selectedStation.status_text }}
+        </el-tag>
+        <el-tag :type="selectedStation.visibility === 'public' ? 'success' : 'info'">
+          {{ selectedStation.visibility_text }}
+        </el-tag>
+      </div>
+    </div>
+
+    <section class="stats-grid stats-grid--chargers">
+      <MetricCard
+        v-for="item in chargerStats"
+        :key="item.label"
+        :label="item.label"
+        :value="item.value"
+        :suffix="item.suffix"
+        :trend="item.trend"
+        :trend-label="item.trendLabel"
+        :tone="item.tone"
+        :icon="item.icon"
+      />
+    </section>
+
+    <section class="page-panel surface-card table-shell">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">电桩列表</h3>
+          <p class="panel-heading__desc">统一展示电桩编号、名称、类型、功率、状态与所属电站。</p>
         </div>
       </div>
 
-      <el-row :gutter="20">
-        <el-col :span="8" v-for="pile in displayPiles" :key="pile.id" style="margin-bottom: 20px;">
-          <el-card shadow="hover" class="pile-card" :style="{ borderTop: `4px solid ${pile.status==='charging'?'#409EFF':(pile.status==='free'?'#67C23A':'#F56C6C')}` }">
-            <div class="pile-header">
-              <span class="pile-id"><el-icon style="margin-right: 4px; color: #909399;"><Lightning /></el-icon>{{ pile.id }}</span>
-              <el-tag :type="getStatusType(pile.status)" effect="light" round>{{ getStatusText(pile.status) }}</el-tag>
-            </div>
+      <el-table v-if="chargers.length" :data="chargers" v-loading="loading" stripe>
+        <el-table-column prop="sn_code" label="电桩编号" min-width="160" />
+        <el-table-column prop="charger_name" label="电桩名称" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="type" label="类型" width="110" align="center" />
+        <el-table-column prop="power_kw" label="功率" width="110" align="center">
+          <template #default="{ row }">{{ row.power_kw }} kW</template>
+        </el-table-column>
+        <el-table-column label="状态" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="statusTagType(row.status)">{{ row.status_text }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="station_name" label="所属电站" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="updated_at" label="更新时间" width="180" />
+      </el-table>
 
-            <div class="pile-body">
-              <template v-if="pile.status === 'charging'">
-                <div class="charging-info">
-                  <span class="info-text">实时功率: <strong style="color: #409EFF; font-size: 18px;">{{ pile.power }} kW</strong></span>
-                  <span class="info-text">已充时长: {{ pile.duration }}</span>
-                </div>
-                <el-progress :percentage="pile.progress" :stroke-width="12" striped striped-flow color="#409EFF" style="margin: 16px 0;" />
-                <div class="charging-info">
-                  <span class="info-text">电压: {{ pile.voltage }} V</span>
-                  <span class="info-text">电流: {{ pile.current }} A</span>
-                </div>
-              </template>
-              
-              <template v-else-if="pile.status === 'free'">
-                <div class="center-state" style="color: #67C23A;">
-                  <el-icon :size="48" style="margin-bottom: 8px;"><Select /></el-icon>
-                  <span>设备待机中，可扫码充电</span>
-                </div>
-              </template>
-              
-              <template v-else>
-                <div class="center-state" style="color: #F56C6C;">
-                  <el-icon :size="48" style="margin-bottom: 8px;"><CircleClose /></el-icon>
-                  <span>通讯超时 / 设备离线</span>
-                </div>
-              </template>
-            </div>
-
-            <div class="pile-footer">
-              <el-button size="small" type="danger" plain style="flex: 1;" :disabled="pile.status !== 'charging'" :icon="SwitchButton">远程停机</el-button>
-              <el-button size="small" type="info" plain style="flex: 1;" :icon="Tools">重启设备</el-button>
-            </div>
-          </el-card>
-        </el-col>
-      </el-row>
-
-      <div class="pagination-wrapper">
-        <el-pagination background layout="prev, pager, next" :total="allPiles.length" :page-size="pageSize" v-model:current-page="currentPage" />
-      </div>
-    </el-card>
+      <EmptyStateBlock
+        v-else-if="!loading"
+        title="暂无电桩数据"
+        description="请选择电站，或检查当前电站下是否已经有充电桩数据。"
+      />
+    </section>
   </div>
 </template>
 
 <style scoped>
-.status-row { margin-bottom: 24px; }
-.overview-card { border-radius: 8px; text-align: center; }
-.overview-title { color: #909399; font-size: 14px; margin-bottom: 8px; }
-.overview-num { font-size: 32px; font-weight: bold; font-family: 'DIN Alternate', sans-serif; }
-
-.main-card { border: none; border-radius: 8px; }
-.card-header { font-size: 18px; font-weight: bold; color: #303133; }
-
-.filter-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; background: #f8f9fa; padding: 16px; border-radius: 8px; }
-.filter-left { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-
-.pile-card { border-radius: 8px; padding: 0; }
-.pile-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.pile-id { font-weight: bold; font-size: 16px; color: #303133; display: flex; align-items: center; }
-
-/* 重点：锁死高度，保持网格绝对整齐 */
-.pile-body { 
-  background-color: #f8f9fa; 
-  border-radius: 8px; 
-  padding: 16px; 
-  height: 140px; /* 锁死高度 */
-  display: flex; 
-  flex-direction: column; 
-  justify-content: center; 
-  margin-bottom: 16px;
+.charger-page {
+  padding-bottom: 8px;
 }
-.charging-info { display: flex; justify-content: space-between; align-items: center; }
-.info-text { font-size: 13px; color: #606266; }
-.center-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; font-weight: 500; }
 
-.pile-footer { display: flex; gap: 12px; border-top: 1px solid #ebeef5; padding-top: 16px; }
-.pagination-wrapper { margin-top: 24px; display: flex; justify-content: center; }
+.stats-grid--chargers {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.station-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  background: linear-gradient(135deg, rgba(47, 116, 255, 0.08), rgba(73, 187, 174, 0.1));
+}
+
+.station-banner strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 20px;
+}
+
+.station-banner p {
+  margin: 0;
+  color: var(--color-text-2);
+}
+
+.station-banner__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+@media (max-width: 1280px) {
+  .stats-grid--chargers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .stats-grid--chargers {
+    grid-template-columns: 1fr;
+  }
+
+  .station-banner {
+    flex-direction: column;
+  }
+}
 </style>

@@ -18,3 +18,20 @@ export const dispatchCoupon = (id, payload) => http.post(`/operator/marketing/co
 
 export const fetchOperatorProfile = () => http.get('/operator/settings/profile')
 export const updateOperatorProfile = (payload) => http.put('/operator/settings/profile', payload)
+
+export const fetchOperatorStations = () => http.get('/operator/stations')
+export const fetchStationChargers = (stationId) => http.get(`/operator/stations/${stationId}/chargers`)
+export const updateStationVisibility = (stationId, visibility) =>
+  http.post(`/operator/stations/${stationId}/visibility`, { visibility })
+export const bindStationTemplate = (stationId, templateId) =>
+  http.post(`/operator/stations/${stationId}/bind-template`, { template_id: templateId })
+export const fetchOperatorPricingTemplates = () => http.get('/operator/pricing/templates')
+
+export const fetchOperatorRealtimeOrders = () => http.get('/operator/orders/realtime')
+export const fetchOperatorHistoryOrders = () => http.get('/operator/orders/history')
+export const fetchOperatorAbnormalOrders = () => http.get('/operator/orders/abnormal')
+export const fetchOperatorOrderDetail = (orderId) => http.get(`/operator/orders/${orderId}`)
+export const startDemoCharging = (payload = {}) => http.post('/operator/orders/demo-start', payload)
+export const finishOperatorOrder = (orderId) => http.post(`/operator/orders/${orderId}/finish`)
+export const markOperatorOrderAbnormal = (orderId, abnormalReason) =>
+  http.post(`/operator/orders/${orderId}/mark-abnormal`, { abnormal_reason: abnormalReason })
