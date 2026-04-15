@@ -6,7 +6,7 @@ const http = axios.create({
   // - 若设置了 VITE_API_BASE_URL，则直接使用（适合生产环境）
   // - 否则默认使用相对路径 /api/v1，由 Vite 代理到 http://localhost:8000/api/v1
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
-  timeout: 10000,
+  timeout: 60000,
 })
 
 http.interceptors.request.use((config) => {
@@ -16,6 +16,19 @@ http.interceptors.request.use((config) => {
   config.headers['x-operator-id'] = operatorId
   return config
 })
+
+http.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const config = error?.config
+    const isTimeout = error?.code === 'ECONNABORTED'
+    if (config && isTimeout && !config.__retryOnce) {
+      config.__retryOnce = true
+      return http(config)
+    }
+    return Promise.reject(error)
+  },
+)
 
 export default http
 

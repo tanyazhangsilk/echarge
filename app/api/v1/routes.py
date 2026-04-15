@@ -848,16 +848,14 @@ async def get_operator_stations(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    operator = get_operator_by_context(db, context)
-    if not operator:
+    if context.operator_id is None:
         return {"code": 404, "message": "运营商不存在"}
 
-    ensure_operator_demo_assets(db, operator)
     return {
         "code": 200,
         "data": get_operator_station_page(
             db,
-            operator_id=operator.id,
+            operator_id=context.operator_id,
             page=page,
             page_size=page_size,
             keyword=keyword,
@@ -873,21 +871,18 @@ async def get_operator_station_chargers(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    operator = get_operator_by_context(db, context)
-    if not operator:
+    if context.operator_id is None:
         return {"code": 404, "message": "运营商不存在"}
 
     station = (
         db.query(Station)
         .options(joinedload(Station.chargers).joinedload(Charger.station))
-        .filter(Station.id == station_id, Station.operator_id == operator.id, Station.is_deleted.is_(False))
+        .filter(Station.id == station_id, Station.operator_id == context.operator_id, Station.is_deleted.is_(False))
         .first()
     )
     if not station:
         return {"code": 404, "message": "电站不存在或无权限访问"}
 
-    ensure_station_chargers(db, station)
-    db.refresh(station)
     return {"code": 200, "data": [serialize_operator_charger(item) for item in station.chargers]}
 
 
@@ -935,15 +930,13 @@ async def bind_operator_station_template(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    operator = get_operator_by_context(db, context)
-    if not operator:
+    if context.operator_id is None:
         return {"code": 404, "message": "运营商不存在"}
 
-    ensure_operator_price_templates(db, operator)
     station = (
         db.query(Station)
         .options(joinedload(Station.price_template), joinedload(Station.operator), joinedload(Station.chargers))
-        .filter(Station.id == station_id, Station.operator_id == operator.id, Station.is_deleted.is_(False))
+        .filter(Station.id == station_id, Station.operator_id == context.operator_id, Station.is_deleted.is_(False))
         .first()
     )
     if not station:
@@ -953,7 +946,7 @@ async def bind_operator_station_template(
         db.query(PriceTemplate)
         .filter(
             PriceTemplate.id == payload.template_id,
-            PriceTemplate.operator_id == operator.id,
+            PriceTemplate.operator_id == context.operator_id,
             PriceTemplate.is_deleted.is_(False),
         )
         .first()
@@ -972,11 +965,19 @@ async def get_operator_pricing_templates(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    operator = get_operator_by_context(db, context)
-    if not operator:
+    if context.operator_id is None:
         return {"code": 404, "message": "运营商不存在"}
 
-    templates = ensure_operator_price_templates(db, operator)
+    templates = (
+        db.query(PriceTemplate)
+        .filter(PriceTemplate.operator_id == context.operator_id, PriceTemplate.is_deleted.is_(False))
+        .order_by(PriceTemplate.updated_at.desc(), PriceTemplate.id.desc())
+        .all()
+    )
+    if not templates:
+        operator = get_operator_by_context(db, context)
+        if operator:
+            templates = ensure_operator_price_templates(db, operator)
     return {"code": 200, "data": [serialize_price_template(item) for item in templates]}
 
 
