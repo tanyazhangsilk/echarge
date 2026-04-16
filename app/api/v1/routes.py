@@ -44,14 +44,17 @@ from app.services.order_service import (
 from app.services.operator_demo_service import (
     ensure_operator_demo_assets,
     ensure_operator_price_templates,
-    ensure_station_chargers,
-    get_operator_station_page,
-    get_operator_station_page_fast,
-    get_operator_station_options,
-    infer_charger_power_kw,
-    serialize_operator_charger,
-    serialize_operator_station,
     serialize_price_template,
+)
+from app.services.station_service import (
+    batch_create_station_chargers,
+    charger_status_text,
+    create_station_charger,
+    dump_site_photos,
+    get_operator_station_options,
+    get_operator_station_page,
+    serialize_charger,
+    serialize_station,
     station_status_text,
     visibility_text,
 )
@@ -176,10 +179,55 @@ class BindTemplatePayload(BaseModel):
     template_id: int
 
 
+class StationApplyPayload(BaseModel):
+    station_name: str
+    province: str
+    city: str
+    district: str
+    address: str
+    longitude: float
+    latitude: float
+    contact_name: str
+    contact_phone: str
+    operation_hours: str = ""
+    parking_fee_desc: str = ""
+    station_remark: str = ""
+    planned_charger_count: int = 0
+    total_power_kw: float = 0
+    cover_image: str = ""
+    site_photos: list[str] | str | None = None
+    qualification_remark: str = ""
+
+
+class StationAuditProcessPayload(BaseModel):
+    action: str
+    remark: str = ""
+
+
+class StationChargerCreatePayload(BaseModel):
+    sn_code: str
+    charger_name: str
+    type: str
+    power_kw: float
+    status: int = 0
+
+
+class StationChargerBatchCreatePayload(BaseModel):
+    count: int
+    type: str
+    power_kw: float
+
+
+class StationChargerUpdatePayload(BaseModel):
+    charger_name: str | None = None
+    status: int | None = None
+
+
 class DemoStartOrderPayload(BaseModel):
     user_id: int | None = None
     station_id: int | None = None
     charger_id: int | None = None
+    source_type: str = "manual_demo"
 
 
 class RoleContext(BaseModel):
@@ -309,6 +357,29 @@ def generate_demo_order_no(db: Session) -> str:
 
 def user_display_name(user: User) -> str:
     return user.nickname or f"鐢ㄦ埛{str(user.phone)[-4:]}"
+
+
+def get_station_for_operator(
+    db: Session,
+    *,
+    station_id: int,
+    operator_id: int,
+    with_chargers: bool = False,
+) -> Station | None:
+    query = (
+        db.query(Station)
+        .options(joinedload(Station.operator), joinedload(Station.price_template))
+        .filter(Station.id == station_id, Station.operator_id == operator_id, Station.is_deleted.is_(False))
+    )
+    if with_chargers:
+        query = query.options(joinedload(Station.chargers).joinedload(Charger.station))
+    return query.first()
+
+
+def validate_station_manageable(station: Station) -> tuple[bool, str]:
+    if station.status != 0:
+        return False, "电站审核通过后才允许配置电桩和绑定模板"
+    return True, ""
 
 
 SETTLEMENT_STATUS_TEXT = {
@@ -930,7 +1001,7 @@ async def get_operator_stations(
 
     return {
         "code": 200,
-        "data": get_operator_station_page_fast(
+        "data": get_operator_station_page(
             db,
             operator_id=operator_id,
             page=page,
@@ -955,6 +1026,54 @@ async def get_operator_station_option_list(
     }
 
 
+@api_router.post("/operator/stations/apply", tags=["operator"])
+async def operator_apply_station(
+    payload: StationApplyPayload,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = get_operator_by_context(db, context)
+    if not operator:
+        return {"code": 404, "message": "当前运营商未找到，请先入驻"}
+
+    station_name = payload.station_name.strip()
+    if not station_name:
+        return {"code": 400, "message": "请填写电站名称"}
+
+    new_station = Station(
+        operator_id=operator.id,
+        name=station_name,
+        province=payload.province.strip(),
+        city=payload.city.strip(),
+        district=payload.district.strip(),
+        address=payload.address.strip(),
+        longitude=Decimal(str(payload.longitude)),
+        latitude=Decimal(str(payload.latitude)),
+        contact_name=payload.contact_name.strip(),
+        contact_phone=payload.contact_phone.strip(),
+        operation_hours=payload.operation_hours.strip(),
+        parking_fee_desc=payload.parking_fee_desc.strip(),
+        station_remark=payload.station_remark.strip(),
+        planned_charger_count=max(int(payload.planned_charger_count or 0), 0),
+        total_power_kw=Decimal(str(payload.total_power_kw or 0)),
+        cover_image=payload.cover_image.strip(),
+        site_photos_json=dump_site_photos(payload.site_photos),
+        qualification_remark=payload.qualification_remark.strip(),
+        audit_remark="待管理员审核",
+        status=3,
+        visibility="private",
+    )
+    db.add(new_station)
+    db.commit()
+    db.refresh(new_station)
+
+    return {
+        "code": 200,
+        "message": "电站申请已提交，等待管理员审核",
+        "data": serialize_station(new_station),
+    }
+
+
 @api_router.get("/operator/stations/{station_id}/chargers", tags=["operator"])
 async def get_operator_station_chargers(
     station_id: int,
@@ -972,7 +1091,117 @@ async def get_operator_station_chargers(
     if not station:
         return {"code": 404, "message": "电站不存在或无权限访问"}
 
-    return {"code": 200, "data": [serialize_operator_charger(item) for item in station.chargers]}
+    return {"code": 200, "data": [serialize_charger(item) for item in station.chargers]}
+
+
+@api_router.post("/operator/stations/{station_id}/chargers", tags=["operator"])
+async def create_operator_station_charger(
+    station_id: int,
+    payload: StationChargerCreatePayload,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator_id = resolve_operator_id(db, context)
+    station = get_station_for_operator(db, station_id=station_id, operator_id=operator_id, with_chargers=True)
+    if not station:
+        return {"code": 404, "message": "电站不存在或无权限访问"}
+
+    manageable, message = validate_station_manageable(station)
+    if not manageable:
+        return {"code": 400, "message": message}
+
+    sn_code = payload.sn_code.strip().upper()
+    if not sn_code:
+        return {"code": 400, "message": "请输入电桩编号"}
+    exists = db.query(Charger.id).filter(Charger.sn_code == sn_code).first()
+    if exists:
+        return {"code": 400, "message": "电桩编号已存在"}
+
+    charger_type = (payload.type or "").strip().upper()
+    if charger_type not in {"AC", "DC"}:
+        return {"code": 400, "message": "电桩类型仅支持 AC/DC"}
+
+    status = int(payload.status)
+    if status not in {0, 1, 2, 3}:
+        return {"code": 400, "message": "电桩状态不合法"}
+
+    charger = create_station_charger(
+        db,
+        station=station,
+        sn_code=sn_code,
+        charger_name=(payload.charger_name or "").strip() or f"{station.name[:10]}-{len(station.chargers) + 1:02d}号桩",
+        charger_type=charger_type,
+        power_kw=Decimal(str(payload.power_kw)),
+        status=status,
+    )
+    return {"code": 200, "message": "电桩新增成功", "data": serialize_charger(charger)}
+
+
+@api_router.post("/operator/stations/{station_id}/chargers/batch-create", tags=["operator"])
+async def batch_create_operator_station_chargers(
+    station_id: int,
+    payload: StationChargerBatchCreatePayload,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator_id = resolve_operator_id(db, context)
+    station = get_station_for_operator(db, station_id=station_id, operator_id=operator_id, with_chargers=True)
+    if not station:
+        return {"code": 404, "message": "电站不存在或无权限访问"}
+
+    manageable, message = validate_station_manageable(station)
+    if not manageable:
+        return {"code": 400, "message": message}
+
+    count = int(payload.count or 0)
+    if count < 1 or count > 50:
+        return {"code": 400, "message": "批量生成数量需在 1-50 之间"}
+
+    charger_type = (payload.type or "").strip().upper()
+    if charger_type not in {"AC", "DC"}:
+        return {"code": 400, "message": "电桩类型仅支持 AC/DC"}
+
+    created = batch_create_station_chargers(
+        db,
+        station=station,
+        count=count,
+        charger_type=charger_type,
+        power_kw=Decimal(str(payload.power_kw)),
+    )
+    return {
+        "code": 200,
+        "message": f"已批量生成 {len(created)} 个电桩",
+        "data": [serialize_charger(charger) for charger in created],
+    }
+
+
+@api_router.patch("/operator/stations/{station_id}/chargers/{charger_id}", tags=["operator"])
+async def update_operator_station_charger(
+    station_id: int,
+    charger_id: int,
+    payload: StationChargerUpdatePayload,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator_id = resolve_operator_id(db, context)
+    station = get_station_for_operator(db, station_id=station_id, operator_id=operator_id, with_chargers=True)
+    if not station:
+        return {"code": 404, "message": "电站不存在或无权限访问"}
+
+    charger = next((item for item in station.chargers if item.id == charger_id), None)
+    if not charger:
+        return {"code": 404, "message": "电桩不存在"}
+
+    if payload.status is not None and int(payload.status) not in {0, 1, 2, 3}:
+        return {"code": 400, "message": "电桩状态不合法"}
+
+    if payload.charger_name is not None:
+        charger.name = payload.charger_name.strip() or charger.name
+    if payload.status is not None:
+        charger.status = int(payload.status)
+    db.commit()
+    db.refresh(charger)
+    return {"code": 200, "message": "电桩配置已更新", "data": serialize_charger(charger)}
 
 
 @api_router.post("/operator/stations/{station_id}/visibility", tags=["operator"])
@@ -1042,11 +1271,14 @@ async def bind_operator_station_template(
     )
     if not template:
         return {"code": 404, "message": "电价模板不存在"}
+    if station.status != 0:
+        return {"code": 400, "message": "电站审核通过后才允许绑定模板"}
 
     station.template_id = template.id
+    station.price_template = template
     db.commit()
     db.refresh(station)
-    return {"code": 200, "message": "模板绑定成功", "data": serialize_operator_station(station)}
+    return {"code": 200, "message": "模板绑定成功", "data": serialize_station(station)}
 
 
 @api_router.get("/operator/pricing/templates", tags=["operator"])
@@ -1069,6 +1301,49 @@ async def get_operator_pricing_templates(
     return {"code": 200, "data": [serialize_price_template(item) for item in templates]}
 
 
+@api_router.get("/operator/orders/start-options", tags=["orders", "operator"])
+async def get_operator_order_start_options(
+    station_id: int | None = None,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator = get_operator_by_context(db, context)
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+
+    ensure_operator_demo_assets(db, operator)
+    demo_user = get_or_create_demo_user(db)
+    stations = (
+        db.query(Station)
+        .options(joinedload(Station.operator), joinedload(Station.price_template), joinedload(Station.chargers).joinedload(Charger.station))
+        .filter(Station.operator_id == operator.id, Station.is_deleted.is_(False))
+        .order_by(Station.updated_at.desc(), Station.id.desc())
+        .all()
+    )
+    selected_station = next((item for item in stations if station_id and item.id == station_id), None)
+    if selected_station is None and stations:
+        selected_station = stations[0]
+
+    return {
+        "code": 200,
+        "data": {
+            "users": [
+                {
+                    "id": demo_user.id,
+                    "nickname": demo_user.nickname or user_display_name(demo_user),
+                    "phone": demo_user.phone,
+                    "vin": demo_user.vin_code,
+                    "is_default": True,
+                }
+            ],
+            "stations": [serialize_station(station) for station in stations],
+            "chargers": [serialize_charger(charger) for charger in (selected_station.chargers if selected_station else [])],
+            "default_user_id": demo_user.id,
+            "default_station_id": selected_station.id if selected_station else None,
+        },
+    }
+
+
 @api_router.post("/operator/orders/demo-start", tags=["orders", "operator"])
 async def operator_demo_start_order(
     payload: DemoStartOrderPayload,
@@ -1078,6 +1353,9 @@ async def operator_demo_start_order(
     operator = get_operator_by_context(db, context)
     if not operator:
         return {"code": 404, "message": "运营商不存在"}
+    source_type = (payload.source_type or "manual_demo").strip() or "manual_demo"
+    if source_type not in {"manual_demo", "qr_code", "mini_program"}:
+        return {"code": 400, "message": "订单来源不合法"}
 
     ensure_operator_demo_assets(db, operator)
     base_station_query = (
@@ -1091,9 +1369,8 @@ async def operator_demo_start_order(
         station = base_station_query.order_by(Station.status.asc(), Station.id.asc()).first()
     if not station:
         return {"code": 400, "message": "当前运营商暂无可用电站"}
-
-    ensure_station_chargers(db, station)
-    db.refresh(station)
+    if station.status != 0:
+        return {"code": 400, "message": "请选择已审核通过的电站发起充电"}
     active_charger_ids = {
         item[0]
         for item in db.query(Order.charger_id)
@@ -1104,13 +1381,15 @@ async def operator_demo_start_order(
         charger = next((item for item in station.chargers if item.id == payload.charger_id), None)
     else:
         charger = next(
-            (item for item in station.chargers if item.id not in active_charger_ids and item.status != 2),
+            (item for item in station.chargers if item.id not in active_charger_ids and item.status not in {2, 3}),
             None,
         )
     if not charger:
-        charger = next((item for item in station.chargers if item.status != 2), None)
+        charger = next((item for item in station.chargers if item.status not in {2, 3}), None)
     if not charger:
         return {"code": 400, "message": "当前电站暂无可用充电桩"}
+    if charger.status in {2, 3}:
+        return {"code": 400, "message": "当前电桩不可用，请选择其他电桩"}
 
     user = (
         db.query(User).filter(User.id == payload.user_id).first()
@@ -1129,6 +1408,7 @@ async def operator_demo_start_order(
         charger_id=charger.id,
         vin=user.vin_code or f"VIN{user.id:08d}",
         start_time=start_time,
+        source_type=source_type,
         pay_status=0,
         status=0,
         abnormal_reason=None,
@@ -1717,25 +1997,7 @@ async def get_station_audits(
 
     return {
         "code": 200,
-        "data": [
-            {
-                "id": s.id,
-                "operator_name": s.operator.name if s.operator else "未知运营商",
-                "station_name": s.name,
-                "address": f"深圳市演示区示范路{s.id}号 · {s.name}",
-                "lng": float(s.longitude),
-                "lat": float(s.latitude),
-                "status": s.status,
-                "status_text": station_status_text(s.status),
-                "visibility": s.visibility,
-                "visibility_text": visibility_text(s.visibility),
-                "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "",
-                "planned_piles": len(s.chargers),
-                "total_power": sum(infer_charger_power_kw(item) for item in s.chargers) if s.chargers else 0,
-                "price_template_name": s.price_template.name if s.price_template else "未绑定模板",
-            }
-            for s in stations
-        ],
+        "data": [serialize_station(station) for station in stations],
     }
 
 
@@ -1795,11 +2057,12 @@ async def update_admin_system_params(
 @api_router.post("/admin/audit/stations/{station_id}/process", tags=["admin"])
 async def process_station_audit(
     station_id: int,
-    payload: dict,
+    payload: StationAuditProcessPayload,
     _context: RoleContext = Depends(require_admin_context),
     db: Session = Depends(get_db),
 ):
-    action = payload.get("action")
+    action = (payload.action or "").strip().lower()
+    remark = (payload.remark or "").strip()
 
     station = db.query(Station).filter(Station.id == station_id).first()
     if not station:
@@ -1807,14 +2070,19 @@ async def process_station_audit(
 
     if action == "approve":
         station.status = 0
-        station.visibility = "public"
+        station.visibility = "private"
+        station.audit_remark = remark or "审核通过，可继续配置电桩并绑定模板"
     elif action == "reject":
+        if not remark:
+            return {"code": 400, "message": "驳回时请填写原因"}
         station.status = 4
         station.visibility = "private"
+        station.audit_remark = remark
     else:
         return {"code": 400, "message": "action 仅支持 approve/reject"}
 
     db.commit()
+    db.refresh(station)
     return {
         "code": 200,
         "message": "站点审核处理成功",
@@ -1824,38 +2092,6 @@ async def process_station_audit(
             "status_text": station_status_text(station.status),
             "visibility": station.visibility,
             "visibility_text": visibility_text(station.visibility),
+            "remark": station.audit_remark or "",
         },
     }
-
-
-@api_router.post("/operator/stations/apply", tags=["operator"])
-async def operator_apply_station(
-    payload: dict,
-    context: RoleContext = Depends(require_operator_context),
-    db: Session = Depends(get_db),
-):
-    operator = get_operator_by_context(db, context)
-    if not operator:
-        return {"code": 404, "message": "当前运营商未找到，请先入驻"}
-
-    try:
-        new_station = Station(
-            operator_id=operator.id,
-            name=payload.get("name"),
-            longitude=payload.get("lng", 114.0),
-            latitude=payload.get("lat", 22.5),
-            status=3,
-            visibility="private",
-        )
-        db.add(new_station)
-        db.commit()
-        db.refresh(new_station)
-
-        return {
-            "code": 200,
-            "message": "站点资料提交成功，已进入平台审核队列",
-            "station_id": new_station.id,
-        }
-    except Exception as e:
-        db.rollback()
-        return {"code": 500, "message": f"提交失败: {str(e)}"}

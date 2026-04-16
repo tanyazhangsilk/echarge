@@ -26,16 +26,15 @@ const summaryCards = computed(() => {
       label: '订单状态',
       value: order.value.status_text,
       trend: '当前订单处理状态',
-      trendLabel: '状态按订单流程更新',
+      trendLabel: '会随着状态流转同步变化',
       tone: order.value.status === 2 ? 'danger' : order.value.status === 1 ? 'success' : 'warning',
       icon: Document,
     },
     {
-      label: '充电时长',
-      value: order.value.charge_duration,
-      suffix: ' 分钟',
-      trend: '本次充电累计时长',
-      trendLabel: '按开始与结束时间计算',
+      label: '订单来源',
+      value: order.value.source_type_text,
+      trend: '发起充电的业务入口',
+      trendLabel: `来源编码：${order.value.source_type}`,
       tone: 'primary',
       icon: Clock,
     },
@@ -44,50 +43,30 @@ const summaryCards = computed(() => {
       value: Number(order.value.total_amount || 0).toFixed(2),
       prefix: '¥',
       trend: '电费与服务费合计',
-      trendLabel: '按订单费用项汇总',
+      trendLabel: '以订单结算明细为准',
       tone: 'warning',
       icon: Money,
     },
     {
       label: '异常标记',
-      value: order.value.abnormal_reason ? '已记录' : '正常',
+      value: order.value.abnormal_reason ? '已标记' : '正常',
       trend: order.value.abnormal_reason || '当前无异常记录',
-      trendLabel: '异常订单展示处理原因',
+      trendLabel: '异常订单会同步展示原因',
       tone: order.value.abnormal_reason ? 'danger' : 'info',
       icon: WarningFilled,
     },
   ]
 })
 
-const timelineItems = computed(() => {
-  if (!order.value) return []
-  const items = [
-    {
-      type: 'primary',
-      title: '开始充电',
-      time: order.value.start_time,
-      content: `电站：${order.value.station_name || '-'}，电桩：${order.value.charger_name || '-'}`,
-    },
-  ]
+const feeDetail = computed(() => order.value?.fee_detail || {})
+const statusFlow = computed(() => order.value?.status_flow || [])
 
-  if (order.value.end_time) {
-    items.push({
-      type: order.value.status === 2 ? 'danger' : 'success',
-      title: order.value.status === 2 ? '异常结束' : '订单完成',
-      time: order.value.end_time,
-      content: order.value.status === 2 ? order.value.abnormal_reason || '已记录异常原因' : '订单已完成并进入历史订单',
-    })
-  } else {
-    items.push({
-      type: 'warning',
-      title: '充电进行中',
-      time: order.value.updated_at,
-      content: '当前订单仍处于实时充电状态。',
-    })
-  }
-
-  return items
-})
+const timelineTypeMap = {
+  primary: 'primary',
+  warning: 'warning',
+  success: 'success',
+  danger: 'danger',
+}
 
 const loadOrder = async () => {
   loading.value = true
@@ -121,7 +100,7 @@ onMounted(loadOrder)
     <PageSectionHeader
       eyebrow="订单中心"
       title="订单详情"
-      description="查看订单的用户、费用、设备与状态流转信息。"
+      description="查看订单来源、费用明细、站点信息和状态流转记录。"
       :chip="isAdmin ? '平台订单' : '订单中心'"
     >
       <template #actions>
@@ -176,6 +155,8 @@ onMounted(loadOrder)
                 {{ order.status_text }}
               </el-tag>
             </el-descriptions-item>
+            <el-descriptions-item label="订单来源">{{ order.source_type_text }}</el-descriptions-item>
+            <el-descriptions-item label="来源编码">{{ order.source_type }}</el-descriptions-item>
             <el-descriptions-item label="用户账号">{{ order.user_phone }}</el-descriptions-item>
             <el-descriptions-item label="用户昵称">{{ order.user_nickname }}</el-descriptions-item>
             <el-descriptions-item label="VIN">{{ order.vin || '-' }}</el-descriptions-item>
@@ -186,32 +167,46 @@ onMounted(loadOrder)
             <el-descriptions-item label="充电电量">{{ Number(order.charge_amount || 0).toFixed(2) }} kWh</el-descriptions-item>
             <el-descriptions-item label="支付状态">{{ order.pay_status_text }}</el-descriptions-item>
             <el-descriptions-item label="电站名称">{{ order.station_name || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="电站审核状态">{{ order.station_status_text || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="电价模板">{{ order.price_template_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="电桩名称">{{ order.charger_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="异常原因" :span="2">
               {{ order.abnormal_reason || '无' }}
             </el-descriptions-item>
           </el-descriptions>
+
+          <div class="fee-card">
+            <h4>费用明细</h4>
+            <el-descriptions :column="2" border>
+              <el-descriptions-item label="充电量">{{ Number(feeDetail.charge_amount || 0).toFixed(2) }} kWh</el-descriptions-item>
+              <el-descriptions-item label="电费">{{ formatMoney(feeDetail.electricity_fee) }}</el-descriptions-item>
+              <el-descriptions-item label="服务费">{{ formatMoney(feeDetail.service_fee) }}</el-descriptions-item>
+              <el-descriptions-item label="总费用">{{ formatMoney(feeDetail.total_amount) }}</el-descriptions-item>
+              <el-descriptions-item label="平段电价">¥{{ Number(feeDetail.flat_price || 0).toFixed(2) }}</el-descriptions-item>
+              <el-descriptions-item label="服务费单价">¥{{ Number(feeDetail.service_price || 0).toFixed(2) }}</el-descriptions-item>
+            </el-descriptions>
+          </div>
         </article>
 
         <article class="page-panel surface-card">
           <div class="panel-heading">
             <div>
               <h3 class="panel-heading__title">状态流转</h3>
-              <p class="panel-heading__desc">按时间顺序展示订单关键节点。</p>
+              <p class="panel-heading__desc">按时间顺序展示订单创建、开始充电和完成或异常结束节点。</p>
             </div>
           </div>
 
           <el-timeline>
             <el-timeline-item
-              v-for="item in timelineItems"
-              :key="`${item.title}-${item.time}`"
-              :type="item.type"
+              v-for="item in statusFlow"
+              :key="`${item.key}-${item.time}`"
+              :type="timelineTypeMap[item.tone] || 'primary'"
               :timestamp="item.time"
               placement="top"
             >
               <div class="timeline-card">
                 <strong>{{ item.title }}</strong>
-                <p>{{ item.content }}</p>
+                <p>{{ item.desc }}</p>
               </div>
             </el-timeline-item>
           </el-timeline>
@@ -220,7 +215,7 @@ onMounted(loadOrder)
     </template>
 
     <section v-else-if="!loading" class="page-panel surface-card">
-      <EmptyStateBlock title="未找到订单" description="当前订单不存在或无权查看。" />
+      <EmptyStateBlock title="未找到订单" description="当前订单不存在或无权限查看。" />
     </section>
   </div>
 </template>
@@ -271,6 +266,14 @@ onMounted(loadOrder)
 
 .detail-descriptions {
   margin-top: 4px;
+}
+
+.fee-card {
+  margin-top: 18px;
+}
+
+.fee-card h4 {
+  margin: 0 0 12px;
 }
 
 .timeline-card {

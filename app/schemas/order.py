@@ -16,6 +16,8 @@ class OrderBaseSchema(BaseModel):
     electricity_fee: float
     service_fee: float
     total_amount: float
+    source_type: str = "mini_program"
+    source_type_text: str = ""
     pay_status: int
     pay_status_label: str
     order_status: str
@@ -32,6 +34,8 @@ class OrderDetailSchema(OrderBaseSchema):
     operator_name: str = ""
     station_name: str = ""
     charger_sn: str = ""
+    price_template_name: str = ""
+    station_status_text: str = ""
 
 
 class OrderActionSchema(BaseModel):

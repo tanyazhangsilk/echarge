@@ -22,6 +22,11 @@ export const updateOperatorProfile = (payload) => http.put('/operator/settings/p
 export const fetchOperatorStations = (params = {}) => http.get('/operator/stations', { params })
 export const fetchOperatorStationOptions = (params = {}) => http.get('/operator/stations/options', { params })
 export const fetchStationChargers = (stationId) => http.get(`/operator/stations/${stationId}/chargers`)
+export const createStationCharger = (stationId, payload) => http.post(`/operator/stations/${stationId}/chargers`, payload)
+export const batchCreateStationChargers = (stationId, payload) =>
+  http.post(`/operator/stations/${stationId}/chargers/batch-create`, payload)
+export const updateStationCharger = (stationId, chargerId, payload) =>
+  http.patch(`/operator/stations/${stationId}/chargers/${chargerId}`, payload)
 export const updateStationVisibility = (stationId, visibility) =>
   http.post(`/operator/stations/${stationId}/visibility`, { visibility })
 export const bindStationTemplate = (stationId, templateId) =>
@@ -33,6 +38,7 @@ export const fetchOperatorRealtimeOrders = (params = {}) => http.get('/operator/
 export const fetchOperatorHistoryOrders = (params = {}) => http.get('/operator/orders/history', { params })
 export const fetchOperatorAbnormalOrders = (params = {}) => http.get('/operator/orders/abnormal', { params })
 export const fetchOperatorOrderDetail = (orderId) => http.get(`/operator/orders/${orderId}`)
+export const fetchOperatorOrderStartOptions = (params = {}) => http.get('/operator/orders/start-options', { params })
 export const startDemoCharging = (payload = {}) => http.post('/operator/orders/demo-start', payload)
 export const finishOperatorOrder = (orderId) => http.post(`/operator/orders/${orderId}/finish`)
 export const forceStopOperatorOrder = (orderId) => http.post(`/operator/orders/${orderId}/force-stop`)

@@ -47,8 +47,8 @@ const stats = computed(() => [
     label: '异常订单',
     value: summary.total_count,
     suffix: ' 单',
-    trend: '当前筛选条件下的异常订单',
-    trendLabel: '支持按原因与时间范围查询',
+    trend: '当前筛选条件下的异常订单数量',
+    trendLabel: '支持按原因和时间范围追踪',
     tone: 'danger',
     icon: WarningFilled,
   },
@@ -56,8 +56,8 @@ const stats = computed(() => [
     label: '异常金额',
     value: Number(summary.total_amount || 0).toFixed(2),
     prefix: '¥',
-    trend: '异常订单涉及金额',
-    trendLabel: '用于财务核查',
+    trend: '异常订单涉及总金额',
+    trendLabel: '可用于财务和客服跟进',
     tone: 'warning',
     icon: Money,
   },
@@ -65,17 +65,17 @@ const stats = computed(() => [
     label: '异常类型',
     value: summary.reason_count,
     suffix: ' 类',
-    trend: '异常原因种类数',
-    trendLabel: '按异常原因归类统计',
+    trend: '异常原因去重统计',
+    trendLabel: '观察高频问题场景',
     tone: 'info',
     icon: Bell,
   },
   {
-    label: '待处理数量',
+    label: '异常订单数',
     value: summary.abnormal_count,
     suffix: ' 单',
-    trend: '异常状态订单数量',
-    trendLabel: '用于安排处理优先级',
+    trend: '当前已归档的异常订单',
+    trendLabel: '用于排定处理优先级',
     tone: 'primary',
     icon: RefreshRight,
   },
@@ -114,7 +114,7 @@ const loadOrders = async () => {
       reason_count: 0,
       abnormal_count: 0,
     })
-    errorMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '异常订单加载失败，请稍后重试。'
+    errorMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '异常订单加载失败'
     ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
@@ -145,9 +145,7 @@ const handleSizeChange = (size) => {
 watch(
   () => [filters.keyword, filters.reason, JSON.stringify(filters.dateRange)],
   () => {
-    if (searchTimer) {
-      clearTimeout(searchTimer)
-    }
+    if (searchTimer) clearTimeout(searchTimer)
     searchTimer = setTimeout(() => {
       pagination.page = 1
       loadOrders()
@@ -158,9 +156,7 @@ watch(
 onMounted(loadOrders)
 
 onBeforeUnmount(() => {
-  if (searchTimer) {
-    clearTimeout(searchTimer)
-  }
+  if (searchTimer) clearTimeout(searchTimer)
 })
 </script>
 
@@ -169,7 +165,7 @@ onBeforeUnmount(() => {
     <PageSectionHeader
       eyebrow="订单中心"
       :title="isAdmin ? '异常订单管理' : '异常订单'"
-      description="查询异常订单及异常原因，跟踪处理情况。"
+      description="查询异常订单、异常原因和相关费用，便于及时跟进处理。"
       :chip="isAdmin ? '平台订单' : '订单中心'"
     >
       <template #actions>
@@ -196,7 +192,7 @@ onBeforeUnmount(() => {
       <div class="panel-heading">
         <div>
           <h3 class="panel-heading__title">筛选条件</h3>
-          <p class="panel-heading__desc">支持按订单、用户、异常原因和时间范围查询。</p>
+          <p class="panel-heading__desc">支持按订单、用户、来源、异常原因和时间范围查询。</p>
         </div>
         <div class="toolbar-actions">
           <el-button @click="resetFilters">重置</el-button>
@@ -204,7 +200,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="filter-row">
-        <el-input v-model="filters.keyword" clearable placeholder="订单号 / 用户账号 / VIN / 电站" style="width: 320px" />
+        <el-input v-model="filters.keyword" clearable placeholder="订单号 / 用户 / VIN / 订单来源" style="width: 320px" />
         <el-input v-model="filters.reason" clearable placeholder="输入异常原因关键词" style="width: 240px" />
         <el-date-picker
           v-model="filters.dateRange"
@@ -248,6 +244,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
         </el-table-column>
+        <el-table-column prop="source_type_text" label="订单来源" width="120" align="center" />
         <el-table-column prop="vin" label="VIN" min-width="170" show-overflow-tooltip />
         <el-table-column prop="start_time" label="开始时间" width="170" />
         <el-table-column prop="end_time" label="结束时间" width="170" />

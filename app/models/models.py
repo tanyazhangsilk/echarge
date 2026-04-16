@@ -25,34 +25,34 @@ class Base(DeclarativeBase):
 
 
 class BaseModel:
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="primary key")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="created at")
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime,
         default=func.now(),
         onupdate=func.now(),
-        comment="最后更新时间",
+        comment="updated at",
     )
-    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True, comment="逻辑删除标记")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True, comment="soft delete")
 
 
 user_fleet_association = Table(
     "busi_user_fleet_association",
     Base.metadata,
-    Column("user_id", ForeignKey("sys_users.id"), primary_key=True, comment="用户ID"),
-    Column("fleet_id", ForeignKey("busi_fleets.id"), primary_key=True, comment="车队ID"),
+    Column("user_id", ForeignKey("sys_users.id"), primary_key=True, comment="user id"),
+    Column("fleet_id", ForeignKey("busi_fleets.id"), primary_key=True, comment="fleet id"),
 )
 
 
 class User(Base, BaseModel):
     __tablename__ = "sys_users"
 
-    phone: Mapped[str] = mapped_column(String(20), unique=True, index=True, comment="手机号")
-    nickname: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="用户昵称")
-    password_hash: Mapped[str] = mapped_column(String(255), comment="密码哈希")
-    vin_code: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True, comment="车辆VIN")
-    status: Mapped[int] = mapped_column(Integer, default=0, comment="用户状态")
-    role: Mapped[str] = mapped_column(String(20), default="user", comment="用户角色")
+    phone: Mapped[str] = mapped_column(String(20), unique=True, index=True, comment="phone")
+    nickname: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="nickname")
+    password_hash: Mapped[str] = mapped_column(String(255), comment="password hash")
+    vin_code: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True, comment="vin code")
+    status: Mapped[int] = mapped_column(Integer, default=0, comment="user status")
+    role: Mapped[str] = mapped_column(String(20), default="user", comment="user role")
 
     orders: Mapped[List["Order"]] = relationship("Order", back_populates="user", lazy="selectin")
     invoices: Mapped[List["Invoice"]] = relationship("Invoice", back_populates="user", lazy="selectin")
@@ -73,11 +73,11 @@ class User(Base, BaseModel):
 class Operator(Base, BaseModel):
     __tablename__ = "sys_operators"
 
-    name: Mapped[str] = mapped_column(String(100), comment="运营商名称")
-    org_type: Mapped[str] = mapped_column(String(50), comment="组织类型")
-    license_url: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="营业执照URL")
-    bank_account: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="银行账户")
-    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已认证")
+    name: Mapped[str] = mapped_column(String(100), comment="operator name")
+    org_type: Mapped[str] = mapped_column(String(50), comment="org type")
+    license_url: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="license url")
+    bank_account: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="bank account")
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, comment="verified")
 
     fleets: Mapped[List["Fleet"]] = relationship("Fleet", back_populates="operator", lazy="selectin")
     stations: Mapped[List["Station"]] = relationship("Station", back_populates="operator", lazy="selectin")
@@ -102,9 +102,9 @@ class Operator(Base, BaseModel):
 class Fleet(Base, BaseModel):
     __tablename__ = "busi_fleets"
 
-    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="所属运营商ID")
-    name: Mapped[str] = mapped_column(String(100), comment="车队名称")
-    is_whitelist: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否白名单车队")
+    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="operator id")
+    name: Mapped[str] = mapped_column(String(100), comment="fleet name")
+    is_whitelist: Mapped[bool] = mapped_column(Boolean, default=False, comment="whitelist flag")
 
     operator: Mapped["Operator"] = relationship("Operator", back_populates="fleets", lazy="joined")
     members: Mapped[List["User"]] = relationship(
@@ -124,17 +124,32 @@ class Station(Base, BaseModel):
         Index("ix_eq_stations_operator_status_visibility", "operator_id", "status", "visibility"),
     )
 
-    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="所属运营商ID")
+    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="operator id")
     template_id: Mapped[int | None] = mapped_column(
         ForeignKey("busi_price_templates.id"),
         nullable=True,
-        comment="计费模板ID",
+        comment="price template id",
     )
-    name: Mapped[str] = mapped_column(String(100), comment="充电站名称")
-    longitude: Mapped[Decimal] = mapped_column(Numeric(10, 7), comment="经度")
-    latitude: Mapped[Decimal] = mapped_column(Numeric(10, 7), comment="纬度")
-    status: Mapped[int] = mapped_column(Integer, default=0, comment="充电站状态")
-    visibility: Mapped[str] = mapped_column(String(20), default="public", comment="可见性")
+    name: Mapped[str] = mapped_column(String(100), comment="station name")
+    province: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="province")
+    city: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="city")
+    district: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="district")
+    address: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="address")
+    longitude: Mapped[Decimal] = mapped_column(Numeric(10, 7), comment="longitude")
+    latitude: Mapped[Decimal] = mapped_column(Numeric(10, 7), comment="latitude")
+    contact_name: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="contact name")
+    contact_phone: Mapped[str | None] = mapped_column(String(30), nullable=True, comment="contact phone")
+    operation_hours: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="operation hours")
+    parking_fee_desc: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="parking fee description")
+    station_remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="station remark")
+    planned_charger_count: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="planned charger count")
+    total_power_kw: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True, comment="planned total power")
+    cover_image: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="cover image")
+    site_photos_json: Mapped[str | None] = mapped_column(Text, nullable=True, comment="site photos json")
+    qualification_remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="qualification remark")
+    audit_remark: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="audit remark")
+    status: Mapped[int] = mapped_column(Integer, default=0, comment="station status")
+    visibility: Mapped[str] = mapped_column(String(20), default="public", comment="visibility")
 
     operator: Mapped["Operator"] = relationship("Operator", back_populates="stations", lazy="joined")
     price_template: Mapped["PriceTemplate"] = relationship(
@@ -151,10 +166,12 @@ class Charger(Base, BaseModel):
         Index("ix_eq_chargers_station_status", "station_id", "status"),
     )
 
-    station_id: Mapped[int] = mapped_column(ForeignKey("eq_stations.id"), comment="所属充电站ID")
-    sn_code: Mapped[str] = mapped_column(String(50), unique=True, index=True, comment="充电桩序列号")
-    type: Mapped[str] = mapped_column(String(20), comment="充电桩类型")
-    status: Mapped[int] = mapped_column(Integer, default=0, comment="充电桩状态")
+    station_id: Mapped[int] = mapped_column(ForeignKey("eq_stations.id"), comment="station id")
+    sn_code: Mapped[str] = mapped_column(String(50), unique=True, index=True, comment="charger sn")
+    name: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="charger name")
+    type: Mapped[str] = mapped_column(String(20), comment="charger type")
+    power_kw: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True, comment="power kw")
+    status: Mapped[int] = mapped_column(Integer, default=0, comment="charger status")
 
     station: Mapped["Station"] = relationship("Station", back_populates="chargers", lazy="joined")
     orders: Mapped[List["Order"]] = relationship("Order", back_populates="charger", lazy="selectin")
@@ -163,9 +180,9 @@ class Charger(Base, BaseModel):
 class PriceTemplate(Base, BaseModel):
     __tablename__ = "busi_price_templates"
 
-    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="所属运营商ID")
-    name: Mapped[str] = mapped_column(String(100), comment="模板名称")
-    rules_json: Mapped[str] = mapped_column(Text, comment="计费规则JSON")
+    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="operator id")
+    name: Mapped[str] = mapped_column(String(100), comment="template name")
+    rules_json: Mapped[str] = mapped_column(Text, comment="template rules json")
 
     operator: Mapped["Operator"] = relationship("Operator", back_populates="price_templates", lazy="joined")
     stations: Mapped[List["Station"]] = relationship("Station", back_populates="price_template", lazy="selectin")
@@ -183,23 +200,24 @@ class Order(Base, BaseModel):
         Index("ix_trade_orders_created_at", "created_at"),
     )
 
-    order_no: Mapped[str] = mapped_column(String(64), unique=True, index=True, comment="订单号")
-    user_id: Mapped[int] = mapped_column(ForeignKey("sys_users.id"), comment="用户ID")
-    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="运营商ID")
-    station_id: Mapped[int | None] = mapped_column(ForeignKey("eq_stations.id"), nullable=True, comment="电站ID")
-    charger_id: Mapped[int] = mapped_column(ForeignKey("eq_chargers.id"), comment="充电桩ID")
-    vin: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="车辆VIN")
-    start_time: Mapped[datetime.datetime] = mapped_column(DateTime, comment="开始充电时间")
-    end_time: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True, comment="结束充电时间")
-    charge_duration: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="充电时长(分钟)")
-    total_kwh: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), comment="充电量(kWh)")
-    ele_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), comment="电费")
-    service_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), comment="服务费")
-    total_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), comment="总金额")
-    pay_status: Mapped[int] = mapped_column(Integer, default=0, server_default="0", comment="支付状态")
-    status: Mapped[int] = mapped_column(Integer, default=0, comment="订单状态 0-charging 1-completed 2-abnormal")
-    abnormal_reason: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="异常原因")
-    settle_status: Mapped[int] = mapped_column(Integer, default=0, comment="结算状态")
+    order_no: Mapped[str] = mapped_column(String(64), unique=True, index=True, comment="order no")
+    user_id: Mapped[int] = mapped_column(ForeignKey("sys_users.id"), comment="user id")
+    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="operator id")
+    station_id: Mapped[int | None] = mapped_column(ForeignKey("eq_stations.id"), nullable=True, comment="station id")
+    charger_id: Mapped[int] = mapped_column(ForeignKey("eq_chargers.id"), comment="charger id")
+    vin: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="vin")
+    start_time: Mapped[datetime.datetime] = mapped_column(DateTime, comment="start time")
+    end_time: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True, comment="end time")
+    charge_duration: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="charge duration minutes")
+    total_kwh: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), comment="charge amount")
+    ele_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), comment="electricity fee")
+    service_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), comment="service fee")
+    total_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), comment="total fee")
+    source_type: Mapped[str] = mapped_column(String(30), default="mini_program", comment="source type")
+    pay_status: Mapped[int] = mapped_column(Integer, default=0, server_default="0", comment="pay status")
+    status: Mapped[int] = mapped_column(Integer, default=0, comment="order status")
+    abnormal_reason: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="abnormal reason")
+    settle_status: Mapped[int] = mapped_column(Integer, default=0, comment="settlement status")
 
     user: Mapped["User"] = relationship("User", back_populates="orders", lazy="joined")
     operator: Mapped["Operator"] = relationship("Operator", back_populates="orders", lazy="joined")
@@ -240,16 +258,16 @@ class Invoice(Base, BaseModel):
         Index("ix_trade_invoices_status", "status"),
     )
 
-    user_id: Mapped[int] = mapped_column(ForeignKey("sys_users.id"), comment="申请用户ID")
-    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="开票运营商ID")
-    order_id: Mapped[int | None] = mapped_column(ForeignKey("trade_orders.id"), nullable=True, comment="关联订单ID")
-    invoice_title: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="发票抬头")
-    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), comment="发票金额")
-    email: Mapped[str] = mapped_column(String(100), comment="接收邮箱")
-    status: Mapped[int] = mapped_column(Integer, default=0, comment="发票状态")
-    file_url: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="发票文件URL")
-    uploaded_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True, comment="上传时间")
-    remark: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注")
+    user_id: Mapped[int] = mapped_column(ForeignKey("sys_users.id"), comment="user id")
+    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="operator id")
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("trade_orders.id"), nullable=True, comment="order id")
+    invoice_title: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="invoice title")
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), comment="amount")
+    email: Mapped[str] = mapped_column(String(100), comment="email")
+    status: Mapped[int] = mapped_column(Integer, default=0, comment="invoice status")
+    file_url: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="file url")
+    uploaded_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True, comment="uploaded at")
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="remark")
 
     user: Mapped["User"] = relationship("User", back_populates="invoices", lazy="joined")
     operator: Mapped["Operator"] = relationship("Operator", back_populates="invoices", lazy="joined")
@@ -264,19 +282,19 @@ class OperatorBankCard(Base):
         Index("ix_sys_operator_bank_cards_is_default", "is_default"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
-    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="运营商ID")
-    account_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="开户名")
-    bank_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="银行名称")
-    bank_account: Mapped[str] = mapped_column(String(100), nullable=False, comment="银行卡号")
-    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, comment="是否默认卡")
-    bind_status: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment="绑卡状态")
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="primary key")
+    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="operator id")
+    account_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="account name")
+    bank_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="bank name")
+    bank_account: Mapped[str] = mapped_column(String(100), nullable=False, comment="bank account")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, comment="default card")
+    bind_status: Mapped[int] = mapped_column(Integer, default=1, nullable=False, comment="bind status")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="created at")
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime,
         default=func.now(),
         onupdate=func.now(),
-        comment="最后更新时间",
+        comment="updated at",
     )
 
     operator: Mapped["Operator"] = relationship("Operator", back_populates="bank_cards", lazy="joined")
@@ -290,18 +308,18 @@ class WalletTransaction(Base):
         Index("ix_trade_wallet_transactions_transaction_type", "transaction_type"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
-    user_id: Mapped[int] = mapped_column(ForeignKey("sys_users.id"), comment="用户ID")
-    transaction_type: Mapped[str] = mapped_column(String(20), comment="流水类型")
-    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, comment="变动金额")
-    balance_after: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, comment="变动后余额")
-    remark: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注")
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="primary key")
+    user_id: Mapped[int] = mapped_column(ForeignKey("sys_users.id"), comment="user id")
+    transaction_type: Mapped[str] = mapped_column(String(20), comment="transaction type")
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, comment="amount")
+    balance_after: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, comment="balance after")
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="remark")
     related_order_id: Mapped[int | None] = mapped_column(
         ForeignKey("trade_orders.id"),
         nullable=True,
-        comment="关联订单ID",
+        comment="related order id",
     )
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="created at")
 
     user: Mapped["User"] = relationship("User", back_populates="wallet_transactions", lazy="joined")
     related_order: Mapped["Order | None"] = relationship("Order", back_populates="wallet_transactions", lazy="joined")
@@ -313,10 +331,10 @@ class Coupon(Base, BaseModel):
     operator_id: Mapped[int | None] = mapped_column(
         ForeignKey("sys_operators.id"),
         nullable=True,
-        comment="所属运营商ID",
+        comment="operator id",
     )
-    type: Mapped[str] = mapped_column(String(50), comment="优惠券类型")
-    discount_val: Mapped[Decimal] = mapped_column(Numeric(10, 2), comment="优惠值")
+    type: Mapped[str] = mapped_column(String(50), comment="coupon type")
+    discount_val: Mapped[Decimal] = mapped_column(Numeric(10, 2), comment="discount value")
 
     operator: Mapped["Operator"] = relationship("Operator", back_populates="coupons", lazy="joined")
     user_coupons: Mapped[List["UserCoupon"]] = relationship("UserCoupon", back_populates="coupon", lazy="selectin")
@@ -325,9 +343,9 @@ class Coupon(Base, BaseModel):
 class UserCoupon(Base, BaseModel):
     __tablename__ = "mkt_user_coupons"
 
-    user_id: Mapped[int] = mapped_column(ForeignKey("sys_users.id"), comment="用户ID")
-    coupon_id: Mapped[int] = mapped_column(ForeignKey("mkt_coupons.id"), comment="优惠券ID")
-    status: Mapped[int] = mapped_column(Integer, default=0, comment="使用状态")
+    user_id: Mapped[int] = mapped_column(ForeignKey("sys_users.id"), comment="user id")
+    coupon_id: Mapped[int] = mapped_column(ForeignKey("mkt_coupons.id"), comment="coupon id")
+    status: Mapped[int] = mapped_column(Integer, default=0, comment="coupon status")
 
     user: Mapped["User"] = relationship("User", back_populates="user_coupons", lazy="joined")
     coupon: Mapped["Coupon"] = relationship("Coupon", back_populates="user_coupons", lazy="joined")
@@ -342,47 +360,37 @@ class OperatorSettlementRecord(Base):
         UniqueConstraint("settle_date", "operator_id", name="uq_trade_operator_settlements_date_operator"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
-    settle_date: Mapped[datetime.date] = mapped_column(Date, nullable=False, comment="清分归属日期")
-    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), nullable=False, comment="运营商ID")
-    order_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="订单数量")
-    total_amount: Mapped[Decimal] = mapped_column(
-        Numeric(12, 2),
-        default=Decimal("0.00"),
-        nullable=False,
-        comment="订单总金额",
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="primary key")
+    settle_date: Mapped[datetime.date] = mapped_column(Date, nullable=False, comment="settlement date")
+    operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), nullable=False, comment="operator id")
+    order_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="order count")
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False, comment="total amount")
     platform_rate: Mapped[Decimal] = mapped_column(
         Numeric(5, 4),
         default=Decimal("0.1000"),
         nullable=False,
-        comment="平台抽成比例",
+        comment="platform rate",
     )
     platform_fee: Mapped[Decimal] = mapped_column(
         Numeric(12, 2),
         default=Decimal("0.00"),
         nullable=False,
-        comment="平台抽成金额",
+        comment="platform fee",
     )
     settle_amount: Mapped[Decimal] = mapped_column(
         Numeric(12, 2),
         default=Decimal("0.00"),
         nullable=False,
-        comment="应结算金额",
+        comment="settlement amount",
     )
-    status: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-        comment="打款状态(0-待打款 1-已打款 2-挂起待补资料)",
-    )
-    hold_reason: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="挂起原因")
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
+    status: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="payout status")
+    hold_reason: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="hold reason")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="created at")
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime,
         default=func.now(),
         onupdate=func.now(),
-        comment="最后更新时间",
+        comment="updated at",
     )
 
     operator: Mapped["Operator"] = relationship("Operator", back_populates="operator_settlements", lazy="joined")
@@ -391,17 +399,17 @@ class OperatorSettlementRecord(Base):
 class SettlementRecord(Base):
     __tablename__ = "trade_settlements"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="主键ID")
-    settle_date: Mapped[datetime.date] = mapped_column(Date, nullable=False, index=True, unique=True, comment="清分日期")
-    order_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="订单数量")
-    total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False, comment="订单总金额")
-    platform_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False, comment="平台抽成")
-    settle_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False, comment="应结金额")
-    status: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="打款状态")
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="primary key")
+    settle_date: Mapped[datetime.date] = mapped_column(Date, nullable=False, index=True, unique=True, comment="settlement date")
+    order_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="order count")
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False, comment="total amount")
+    platform_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False, comment="platform fee")
+    settle_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False, comment="settlement amount")
+    status: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="settlement status")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), comment="created at")
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime,
         default=func.now(),
         onupdate=func.now(),
-        comment="最后更新时间",
+        comment="updated at",
     )

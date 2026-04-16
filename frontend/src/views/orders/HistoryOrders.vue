@@ -60,8 +60,8 @@ const stats = computed(() => [
     label: '历史订单',
     value: summary.total_count,
     suffix: ' 单',
-    trend: '当前筛选条件下的完成订单',
-    trendLabel: '按筛选条件汇总',
+    trend: '当前筛选条件下的已归档订单',
+    trendLabel: '包含完成单与平台查询范围',
     tone: 'primary',
     icon: Tickets,
   },
@@ -69,8 +69,8 @@ const stats = computed(() => [
     label: '累计电量',
     value: Number(summary.total_charge_amount || 0).toFixed(2),
     suffix: ' kWh',
-    trend: '已完成订单累计充电量',
-    trendLabel: '统计周期内累计值',
+    trend: '已结束订单累计充电量',
+    trendLabel: '用于统计运营规模',
     tone: 'success',
     icon: DataAnalysis,
   },
@@ -87,8 +87,8 @@ const stats = computed(() => [
     label: '累计服务费',
     value: Number(summary.total_service_fee || 0).toFixed(2),
     prefix: '¥',
-    trend: '服务费汇总',
-    trendLabel: '用于财务对账',
+    trend: '服务费累计汇总',
+    trendLabel: '可用于财务核对',
     tone: 'info',
     icon: RefreshRight,
   },
@@ -128,7 +128,7 @@ const loadOrders = async () => {
       total_amount: 0,
       total_service_fee: 0,
     })
-    errorMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '历史订单加载失败，请稍后重试。'
+    errorMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '历史订单加载失败'
     ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
@@ -136,9 +136,7 @@ const loadOrders = async () => {
 }
 
 const loadStationOptions = async () => {
-  if (stationOptionsLoaded.value || stationLoading.value) {
-    return
-  }
+  if (stationOptionsLoaded.value || stationLoading.value) return
   stationLoading.value = true
   try {
     if (isAdmin.value) {
@@ -188,9 +186,7 @@ const handleSizeChange = (size) => {
 watch(
   () => [filters.keyword, filters.status, filters.stationId, JSON.stringify(filters.dateRange)],
   () => {
-    if (searchTimer) {
-      clearTimeout(searchTimer)
-    }
+    if (searchTimer) clearTimeout(searchTimer)
     searchTimer = setTimeout(() => {
       pagination.page = 1
       loadOrders()
@@ -198,14 +194,10 @@ watch(
   },
 )
 
-onMounted(() => {
-  loadOrders()
-})
+onMounted(loadOrders)
 
 onBeforeUnmount(() => {
-  if (searchTimer) {
-    clearTimeout(searchTimer)
-  }
+  if (searchTimer) clearTimeout(searchTimer)
 })
 </script>
 
@@ -214,7 +206,7 @@ onBeforeUnmount(() => {
     <PageSectionHeader
       eyebrow="订单中心"
       :title="pageTitle"
-      description="查询已完成订单的时间、费用和结算信息。"
+      description="查询已完成订单的时间、来源、费用和结算信息。"
       :chip="pageChip"
     >
       <template #actions>
@@ -241,7 +233,7 @@ onBeforeUnmount(() => {
       <div class="panel-heading">
         <div>
           <h3 class="panel-heading__title">筛选条件</h3>
-          <p class="panel-heading__desc">支持按订单、用户、站点和时间范围查询。</p>
+          <p class="panel-heading__desc">支持按订单、用户、电站和时间范围查询。</p>
         </div>
         <div class="toolbar-actions">
           <el-button @click="resetFilters">重置</el-button>
@@ -249,7 +241,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="filter-row">
-        <el-input v-model="filters.keyword" clearable placeholder="订单号 / 用户账号 / 昵称 / VIN" style="width: 320px" />
+        <el-input v-model="filters.keyword" clearable placeholder="订单号 / 用户 / VIN / 来源" style="width: 320px" />
         <el-select
           v-if="isAdmin"
           v-model="filters.status"
@@ -305,9 +297,15 @@ onBeforeUnmount(() => {
 
       <el-table v-if="orders.length" :data="orders" v-loading="loading" stripe>
         <el-table-column prop="order_no" label="订单编号" min-width="190" show-overflow-tooltip />
-        <el-table-column prop="user_phone" label="用户账号" width="130" />
-        <el-table-column prop="user_nickname" label="昵称" width="120" />
-        <el-table-column prop="vin" label="VIN" min-width="170" show-overflow-tooltip />
+        <el-table-column label="用户" min-width="160">
+          <template #default="{ row }">
+            <div class="time-range">
+              <strong>{{ row.user_nickname }}</strong>
+              <span>{{ row.user_phone }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="source_type_text" label="订单来源" width="120" align="center" />
         <el-table-column label="起止时间" min-width="260">
           <template #default="{ row }">
             <div class="time-range">
