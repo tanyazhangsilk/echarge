@@ -16,6 +16,22 @@ export interface OrderTrendPoint {
   revenue: number
 }
 
+export interface DemoOrderPayload {
+  userId: string
+  userName: string
+  phone: string
+  vin: string
+  operatorId: string
+  operatorName: string
+  stationId: string
+  stationName: string
+  chargerId: string
+  chargerName: string
+  sourceType: string
+  sourceTypeText: string
+  priceTemplateName?: string
+}
+
 const cloneOrders = (): Order[] => JSON.parse(JSON.stringify(mockOrders))
 
 const safeNumber = (value: unknown): number => {
@@ -125,6 +141,43 @@ export const useOrderStore = defineStore('order', () => {
     return target
   }
 
+  const startDemoOrder = (payload: DemoOrderPayload): Order => {
+    const now = new Date()
+    const stamp = `${now.getFullYear()}${`${now.getMonth() + 1}`.padStart(2, '0')}${`${now.getDate()}`.padStart(2, '0')}${`${now.getHours()}`.padStart(2, '0')}${`${now.getMinutes()}`.padStart(2, '0')}${`${now.getSeconds()}`.padStart(2, '0')}`
+    const orderNo = `EC${stamp}${Math.floor(Math.random() * 900 + 100)}`
+    const order: Order = {
+      id: `local-${Date.now()}`,
+      orderNo,
+      userId: payload.userId,
+      userName: payload.userName,
+      phone: payload.phone,
+      vin: payload.vin,
+      operatorId: payload.operatorId,
+      operatorName: payload.operatorName,
+      stationId: payload.stationId,
+      stationName: payload.stationName,
+      chargerId: payload.chargerId,
+      chargerName: payload.chargerName,
+      startTime: now.toISOString(),
+      endTime: null,
+      chargeDuration: 0,
+      chargeAmount: 0,
+      electricityFee: 0,
+      serviceFee: 0,
+      totalAmount: 0,
+      payStatus: PAY_STATUS.UNPAID,
+      status: ORDER_STATUS.CHARGING,
+      abnormalReason: null,
+      sourceType: payload.sourceType,
+      sourceTypeText: payload.sourceTypeText,
+      priceTemplateName: payload.priceTemplateName || '默认计费模板',
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    }
+    orders.value.unshift(order)
+    return order
+  }
+
   const getOrderStats = (scope?: OrderScope): OrderStats => {
     const visibleOrders = scopedOrders(scope)
     const chargingCount = visibleOrders.filter((order) => order.status === ORDER_STATUS.CHARGING).length
@@ -184,6 +237,7 @@ export const useOrderStore = defineStore('order', () => {
     getHistoryOrders,
     getAbnormalOrders,
     getOrderById,
+    startDemoOrder,
     finishOrder,
     markOrderAbnormal,
     getOrderStats,

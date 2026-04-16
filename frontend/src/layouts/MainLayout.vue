@@ -1,15 +1,15 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { IconMoonStars, IconSun } from '@tabler/icons-vue'
 import { ArrowRight, Bell, Menu as MenuIcon, Search, SwitchButton } from '@element-plus/icons-vue'
+import { IconMoonStars, IconSun } from '@tabler/icons-vue'
 
 import {
+  ROLE_LABELS,
+  ROLES,
   buildMenuByRole,
   getStoredRole,
   resolveRoleDefaultRoute,
-  ROLE_LABELS,
-  ROLES,
   setStoredRole,
 } from '../config/permissions'
 
@@ -21,11 +21,13 @@ const drawerVisible = ref(false)
 const windowWidth = ref(window.innerWidth)
 const theme = ref(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
 
+const keepAliveNames = ['OperatorStations', 'OperatorOrdersHistory', 'OperatorOrdersAbnormal', 'AdminInstitutionStations']
+
 const currentRole = computed(() => route.meta?.role || getStoredRole())
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta?.title || '运营后台')
 const pageSection = computed(() => route.meta?.section || ROLE_LABELS[currentRole.value])
-const pageDescription = computed(() => route.meta?.description || '业务工作区')
+const pageDescription = computed(() => route.meta?.description || '查看当前业务模块信息')
 const roleLabel = computed(() => ROLE_LABELS[currentRole.value] || '充电运营商')
 const visibleMenuGroups = computed(() => buildMenuByRole(currentRole.value))
 const isMobile = computed(() => windowWidth.value < 960)
@@ -109,6 +111,7 @@ onUnmounted(() => {
           <span>{{ roleLabel }}控制台</span>
         </div>
       </div>
+
       <div class="menu-scroll">
         <section v-for="group in visibleMenuGroups" :key="group.label" class="menu-group">
           <p class="menu-group__label">{{ group.label }}</p>
@@ -149,12 +152,7 @@ onUnmounted(() => {
         </div>
 
         <div class="header-right">
-          <el-input
-            v-if="!isMobile"
-            placeholder="搜索订单、站点、运营商、设备编码"
-            :prefix-icon="Search"
-            class="search-input"
-          />
+          <el-input v-if="!isMobile" placeholder="搜索订单、电站、运营商、设备编号" :prefix-icon="Search" class="search-input" />
           <el-button v-else circle :icon="Search" />
 
           <el-button circle class="toolbar-btn" @click="toggleTheme">
@@ -173,11 +171,11 @@ onUnmounted(() => {
             <div class="notify-panel">
               <div class="notify-panel__item">
                 <strong>系统通知</strong>
-                <p>当前页面结构已统一，后续业务模块可继续在同一后台壳子下扩展。</p>
+                <p>核心列表页已启用页面缓存与轻量刷新，切换返回时会优先展示最近结果。</p>
               </div>
               <div class="notify-panel__item">
                 <strong>待办提醒</strong>
-                <p>后续接入真实接口后，可在此承载审核、告警和订单相关通知。</p>
+                <p>电站申请、审核、电桩配置与订单处理链路已支持前端兜底演示态。</p>
               </div>
             </div>
           </el-popover>
@@ -200,7 +198,21 @@ onUnmounted(() => {
 
       <el-main class="layout-main">
         <div class="layout-main__inner">
-          <router-view />
+          <router-view v-slot="{ Component, route: currentRoute }">
+            <keep-alive :include="keepAliveNames">
+              <component
+                v-if="currentRoute.meta?.keepAlive"
+                :is="Component"
+                :key="currentRoute.name || currentRoute.path"
+              />
+            </keep-alive>
+
+            <component
+              :is="Component"
+              v-if="!currentRoute.meta?.keepAlive"
+              :key="currentRoute.fullPath"
+            />
+          </router-view>
         </div>
       </el-main>
     </el-container>

@@ -37,6 +37,9 @@ export interface Order {
   payStatus: PayStatus
   status: OrderStatus
   abnormalReason: string | null
+  sourceType?: string
+  sourceTypeText?: string
+  priceTemplateName?: string
   createdAt: string
   updatedAt: string
 }

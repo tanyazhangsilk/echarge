@@ -1,97 +1,222 @@
 <script setup>
-import { ref } from 'vue'
-import { Edit, DocumentChecked, Location } from '@element-plus/icons-vue'
+import { computed, onActivated, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { DocumentChecked, Edit, Location, RefreshRight } from '@element-plus/icons-vue'
 
-// 模拟模板列表
-const templates = ref([
-  { id: 1, name: '默认基础模板', stations: 5, updateTime: '2026-03-10' },
-  { id: 2, name: '工业区峰谷特惠', stations: 2, updateTime: '2026-03-12' },
-  { id: 3, name: '夜间物流车专享', stations: 0, updateTime: '2026-03-13' }
+import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
+import MetricCard from '../../components/console/MetricCard.vue'
+import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
+import { fetchOperatorPricingTemplates } from '../../api/operator'
+import { getFallbackStationOptions } from '../../utils/stationFallbacks'
+import {
+  applyLocalTemplateToStations,
+  getLocalPricingTemplates,
+  mergePricingTemplates,
+  saveLocalPricingTemplate,
+} from '../../utils/pricingTemplateStore'
+import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
+
+const CACHE_TTL = 60 * 1000
+
+const loading = ref(false)
+const pageReady = ref(false)
+const cacheLabel = ref('')
+const templates = ref([])
+const activeTemplateId = ref(null)
+const dialogVisible = ref(false)
+const selectedStations = ref([])
+
+const form = reactive({
+  periods: [],
+})
+
+const cacheKey = buildRequestCacheKey('/operator/pricing/templates', { scope: 'pricing-settings' })
+const stationOptions = computed(() => getFallbackStationOptions().filter((item) => Number(item.status) === 0 || item.is_local_draft))
+const activeTemplate = computed(() => templates.value.find((item) => String(item.id) === String(activeTemplateId.value)) || null)
+
+const stats = computed(() => [
+  { label: '模板总数', value: templates.value.length, suffix: ' 个', tone: 'primary' },
+  { label: '启用模板', value: templates.value.filter((item) => item.status === 'active').length, suffix: ' 个', tone: 'success' },
+  { label: '指定站点模板', value: templates.value.filter((item) => item.scope === 'station').length, suffix: ' 个', tone: 'warning' },
+  { label: '当前模板站点数', value: activeTemplate.value?.stations || 0, suffix: ' 座', tone: 'info' },
 ])
-const activeTab = ref(1)
 
-// 24小时可视化条数据生成
-const timeBlocks = Array.from({ length: 24 }, (_, i) => {
-  if (i < 8) return 'valley'
-  if (i < 12) return 'peak'
-  if (i < 18) return 'flat'
-  if (i < 22) return 'peak'
-  return 'valley'
+const normalizePeriods = (template) =>
+  (template?.periods || []).map((item) => ({
+    id: item.id,
+    type: item.type,
+    type_text: item.type_text,
+    time_range: item.time_range,
+    ele_fee: Number(item.ele_fee || 0),
+    service_fee: Number(item.service_fee || 0),
+  }))
+
+const timeBlocks = computed(() => {
+  if (!activeTemplate.value?.periods?.length) {
+    return Array.from({ length: 24 }, () => 'flat')
+  }
+  const blocks = Array.from({ length: 24 }, () => 'flat')
+  activeTemplate.value.periods.forEach((period) => {
+    if (period.type === 'peak') {
+      ;[8, 9, 10, 17, 18, 19, 20].forEach((index) => {
+        blocks[index] = 'peak'
+      })
+    }
+    if (period.type === 'valley') {
+      ;[0, 1, 2, 3, 4, 5, 6, 22, 23].forEach((index) => {
+        blocks[index] = 'valley'
+      })
+    }
+  })
+  return blocks
 })
 
 const getBlockColor = (type) => {
-  if (type === 'peak') return '#F56C6C' // 红色 (峰)
-  if (type === 'flat') return '#409EFF' // 蓝色 (平)
-  return '#67C23A' // 绿色 (谷)
+  if (type === 'peak') return '#ef4444'
+  if (type === 'valley') return '#10b981'
+  return '#2563eb'
 }
 
-// 选中模板的具体配置
-const currentConfig = ref([
-  { id: 1, timeRange: '08:00 - 12:00, 18:00 - 22:00', type: '峰时 (Peak)', eleFee: '1.25', serviceFee: '0.60' },
-  { id: 2, timeRange: '12:00 - 18:00', type: '平时 (Flat)', eleFee: '0.85', serviceFee: '0.50' },
-  { id: 3, timeRange: '00:00 - 08:00, 22:00 - 24:00', type: '谷时 (Valley)', eleFee: '0.35', serviceFee: '0.40' }
-])
+const applyTemplates = (items = [], fromCache = false) => {
+  templates.value = mergePricingTemplates(items)
+  if (!activeTemplateId.value && templates.value.length) {
+    activeTemplateId.value = templates.value[0].id
+  }
+  if (activeTemplate.value) {
+    form.periods = normalizePeriods(activeTemplate.value)
+  }
+  pageReady.value = true
+  cacheLabel.value = `${fromCache ? '缓存结果' : '最近刷新'} ${formatCacheUpdatedAt(Date.now())}`
+}
 
-// --- 应用到电站功能逻辑 ---
-const dialogVisible = ref(false)
-const stationData = ref([
-  { id: 101, name: '南山区高新园超级超充站', region: '南山区' },
-  { id: 102, name: '福田区科创大厦充电站', region: '福田区' },
-  { id: 103, name: '宝安中心区地下场站', region: '宝安区' },
-  { id: 104, name: '龙华区壹方城示范站', region: '龙华区' },
-  { id: 105, name: '罗湖区国贸大厦超充站', region: '罗湖区' }
-])
-const selectedStations = ref([])
+const loadData = async ({ background = false } = {}) => {
+  const cached = getRequestCache(cacheKey, { ttl: CACHE_TTL, allowStale: true })
+  if (cached) {
+    applyTemplates(cached.value, true)
+    cacheLabel.value = `缓存结果 ${formatCacheUpdatedAt(cached.updatedAt)}`
+  }
 
-const openStationDialog = (tpl) => {
-  activeTab.value = tpl.id
+  loading.value = !cached || !background
+  try {
+    const res = await fetchOperatorPricingTemplates()
+    const items = Array.isArray(res?.data?.data) ? res.data.data : getLocalPricingTemplates()
+    applyTemplates(items)
+    setRequestCache(cacheKey, items)
+    cacheLabel.value = `最近刷新 ${formatCacheUpdatedAt(Date.now())}`
+  } catch (error) {
+    if (!templates.value.length) {
+      applyTemplates(getLocalPricingTemplates())
+      cacheLabel.value = '演示数据'
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+const selectTemplate = (template) => {
+  activeTemplateId.value = template.id
+  form.periods = normalizePeriods(template)
+}
+
+const savePeriods = () => {
+  if (!activeTemplate.value) return
+  const total = form.periods.reduce((sum, item) => sum + Number(item.ele_fee || 0) + Number(item.service_fee || 0), 0)
+  const saved = saveLocalPricingTemplate({
+    ...activeTemplate.value,
+    periods: form.periods,
+    peak_price: Math.max(...form.periods.map((item) => Number(item.ele_fee || 0))),
+    flat_price: form.periods.find((item) => item.type === 'flat')?.ele_fee ?? activeTemplate.value.flat_price,
+    valley_price: form.periods.find((item) => item.type === 'valley')?.ele_fee ?? activeTemplate.value.valley_price,
+    service_price: Number((total / Math.max(form.periods.length, 1) / 2).toFixed(2)),
+  })
+  selectTemplate(saved)
+  cacheLabel.value = '本地配置'
+  ElMessage.success('计费模板已保存')
+}
+
+const openStationDialog = () => {
+  if (!activeTemplate.value) {
+    ElMessage.warning('请先选择模板')
+    return
+  }
+  selectedStations.value = []
   dialogVisible.value = true
 }
 
-const submitStationApply = () => {
-  dialogVisible.value = false
-  ElMessage.success(`成功将模板应用到 ${selectedStations.value.length} 个电站`)
+const handleSelectedStations = (rows) => {
+  selectedStations.value = rows
 }
+
+const submitStationApply = () => {
+  if (!activeTemplate.value || !selectedStations.value.length) {
+    ElMessage.warning('请至少选择一个电站')
+    return
+  }
+  applyLocalTemplateToStations(activeTemplate.value.id, selectedStations.value.map((item) => item.id))
+  dialogVisible.value = false
+  ElMessage.success(`已将模板应用到 ${selectedStations.value.length} 个电站`)
+}
+
+onMounted(loadData)
+onActivated(() => loadData({ background: true }))
 </script>
 
 <template>
-  <div class="page-container">
-    <el-card shadow="never" class="top-card">
-      <template #header>
-        <div class="card-header-flex">
-          <span class="header-title">计费模板库</span>
-          <el-button type="primary" plain :icon="Edit">新建模板</el-button>
-        </div>
+  <div class="page-shell">
+    <PageSectionHeader eyebrow="计费管理" title="电价设置" description="维护峰平谷价格与服务费，并支持将模板应用到指定电站。" chip="电价策略">
+      <template #actions>
+        <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
+        <el-button :icon="RefreshRight" :loading="loading" @click="loadData()">刷新</el-button>
       </template>
-      
-      <el-row :gutter="20">
-        <el-col :span="8" v-for="tpl in templates" :key="tpl.id">
-          <div class="tpl-card" :class="{ 'active-tpl': activeTab === tpl.id }" @click="activeTab = tpl.id">
-            <div class="tpl-top">
-              <strong class="tpl-name">{{ tpl.name }}</strong>
-              <el-tag size="small" type="info" class="station-tag" @click.stop="openStationDialog(tpl)">
-                <el-icon><Location /></el-icon> 适用 {{ tpl.stations }} 站
-              </el-tag>
-            </div>
-            <div class="tpl-time">最后更新: {{ tpl.updateTime }}</div>
-            <div class="tpl-action">
-              <el-button size="small" :type="activeTab === tpl.id ? 'primary' : 'default'">
-                {{ activeTab === tpl.id ? '正在编辑' : '点击查看' }}
-              </el-button>
-            </div>
-          </div>
-        </el-col>
-      </el-row>
-    </el-card>
+    </PageSectionHeader>
 
-    <el-card shadow="never" class="bottom-card">
-      <template #header>
-        <div class="card-header-flex" style="justify-content: flex-start;">
-          <el-icon class="title-icon"><DocumentChecked /></el-icon>
-          <span class="header-title">规则编辑 ({{ templates.find(t => t.id === activeTab)?.name }})</span>
+    <section class="stats-grid stats-grid--pricing">
+      <MetricCard v-for="item in stats" :key="item.label" :label="item.label" :value="item.value" :suffix="item.suffix" :tone="item.tone" />
+    </section>
+
+    <section class="page-panel surface-card">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">模板选择</h3>
+          <p class="panel-heading__desc">选择模板后可直接编辑时段价格并下发到站点。</p>
         </div>
-      </template>
+      </div>
+
+      <TableSkeletonBlock v-if="loading && !pageReady" :rows="3" :columns="4" />
+
+      <div v-else class="template-grid">
+        <button
+          v-for="item in templates"
+          :key="item.id"
+          type="button"
+          class="template-card"
+          :class="{ 'template-card--active': String(activeTemplateId) === String(item.id) }"
+          @click="selectTemplate(item)"
+        >
+          <div class="template-card__head">
+            <strong>{{ item.name }}</strong>
+            <span>{{ item.status === 'active' ? '启用中' : '草稿' }}</span>
+          </div>
+          <p>{{ item.description || '适用于差异化计费场景' }}</p>
+          <div class="template-card__meta">
+            <span>{{ item.scope === 'station' ? '指定站点' : '全站通用' }}</span>
+            <span>{{ item.updated_at }}</span>
+          </div>
+        </button>
+      </div>
+    </section>
+
+    <section class="page-panel surface-card" v-if="activeTemplate">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">规则编辑（{{ activeTemplate.name }}）</h3>
+          <p class="panel-heading__desc">支持直接维护峰平谷电价与服务费。</p>
+        </div>
+        <div class="toolbar-actions">
+          <el-button plain :icon="Location" @click="openStationDialog">应用到指定电站</el-button>
+          <el-button type="primary" :icon="Edit" @click="savePeriods">保存规则</el-button>
+        </div>
+      </div>
 
       <div class="visual-wrapper">
         <div class="time-labels">
@@ -100,100 +225,153 @@ const submitStationApply = () => {
           <span>24:00</span>
         </div>
         <div class="rainbow-bar">
-          <el-tooltip v-for="(type, index) in timeBlocks" :key="index" :content="`${String(index).padStart(2,'0')}:00 - ${String(index+1).padStart(2,'0')}:00`" placement="top">
-            <div class="color-block" :style="{ backgroundColor: getBlockColor(type) }"></div>
-          </el-tooltip>
+          <div v-for="(type, index) in timeBlocks" :key="index" class="color-block" :style="{ backgroundColor: getBlockColor(type) }" />
         </div>
         <div class="legend-group">
-          <div class="legend-item"><div class="color-dot" style="background: #F56C6C;"></div>峰时 (电价最高)</div>
-          <div class="legend-item"><div class="color-dot" style="background: #409EFF;"></div>平时 (标准电价)</div>
-          <div class="legend-item"><div class="color-dot" style="background: #67C23A;"></div>谷时 (电价最低)</div>
+          <div class="legend-item"><div class="color-dot" style="background: #ef4444;" />高峰</div>
+          <div class="legend-item"><div class="color-dot" style="background: #2563eb;" />平段</div>
+          <div class="legend-item"><div class="color-dot" style="background: #10b981;" />低谷</div>
         </div>
       </div>
 
-      <el-table :data="currentConfig" border style="width: 100%" class="pricing-table">
-        <el-table-column prop="type" label="时段类型" width="150" align="center">
-          <template #default="scope">
-            <el-tag :type="scope.row.type.includes('Peak') ? 'danger' : (scope.row.type.includes('Flat') ? 'primary' : 'success')" effect="dark">
-              {{ scope.row.type }}
-            </el-tag>
+      <el-table :data="form.periods" border class="pricing-table">
+        <el-table-column prop="type_text" label="时段类型" width="120" align="center" />
+        <el-table-column prop="time_range" label="生效时间范围" min-width="220" />
+        <el-table-column label="电价（元/kWh）" width="180">
+          <template #default="{ row }">
+            <el-input-number v-model="row.ele_fee" :step="0.01" :min="0" style="width: 100%" />
           </template>
         </el-table-column>
-        <el-table-column prop="timeRange" label="生效时间范围" min-width="250" />
-        <el-table-column label="基础电费 (元/度)" width="200">
-          <template #default="scope">
-            <el-input v-model="scope.row.eleFee"><template #prefix>￥</template></el-input>
+        <el-table-column label="服务费（元/kWh）" width="180">
+          <template #default="{ row }">
+            <el-input-number v-model="row.service_fee" :step="0.01" :min="0" style="width: 100%" />
           </template>
         </el-table-column>
-        <el-table-column label="平台服务费 (元/度)" width="200">
-          <template #default="scope">
-            <el-input v-model="scope.row.serviceFee"><template #prefix>￥</template></el-input>
-          </template>
-        </el-table-column>
-        <el-table-column label="用户总费用" width="150" align="center">
-          <template #default="scope">
-            <span class="total-fee">￥{{ (parseFloat(scope.row.eleFee) + parseFloat(scope.row.serviceFee)).toFixed(2) }}</span>
-          </template>
+        <el-table-column label="合计（元/kWh）" width="150" align="center">
+          <template #default="{ row }">{{ (Number(row.ele_fee || 0) + Number(row.service_fee || 0)).toFixed(2) }}</template>
         </el-table-column>
       </el-table>
+    </section>
 
-      <el-alert title="修改模板后，已应用该模板的电站电价将立即同步更新，请谨慎操作。" type="warning" show-icon :closable="false" style="margin-bottom: 24px;" />
-
-      <div class="submit-area">
-        <el-button type="primary" size="large" style="width: 200px;">保存模板规则</el-button>
-        <el-button size="large" @click="openStationDialog(templates.find(t => t.id === activeTab))">应用到指定电站</el-button>
+    <el-dialog v-model="dialogVisible" title="应用到指定电站" width="640px">
+      <div class="dialog-tip">
+        当前模板：<strong>{{ activeTemplate?.name || '-' }}</strong>
       </div>
-    </el-card>
-
-    <el-dialog v-model="dialogVisible" title="将模板应用到指定电站" width="600px">
-      <div style="margin-bottom: 16px; color: #606266;">
-        当前选中模板：<strong style="color: #409EFF;">{{ templates.find(t => t.id === activeTab)?.name }}</strong>
-      </div>
-      <el-table :data="stationData" @selection-change="(val) => (selectedStations.value = val)" border height="300">
+      <el-table :data="stationOptions" border height="320" @selection-change="handleSelectedStations">
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="name" label="电站名称" />
-        <el-table-column prop="region" label="所在大区" width="120" />
+        <el-table-column prop="station_name" label="电站名称" min-width="220" />
+        <el-table-column prop="status_text" label="状态" width="120" align="center" />
+        <el-table-column prop="price_template_name" label="当前模板" min-width="160" />
       </el-table>
       <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="submitStationApply" :disabled="selectedStations.length === 0">
-            确认应用 (已选 {{ selectedStations.length }} 个)
-          </el-button>
-        </span>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitStationApply">确认应用</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.top-card { margin-bottom: 24px; border: none; border-radius: 8px; }
-.bottom-card { border: none; border-radius: 8px; }
-.card-header-flex { display: flex; justify-content: space-between; align-items: center; }
-.header-title { font-size: 18px; font-weight: bold; color: #303133; }
-.title-icon { color: #409EFF; font-size: 20px; margin-right: 8px; }
+.stats-grid--pricing {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 
-.tpl-card { padding: 16px; border: 1px solid #dcdfe6; border-radius: 8px; cursor: pointer; transition: all 0.3s; background: #fafafa; }
-.tpl-card:hover { border-color: #c0c4cc; }
-.active-tpl { border-color: #409EFF; background: #ecf5ff; box-shadow: 0 2px 12px 0 rgba(64, 158, 255, 0.2); }
-.tpl-top { display: flex; justify-content: space-between; margin-bottom: 12px; align-items: center; }
-.tpl-name { font-size: 16px; color: #303133; }
-.station-tag { cursor: pointer; transition: opacity 0.2s; }
-.station-tag:hover { opacity: 0.8; }
-.tpl-time { font-size: 12px; color: #A8ABB2; margin-bottom: 16px; }
-.tpl-action { display: flex; justify-content: flex-end; }
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
 
-/* 核心彩虹条 CSS */
-.visual-wrapper { margin-bottom: 32px; background: #fafafa; padding: 20px; border-radius: 8px; border: 1px solid #ebeef5; }
-.time-labels { display: flex; justify-content: space-between; font-size: 13px; color: #909399; margin-bottom: 8px; padding: 0 4px; }
-.rainbow-bar { display: flex; height: 36px; border-radius: 6px; overflow: hidden; background: #ebeef5; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1); }
-.color-block { flex: 1; border-right: 1px solid rgba(255,255,255,0.4); cursor: pointer; transition: opacity 0.2s; }
-.color-block:hover { opacity: 0.7; }
-.legend-group { display: flex; justify-content: center; gap: 32px; margin-top: 16px; }
-.legend-item { display: flex; align-items: center; font-size: 13px; color: #606266; }
-.color-dot { width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; }
+.template-card {
+  text-align: left;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  padding: 16px;
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
 
-.pricing-table { margin-bottom: 24px; }
-.total-fee { font-size: 18px; font-weight: bold; color: #E6A23C; }
-.submit-area { display: flex; justify-content: center; gap: 16px; margin-top: 24px; }
+.template-card--active {
+  border-color: rgba(37, 99, 235, 0.32);
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.12);
+}
+
+.template-card__head,
+.template-card__meta,
+.legend-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.template-card p {
+  color: var(--color-text-2);
+  margin: 10px 0;
+}
+
+.visual-wrapper {
+  margin-bottom: 24px;
+  background: #fafafa;
+  padding: 20px;
+  border-radius: 12px;
+  border: 1px solid #ebeef5;
+}
+
+.time-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #909399;
+  margin-bottom: 8px;
+}
+
+.rainbow-bar {
+  display: flex;
+  height: 36px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #ebeef5;
+}
+
+.color-block {
+  flex: 1;
+}
+
+.legend-group {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  margin-top: 14px;
+}
+
+.color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  margin-right: 8px;
+}
+
+.pricing-table {
+  margin-bottom: 8px;
+}
+
+.dialog-tip {
+  margin-bottom: 12px;
+  color: var(--color-text-2);
+}
+
+@media (max-width: 1280px) {
+  .stats-grid--pricing,
+  .template-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .stats-grid--pricing,
+  .template-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

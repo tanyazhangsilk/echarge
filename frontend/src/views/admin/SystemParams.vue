@@ -1,33 +1,25 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onActivated, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { RefreshRight } from '@element-plus/icons-vue'
 
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
+import MetricCard from '../../components/console/MetricCard.vue'
 import { fetchSystemParams, updateSystemParams } from '../../api/admin'
+import { mockSystemParams } from '../../mock/backoffice'
+import { readLocalState, writeLocalState } from '../../utils/localState'
+import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
+
+const STORAGE_KEY = 'echarge-admin-system-params'
+const CACHE_TTL = 60 * 1000
 
 const router = useRouter()
 const route = useRoute()
 const loading = ref(false)
+const cacheLabel = ref('')
 
-const form = reactive({
-  station_auto_publish: false,
-  operator_auto_approve: false,
-  station_public_requires_review: true,
-  invoice_auto_approve_limit: 300,
-  settlement_platform_rate: 10,
-  settlement_cycle_days: 1,
-  settlement_minimum_amount: 100,
-  abnormal_order_sla_minutes: 30,
-  user_refund_limit_per_day: 2,
-  support_email: '',
-  support_phone: '',
-  notification_email_enabled: true,
-  notification_sms_enabled: true,
-  invoice_notice_enabled: true,
-  abnormal_order_notify_roles: '',
-})
+const form = reactive(readLocalState(STORAGE_KEY, mockSystemParams))
 
 const tabs = [
   { key: 'basic', label: '基础参数', path: '/admin/settings/params/basic' },
@@ -41,23 +33,41 @@ const activeTab = computed(() => {
   return tabs.find((item) => item.key === current)?.key || 'basic'
 })
 
-const tabMeta = computed(() => {
-  return (
-    tabs.find((item) => item.key === activeTab.value) || {
-      label: '基础参数',
-      path: '/admin/settings/params/basic',
-    }
-  )
-})
+const tabMeta = computed(() => tabs.find((item) => item.key === activeTab.value) || tabs[0])
+const cacheKey = computed(() => buildRequestCacheKey('/admin/settings/params', { section: activeTab.value }))
 
-const loadData = async () => {
-  loading.value = true
+const stats = computed(() => [
+  { label: '自动审核开关', value: form.operator_auto_approve ? '已开启' : '未开启', tone: form.operator_auto_approve ? 'success' : 'warning' },
+  { label: '平台清分比例', value: Number(form.settlement_platform_rate || 0), suffix: '%', tone: 'primary' },
+  { label: '异常工单时限', value: Number(form.abnormal_order_sla_minutes || 0), suffix: ' 分钟', tone: 'danger' },
+  { label: '客服热线', value: form.support_phone || '-', tone: 'info' },
+])
+
+const applyForm = (payload = {}, fromCache = false) => {
+  Object.assign(form, mockSystemParams, payload || {})
+  writeLocalState(STORAGE_KEY, form)
+  cacheLabel.value = `${fromCache ? '缓存结果' : '最近刷新'} ${formatCacheUpdatedAt(Date.now())}`
+}
+
+const loadData = async ({ background = false } = {}) => {
+  const cached = getRequestCache(cacheKey.value, { ttl: CACHE_TTL, allowStale: true })
+  if (cached) {
+    applyForm(cached.value, true)
+    cacheLabel.value = `缓存结果 ${formatCacheUpdatedAt(cached.updatedAt)}`
+  }
+
+  loading.value = !cached || !background
   try {
     const res = await fetchSystemParams()
-    Object.assign(form, res.data.data || {})
+    const payload = res?.data?.data || mockSystemParams
+    applyForm(payload)
+    setRequestCache(cacheKey.value, payload)
+    cacheLabel.value = `最近刷新 ${formatCacheUpdatedAt(Date.now())}`
   } catch (error) {
-    console.error(error)
-    ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '系统参数加载失败')
+    if (!cacheLabel.value) {
+      applyForm(readLocalState(STORAGE_KEY, mockSystemParams))
+      cacheLabel.value = '本地配置'
+    }
   } finally {
     loading.value = false
   }
@@ -69,9 +79,11 @@ const save = async () => {
     await updateSystemParams({ ...form })
     ElMessage.success('系统参数已保存')
   } catch (error) {
-    console.error(error)
-    ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '系统参数保存失败')
+    writeLocalState(STORAGE_KEY, form)
+    ElMessage.success('后端暂未返回成功，已先保存在本地配置')
   } finally {
+    setRequestCache(cacheKey.value, { ...form })
+    cacheLabel.value = `最近刷新 ${formatCacheUpdatedAt(Date.now())}`
     loading.value = false
   }
 }
@@ -83,20 +95,28 @@ const switchTab = (path) => {
 }
 
 onMounted(loadData)
+onActivated(() => loadData({ background: true }))
 </script>
 
 <template>
   <div class="page-shell system-params-page">
-    <PageSectionHeader
-      eyebrow="系统配置"
-      title="系统参数配置"
-      description="维护平台基础、计费、清分和通知相关参数。"
-      :chip="tabMeta.label"
-    >
+    <PageSectionHeader eyebrow="系统配置" title="系统参数配置" description="维护平台基础审核、计费、清分与通知参数。" :chip="tabMeta.label">
       <template #actions>
-        <el-button :icon="RefreshRight" :loading="loading" @click="loadData">刷新</el-button>
+        <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
+        <el-button :icon="RefreshRight" :loading="loading" @click="loadData()">刷新</el-button>
       </template>
     </PageSectionHeader>
+
+    <section class="stats-grid stats-grid--params">
+      <MetricCard
+        v-for="item in stats"
+        :key="item.label"
+        :label="item.label"
+        :value="item.value"
+        :suffix="item.suffix"
+        :tone="item.tone"
+      />
+    </section>
 
     <section class="page-panel surface-card tab-shell">
       <div class="tab-row">
@@ -118,18 +138,18 @@ onMounted(loadData)
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">基础审核</h3>
-              <p class="panel-heading__desc">控制运营商入驻、电站发布与公开展示流程。</p>
+              <h3 class="panel-heading__title">准入流程</h3>
+              <p class="panel-heading__desc">控制运营商入驻与站点发布流程。</p>
             </div>
           </div>
           <el-form label-position="top">
-            <el-form-item label="运营商入驻自动通过">
+            <el-form-item label="运营商自动通过">
               <el-switch v-model="form.operator_auto_approve" />
             </el-form-item>
             <el-form-item label="电站审核通过后自动公开">
               <el-switch v-model="form.station_auto_publish" />
             </el-form-item>
-            <el-form-item label="公开电站必须经过审核">
+            <el-form-item label="公开站点需审核">
               <el-switch v-model="form.station_public_requires_review" />
             </el-form-item>
           </el-form>
@@ -138,8 +158,8 @@ onMounted(loadData)
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">服务联系信息</h3>
-              <p class="panel-heading__desc">配置平台对外服务邮箱与联系电话。</p>
+              <h3 class="panel-heading__title">客服信息</h3>
+              <p class="panel-heading__desc">配置平台对外服务邮箱与热线。</p>
             </div>
           </div>
           <el-form label-position="top">
@@ -159,12 +179,12 @@ onMounted(loadData)
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">开票与退款</h3>
-              <p class="panel-heading__desc">维护发票自动审批阈值与用户退款限制。</p>
+              <h3 class="panel-heading__title">票据与退款</h3>
+              <p class="panel-heading__desc">控制发票自动审核阈值与退款限制。</p>
             </div>
           </div>
           <el-form label-position="top">
-            <el-form-item label="发票自动审批阈值（元）">
+            <el-form-item label="发票自动审核阈值（元）">
               <el-input-number v-model="form.invoice_auto_approve_limit" :min="0" :step="50" style="width: 100%" />
             </el-form-item>
             <el-form-item label="用户每日退款上限（次）">
@@ -177,7 +197,7 @@ onMounted(loadData)
           <div class="panel-heading">
             <div>
               <h3 class="panel-heading__title">异常处理</h3>
-              <p class="panel-heading__desc">控制异常订单处理时限和协同要求。</p>
+              <p class="panel-heading__desc">控制异常订单处理时限。</p>
             </div>
           </div>
           <el-form label-position="top">
@@ -194,8 +214,8 @@ onMounted(loadData)
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">平台分成</h3>
-              <p class="panel-heading__desc">配置平台清分比例和最低结算门槛。</p>
+              <h3 class="panel-heading__title">平台清分</h3>
+              <p class="panel-heading__desc">配置平台分成比例与起结金额门槛。</p>
             </div>
           </div>
           <el-form label-position="top">
@@ -212,7 +232,7 @@ onMounted(loadData)
           <div class="panel-heading">
             <div>
               <h3 class="panel-heading__title">结算周期</h3>
-              <p class="panel-heading__desc">维护自动清分的周期配置。</p>
+              <p class="panel-heading__desc">控制自动清分的周期配置。</p>
             </div>
           </div>
           <el-form label-position="top">
@@ -230,7 +250,7 @@ onMounted(loadData)
           <div class="panel-heading">
             <div>
               <h3 class="panel-heading__title">通知渠道</h3>
-              <p class="panel-heading__desc">控制邮件、短信和发票通知开关。</p>
+              <p class="panel-heading__desc">维护邮件、短信和发票通知开关。</p>
             </div>
           </div>
           <el-form label-position="top">
@@ -250,15 +270,12 @@ onMounted(loadData)
           <div class="panel-heading">
             <div>
               <h3 class="panel-heading__title">异常通知对象</h3>
-              <p class="panel-heading__desc">配置异常订单通知的岗位范围。</p>
+              <p class="panel-heading__desc">维护异常订单通知岗位范围。</p>
             </div>
           </div>
           <el-form label-position="top">
             <el-form-item label="通知岗位">
-              <el-input
-                v-model="form.abnormal_order_notify_roles"
-                placeholder="例如：平台运营, 财务审核, 客服值班"
-              />
+              <el-input v-model="form.abnormal_order_notify_roles" placeholder="例如：平台运营, 财务审核, 客服值班" />
             </el-form-item>
           </el-form>
         </div>
@@ -274,8 +291,8 @@ onMounted(loadData)
 </template>
 
 <style scoped>
-.system-params-page {
-  padding-bottom: 8px;
+.stats-grid--params {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .tab-shell {
@@ -319,12 +336,15 @@ onMounted(loadData)
   padding: 16px;
 }
 
-.footer-actions {
-  display: flex;
-  justify-content: flex-end;
+@media (max-width: 1280px) {
+  .stats-grid--params,
+  .form-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
-@media (max-width: 960px) {
+@media (max-width: 768px) {
+  .stats-grid--params,
   .form-grid {
     grid-template-columns: 1fr;
   }

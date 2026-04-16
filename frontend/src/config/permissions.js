@@ -96,21 +96,21 @@ export const MENU_CONFIG = {
     {
       label: '资金清分',
       items: [
-        { index: '/admin/finance', title: '清分结算执行', icon: Wallet },
-        { index: '/admin/finance/invoices', title: '发票合规抽查', icon: Document },
+        { index: '/admin/finance', title: '平台清分中心', icon: Wallet },
+        { index: '/admin/finance/invoices', title: '发票管理', icon: Document },
       ],
     },
     {
       label: '用户管理',
       items: [
-        { index: '/admin/users', title: '用户列表', icon: UserFilled },
+        { index: '/admin/users', title: '用户管理', icon: UserFilled },
         { index: '/admin/users/blacklist', title: '黑名单管理', icon: UserFilled },
       ],
     },
     {
       label: '系统配置',
       items: [
-        { index: '/admin/marketing', title: '营销合规审核', icon: Promotion },
+        { index: '/admin/marketing', title: '营销审核', icon: Promotion },
         { index: '/admin/settings', title: '权限控制', icon: DataAnalysis },
         { index: '/admin/settings/params/basic', title: '系统参数配置', icon: Setting },
       ],
@@ -125,7 +125,7 @@ export const MENU_CONFIG = {
       label: '资产管理',
       items: [
         { index: '/operator/stations', title: '电站管理', icon: OfficeBuilding },
-        { index: '/operator/stations/chargers', title: '设备状态总览', icon: Connection },
+        { index: '/operator/stations/chargers', title: '电桩管理', icon: Connection },
       ],
     },
     {
@@ -148,7 +148,7 @@ export const MENU_CONFIG = {
       items: [
         { index: '/operator/finance', title: '收益对账', icon: Wallet },
         { index: '/operator/finance/bank-card', title: '绑卡管理', icon: CreditCard },
-        { index: '/operator/finance/invoices', title: '开票管理', icon: Document },
+        { index: '/operator/finance/invoices', title: '发票管理', icon: Document },
       ],
     },
     {
@@ -168,7 +168,7 @@ export const MENU_CONFIG = {
     },
     {
       label: '系统',
-      items: [{ index: '/operator/settings', title: '系统设置', icon: Setting }],
+      items: [{ index: '/operator/settings', title: '运营商设置', icon: Setting }],
     },
   ],
 }

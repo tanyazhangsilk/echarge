@@ -10,75 +10,42 @@ import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import { fetchAdminOrderDetail } from '../../api/admin'
 import { fetchOperatorOrderDetail } from '../../api/operator'
 import { ROLES } from '../../config/permissions'
+import { getDemoOrderDetail } from '../../utils/demoOrderAdapter'
 
 const route = useRoute()
 const router = useRouter()
+
 const loading = ref(false)
 const order = ref(null)
 
-const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
 const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
+const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
+const feeDetail = computed(() => order.value?.fee_detail || {})
+const statusFlow = computed(() => order.value?.status_flow || [])
 
 const summaryCards = computed(() => {
   if (!order.value) return []
   return [
-    {
-      label: '订单状态',
-      value: order.value.status_text,
-      trend: '当前订单处理状态',
-      trendLabel: '会随着状态流转同步变化',
-      tone: order.value.status === 2 ? 'danger' : order.value.status === 1 ? 'success' : 'warning',
-      icon: Document,
-    },
-    {
-      label: '订单来源',
-      value: order.value.source_type_text,
-      trend: '发起充电的业务入口',
-      trendLabel: `来源编码：${order.value.source_type}`,
-      tone: 'primary',
-      icon: Clock,
-    },
-    {
-      label: '总费用',
-      value: Number(order.value.total_amount || 0).toFixed(2),
-      prefix: '¥',
-      trend: '电费与服务费合计',
-      trendLabel: '以订单结算明细为准',
-      tone: 'warning',
-      icon: Money,
-    },
-    {
-      label: '异常标记',
-      value: order.value.abnormal_reason ? '已标记' : '正常',
-      trend: order.value.abnormal_reason || '当前无异常记录',
-      trendLabel: '异常订单会同步展示原因',
-      tone: order.value.abnormal_reason ? 'danger' : 'info',
-      icon: WarningFilled,
-    },
+    { label: '订单状态', value: order.value.status_text, trend: '当前订单处理状态', trendLabel: '随状态流转同步更新', tone: order.value.abnormal_reason ? 'danger' : order.value.end_time ? 'success' : 'warning', icon: Document },
+    { label: '订单来源', value: order.value.source_type_text, trend: '业务入口来源', trendLabel: order.value.source_type || 'manual_demo', tone: 'primary', icon: Clock },
+    { label: '总费用', value: Number(order.value.total_amount || 0).toFixed(2), prefix: '¥', trend: '电费与服务费合计', trendLabel: '以结算明细为准', tone: 'warning', icon: Money },
+    { label: '异常标记', value: order.value.abnormal_reason ? '已标记' : '正常', trend: order.value.abnormal_reason || '当前无异常记录', trendLabel: '异常订单会同步展示原因', tone: order.value.abnormal_reason ? 'danger' : 'info', icon: WarningFilled },
   ]
 })
-
-const feeDetail = computed(() => order.value?.fee_detail || {})
-const statusFlow = computed(() => order.value?.status_flow || [])
-
-const timelineTypeMap = {
-  primary: 'primary',
-  warning: 'warning',
-  success: 'success',
-  danger: 'danger',
-}
 
 const loadOrder = async () => {
   loading.value = true
   try {
-    const response = isAdmin.value
-      ? await fetchAdminOrderDetail(route.params.id)
-      : await fetchOperatorOrderDetail(route.params.id)
+    const response = isAdmin.value ? await fetchAdminOrderDetail(route.params.id) : await fetchOperatorOrderDetail(route.params.id)
     order.value = response.data.data || null
   } catch (error) {
     console.error(error)
-    order.value = null
-    ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '订单详情加载失败')
+    order.value = getDemoOrderDetail(route.params.id)
+    if (!order.value) {
+      ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '订单详情加载失败')
+    } else {
+      ElMessage.warning('订单详情接口暂不可用，已切换为演示数据')
+    }
   } finally {
     loading.value = false
   }
@@ -97,12 +64,7 @@ onMounted(loadOrder)
 
 <template>
   <div class="page-shell detail-page">
-    <PageSectionHeader
-      eyebrow="订单中心"
-      title="订单详情"
-      description="查看订单来源、费用明细、站点信息和状态流转记录。"
-      :chip="isAdmin ? '平台订单' : '订单中心'"
-    >
+    <PageSectionHeader eyebrow="订单中心" title="订单详情" description="查看订单来源、费用明细、站点信息与状态流转记录。" :chip="isAdmin ? '平台订单' : '订单中心'">
       <template #actions>
         <el-button @click="goBack">返回列表</el-button>
       </template>
@@ -110,18 +72,7 @@ onMounted(loadOrder)
 
     <template v-if="order">
       <section class="stats-grid stats-grid--detail">
-        <MetricCard
-          v-for="item in summaryCards"
-          :key="item.label"
-          :label="item.label"
-          :value="item.value"
-          :prefix="item.prefix"
-          :suffix="item.suffix"
-          :trend="item.trend"
-          :trend-label="item.trendLabel"
-          :tone="item.tone"
-          :icon="item.icon"
-        />
+        <MetricCard v-for="item in summaryCards" :key="item.label" v-bind="item" />
       </section>
 
       <section class="detail-grid">
@@ -148,42 +99,36 @@ onMounted(loadOrder)
             </div>
           </div>
 
-          <el-descriptions :column="2" border class="detail-descriptions">
+          <el-descriptions :column="2" border>
             <el-descriptions-item label="订单编号">{{ order.order_no }}</el-descriptions-item>
-            <el-descriptions-item label="订单状态">
-              <el-tag :type="order.status === 2 ? 'danger' : order.status === 1 ? 'success' : 'warning'">
-                {{ order.status_text }}
-              </el-tag>
-            </el-descriptions-item>
+            <el-descriptions-item label="订单状态">{{ order.status_text }}</el-descriptions-item>
             <el-descriptions-item label="订单来源">{{ order.source_type_text }}</el-descriptions-item>
             <el-descriptions-item label="来源编码">{{ order.source_type }}</el-descriptions-item>
             <el-descriptions-item label="用户账号">{{ order.user_phone }}</el-descriptions-item>
             <el-descriptions-item label="用户昵称">{{ order.user_nickname }}</el-descriptions-item>
             <el-descriptions-item label="VIN">{{ order.vin || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="运营商名称">{{ order.operator_name || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="运营商">{{ order.operator_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="开始时间">{{ order.start_time || '-' }}</el-descriptions-item>
             <el-descriptions-item label="结束时间">{{ order.end_time || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="充电时长">{{ order.charge_duration_text || `${order.charge_duration} 分钟` }}</el-descriptions-item>
+            <el-descriptions-item label="充电时长">{{ order.charge_duration_text || '-' }}</el-descriptions-item>
             <el-descriptions-item label="充电电量">{{ Number(order.charge_amount || 0).toFixed(2) }} kWh</el-descriptions-item>
             <el-descriptions-item label="支付状态">{{ order.pay_status_text }}</el-descriptions-item>
             <el-descriptions-item label="电站名称">{{ order.station_name || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="电站审核状态">{{ order.station_status_text || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="电站状态">{{ order.station_status_text || '-' }}</el-descriptions-item>
             <el-descriptions-item label="电价模板">{{ order.price_template_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="电桩名称">{{ order.charger_name || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="异常原因" :span="2">
-              {{ order.abnormal_reason || '无' }}
-            </el-descriptions-item>
+            <el-descriptions-item label="异常原因" :span="2">{{ order.abnormal_reason || '无' }}</el-descriptions-item>
           </el-descriptions>
 
           <div class="fee-card">
             <h4>费用明细</h4>
             <el-descriptions :column="2" border>
-              <el-descriptions-item label="充电量">{{ Number(feeDetail.charge_amount || 0).toFixed(2) }} kWh</el-descriptions-item>
+              <el-descriptions-item label="充电电量">{{ Number(feeDetail.charge_amount || 0).toFixed(2) }} kWh</el-descriptions-item>
               <el-descriptions-item label="电费">{{ formatMoney(feeDetail.electricity_fee) }}</el-descriptions-item>
               <el-descriptions-item label="服务费">{{ formatMoney(feeDetail.service_fee) }}</el-descriptions-item>
               <el-descriptions-item label="总费用">{{ formatMoney(feeDetail.total_amount) }}</el-descriptions-item>
-              <el-descriptions-item label="平段电价">¥{{ Number(feeDetail.flat_price || 0).toFixed(2) }}</el-descriptions-item>
-              <el-descriptions-item label="服务费单价">¥{{ Number(feeDetail.service_price || 0).toFixed(2) }}</el-descriptions-item>
+              <el-descriptions-item label="电价">{{ formatMoney(feeDetail.flat_price) }}</el-descriptions-item>
+              <el-descriptions-item label="服务费单价">{{ formatMoney(feeDetail.service_price) }}</el-descriptions-item>
             </el-descriptions>
           </div>
         </article>
@@ -192,18 +137,12 @@ onMounted(loadOrder)
           <div class="panel-heading">
             <div>
               <h3 class="panel-heading__title">状态流转</h3>
-              <p class="panel-heading__desc">按时间顺序展示订单创建、开始充电和完成或异常结束节点。</p>
+              <p class="panel-heading__desc">按时间顺序展示创建、开始充电、完成或异常节点。</p>
             </div>
           </div>
 
           <el-timeline>
-            <el-timeline-item
-              v-for="item in statusFlow"
-              :key="`${item.key}-${item.time}`"
-              :type="timelineTypeMap[item.tone] || 'primary'"
-              :timestamp="item.time"
-              placement="top"
-            >
+            <el-timeline-item v-for="item in statusFlow" :key="`${item.key}-${item.time}`" :timestamp="item.time" placement="top">
               <div class="timeline-card">
                 <strong>{{ item.title }}</strong>
                 <p>{{ item.desc }}</p>
@@ -221,93 +160,16 @@ onMounted(loadOrder)
 </template>
 
 <style scoped>
-.detail-page {
-  padding-bottom: 8px;
-}
-
-.stats-grid--detail {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.detail-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
-  gap: 20px;
-}
-
-.amount-banner {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.amount-banner__item {
-  padding: 18px;
-  border-radius: 18px;
-  background: #f7fafc;
-  border: 1px solid rgba(15, 23, 42, 0.06);
-}
-
-.amount-banner__item span {
-  display: block;
-  margin-bottom: 10px;
-  color: var(--color-text-2);
-}
-
-.amount-banner__item strong {
-  font-size: 24px;
-}
-
-.amount-banner__item--highlight {
-  background: linear-gradient(135deg, rgba(47, 116, 255, 0.12), rgba(73, 187, 174, 0.14));
-  border-color: rgba(47, 116, 255, 0.16);
-}
-
-.detail-descriptions {
-  margin-top: 4px;
-}
-
-.fee-card {
-  margin-top: 18px;
-}
-
-.fee-card h4 {
-  margin: 0 0 12px;
-}
-
-.timeline-card {
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: #f8fafc;
-  border: 1px solid rgba(15, 23, 42, 0.06);
-}
-
-.timeline-card strong {
-  display: block;
-  margin-bottom: 8px;
-}
-
-.timeline-card p {
-  margin: 0;
-  color: var(--color-text-2);
-  line-height: 1.6;
-}
-
-@media (max-width: 1280px) {
-  .stats-grid--detail {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .detail-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 768px) {
-  .stats-grid--detail,
-  .amount-banner {
-    grid-template-columns: 1fr;
-  }
-}
+.stats-grid--detail { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.detail-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr); gap: 20px; }
+.amount-banner { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.amount-banner__item { padding: 18px; border-radius: 18px; background: #f7fafc; border: 1px solid rgba(15, 23, 42, 0.06); }
+.amount-banner__item span { display: block; margin-bottom: 10px; color: var(--color-text-2); }
+.amount-banner__item strong { font-size: 24px; }
+.amount-banner__item--highlight { background: linear-gradient(135deg, rgba(47, 116, 255, 0.12), rgba(73, 187, 174, 0.14)); }
+.fee-card { margin-top: 18px; }
+.timeline-card { padding: 12px 14px; border-radius: 14px; background: #f8fafc; border: 1px solid rgba(15, 23, 42, 0.06); }
+.timeline-card p { margin: 8px 0 0; color: var(--color-text-2); line-height: 1.6; }
+@media (max-width: 1280px) { .stats-grid--detail { grid-template-columns: repeat(2, minmax(0, 1fr)); } .detail-grid { grid-template-columns: 1fr; } }
+@media (max-width: 768px) { .stats-grid--detail, .amount-banner { grid-template-columns: 1fr; } }
 </style>
