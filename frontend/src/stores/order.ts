@@ -4,6 +4,7 @@ import { mockOrders } from '../mock/orders'
 import { ORDER_STATUS, PAY_STATUS, type Order, type OrderStats } from '../types/order'
 import { getStoredOperatorId, getStoredRole, ROLES } from '../config/permissions'
 
+// 订单明细页与列表页已切换为后端接口，此 store 仅保留给总览页做趋势兼容展示。
 export interface OrderScope {
   role?: 'admin' | 'operator'
   operatorId?: string

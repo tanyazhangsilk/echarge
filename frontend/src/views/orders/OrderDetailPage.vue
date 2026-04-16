@@ -25,8 +25,8 @@ const summaryCards = computed(() => {
     {
       label: '订单状态',
       value: order.value.status_text,
-      trend: '当前订单处理结果',
-      trendLabel: '状态与列表页保持一致',
+      trend: '当前订单处理状态',
+      trendLabel: '状态按订单流程更新',
       tone: order.value.status === 2 ? 'danger' : order.value.status === 1 ? 'success' : 'warning',
       icon: Document,
     },
@@ -34,8 +34,8 @@ const summaryCards = computed(() => {
       label: '充电时长',
       value: order.value.charge_duration,
       suffix: ' 分钟',
-      trend: '本次充电持续时间',
-      trendLabel: '结束后由系统自动计算',
+      trend: '本次充电累计时长',
+      trendLabel: '按开始与结束时间计算',
       tone: 'primary',
       icon: Clock,
     },
@@ -44,7 +44,7 @@ const summaryCards = computed(() => {
       value: Number(order.value.total_amount || 0).toFixed(2),
       prefix: '¥',
       trend: '电费与服务费合计',
-      trendLabel: '金额统一保留两位小数',
+      trendLabel: '按订单费用项汇总',
       tone: 'warning',
       icon: Money,
     },
@@ -52,7 +52,7 @@ const summaryCards = computed(() => {
       label: '异常标记',
       value: order.value.abnormal_reason ? '已记录' : '正常',
       trend: order.value.abnormal_reason || '当前无异常记录',
-      trendLabel: '异常订单会展示具体原因',
+      trendLabel: '异常订单展示处理原因',
       tone: order.value.abnormal_reason ? 'danger' : 'info',
       icon: WarningFilled,
     },
@@ -99,7 +99,7 @@ const loadOrder = async () => {
   } catch (error) {
     console.error(error)
     order.value = null
-    ElMessage.error(error?.response?.data?.message || '订单详情加载失败')
+    ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '订单详情加载失败')
   } finally {
     loading.value = false
   }

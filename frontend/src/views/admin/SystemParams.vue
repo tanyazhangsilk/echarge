@@ -1,19 +1,53 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { RefreshRight } from '@element-plus/icons-vue'
 
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import { fetchSystemParams, updateSystemParams } from '../../api/admin'
 
+const router = useRouter()
+const route = useRoute()
 const loading = ref(false)
+
 const form = reactive({
   station_auto_publish: false,
+  operator_auto_approve: false,
+  station_public_requires_review: true,
   invoice_auto_approve_limit: 300,
   settlement_platform_rate: 10,
+  settlement_cycle_days: 1,
+  settlement_minimum_amount: 100,
   abnormal_order_sla_minutes: 30,
   user_refund_limit_per_day: 2,
   support_email: '',
+  support_phone: '',
+  notification_email_enabled: true,
+  notification_sms_enabled: true,
+  invoice_notice_enabled: true,
+  abnormal_order_notify_roles: '',
+})
+
+const tabs = [
+  { key: 'basic', label: '基础参数', path: '/admin/settings/params/basic' },
+  { key: 'billing', label: '计费参数', path: '/admin/settings/params/billing' },
+  { key: 'settlement', label: '清分参数', path: '/admin/settings/params/settlement' },
+  { key: 'notification', label: '通知参数', path: '/admin/settings/params/notification' },
+]
+
+const activeTab = computed(() => {
+  const current = route.meta?.settingsSection
+  return tabs.find((item) => item.key === current)?.key || 'basic'
+})
+
+const tabMeta = computed(() => {
+  return (
+    tabs.find((item) => item.key === activeTab.value) || {
+      label: '基础参数',
+      path: '/admin/settings/params/basic',
+    }
+  )
 })
 
 const loadData = async () => {
@@ -23,7 +57,7 @@ const loadData = async () => {
     Object.assign(form, res.data.data || {})
   } catch (error) {
     console.error(error)
-    ElMessage.error(error?.response?.data?.message || '系统参数加载失败')
+    ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '系统参数加载失败')
   } finally {
     loading.value = false
   }
@@ -36,9 +70,15 @@ const save = async () => {
     ElMessage.success('系统参数已保存')
   } catch (error) {
     console.error(error)
-    ElMessage.error(error?.response?.data?.message || '系统参数保存失败')
+    ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '系统参数保存失败')
   } finally {
     loading.value = false
+  }
+}
+
+const switchTab = (path) => {
+  if (route.path !== path) {
+    router.push(path)
   }
 }
 
@@ -49,33 +89,48 @@ onMounted(loadData)
   <div class="page-shell system-params-page">
     <PageSectionHeader
       eyebrow="系统配置"
-      title="系统设置"
-      description="维护平台参数、自动化规则与服务阈值。"
-      chip="平台参数"
+      title="系统参数配置"
+      description="维护平台基础、计费、清分和通知相关参数。"
+      :chip="tabMeta.label"
     >
       <template #actions>
         <el-button :icon="RefreshRight" :loading="loading" @click="loadData">刷新</el-button>
       </template>
     </PageSectionHeader>
 
-    <section class="page-panel surface-card">
+    <section class="page-panel surface-card tab-shell">
+      <div class="tab-row">
+        <button
+          v-for="item in tabs"
+          :key="item.key"
+          type="button"
+          class="tab-pill"
+          :class="{ 'tab-pill--active': activeTab === item.key }"
+          @click="switchTab(item.path)"
+        >
+          {{ item.label }}
+        </button>
+      </div>
+    </section>
+
+    <section v-if="activeTab === 'basic'" class="page-panel surface-card">
       <div class="form-grid">
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">审核与异常规则</h3>
-              <p class="panel-heading__desc">配置审核流转和异常订单处理时限。</p>
+              <h3 class="panel-heading__title">基础审核</h3>
+              <p class="panel-heading__desc">控制运营商入驻、电站发布与公开展示流程。</p>
             </div>
           </div>
           <el-form label-position="top">
+            <el-form-item label="运营商入驻自动通过">
+              <el-switch v-model="form.operator_auto_approve" />
+            </el-form-item>
             <el-form-item label="电站审核通过后自动公开">
               <el-switch v-model="form.station_auto_publish" />
             </el-form-item>
-            <el-form-item label="发票自动审批阈值（元）">
-              <el-input-number v-model="form.invoice_auto_approve_limit" :min="0" :step="50" style="width: 100%" />
-            </el-form-item>
-            <el-form-item label="异常订单处理时限（分钟）">
-              <el-input-number v-model="form.abnormal_order_sla_minutes" :min="5" :step="5" style="width: 100%" />
+            <el-form-item label="公开电站必须经过审核">
+              <el-switch v-model="form.station_public_requires_review" />
             </el-form-item>
           </el-form>
         </div>
@@ -83,24 +138,134 @@ onMounted(loadData)
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">资金与客服规则</h3>
-              <p class="panel-heading__desc">配置清分比例、退款限制和联系方式。</p>
+              <h3 class="panel-heading__title">服务联系信息</h3>
+              <p class="panel-heading__desc">配置平台对外服务邮箱与联系电话。</p>
+            </div>
+          </div>
+          <el-form label-position="top">
+            <el-form-item label="服务邮箱">
+              <el-input v-model="form.support_email" />
+            </el-form-item>
+            <el-form-item label="服务热线">
+              <el-input v-model="form.support_phone" />
+            </el-form-item>
+          </el-form>
+        </div>
+      </div>
+    </section>
+
+    <section v-else-if="activeTab === 'billing'" class="page-panel surface-card">
+      <div class="form-grid">
+        <div class="soft-card section-card">
+          <div class="panel-heading">
+            <div>
+              <h3 class="panel-heading__title">开票与退款</h3>
+              <p class="panel-heading__desc">维护发票自动审批阈值与用户退款限制。</p>
+            </div>
+          </div>
+          <el-form label-position="top">
+            <el-form-item label="发票自动审批阈值（元）">
+              <el-input-number v-model="form.invoice_auto_approve_limit" :min="0" :step="50" style="width: 100%" />
+            </el-form-item>
+            <el-form-item label="用户每日退款上限（次）">
+              <el-input-number v-model="form.user_refund_limit_per_day" :min="1" :step="1" style="width: 100%" />
+            </el-form-item>
+          </el-form>
+        </div>
+
+        <div class="soft-card section-card">
+          <div class="panel-heading">
+            <div>
+              <h3 class="panel-heading__title">异常处理</h3>
+              <p class="panel-heading__desc">控制异常订单处理时限和协同要求。</p>
+            </div>
+          </div>
+          <el-form label-position="top">
+            <el-form-item label="异常订单处理时限（分钟）">
+              <el-input-number v-model="form.abnormal_order_sla_minutes" :min="5" :step="5" style="width: 100%" />
+            </el-form-item>
+          </el-form>
+        </div>
+      </div>
+    </section>
+
+    <section v-else-if="activeTab === 'settlement'" class="page-panel surface-card">
+      <div class="form-grid">
+        <div class="soft-card section-card">
+          <div class="panel-heading">
+            <div>
+              <h3 class="panel-heading__title">平台分成</h3>
+              <p class="panel-heading__desc">配置平台清分比例和最低结算门槛。</p>
             </div>
           </div>
           <el-form label-position="top">
             <el-form-item label="平台清分比例（%）">
               <el-input-number v-model="form.settlement_platform_rate" :min="1" :max="100" style="width: 100%" />
             </el-form-item>
-            <el-form-item label="用户每日退款上限">
-              <el-input-number v-model="form.user_refund_limit_per_day" :min="1" style="width: 100%" />
+            <el-form-item label="最低结算金额（元）">
+              <el-input-number v-model="form.settlement_minimum_amount" :min="0" :step="50" style="width: 100%" />
             </el-form-item>
-            <el-form-item label="支持邮箱">
-              <el-input v-model="form.support_email" />
+          </el-form>
+        </div>
+
+        <div class="soft-card section-card">
+          <div class="panel-heading">
+            <div>
+              <h3 class="panel-heading__title">结算周期</h3>
+              <p class="panel-heading__desc">维护自动清分的周期配置。</p>
+            </div>
+          </div>
+          <el-form label-position="top">
+            <el-form-item label="T+N 天结算">
+              <el-input-number v-model="form.settlement_cycle_days" :min="1" :max="31" style="width: 100%" />
             </el-form-item>
           </el-form>
         </div>
       </div>
+    </section>
 
+    <section v-else class="page-panel surface-card">
+      <div class="form-grid">
+        <div class="soft-card section-card">
+          <div class="panel-heading">
+            <div>
+              <h3 class="panel-heading__title">通知渠道</h3>
+              <p class="panel-heading__desc">控制邮件、短信和发票通知开关。</p>
+            </div>
+          </div>
+          <el-form label-position="top">
+            <el-form-item label="启用邮件通知">
+              <el-switch v-model="form.notification_email_enabled" />
+            </el-form-item>
+            <el-form-item label="启用短信通知">
+              <el-switch v-model="form.notification_sms_enabled" />
+            </el-form-item>
+            <el-form-item label="启用发票通知">
+              <el-switch v-model="form.invoice_notice_enabled" />
+            </el-form-item>
+          </el-form>
+        </div>
+
+        <div class="soft-card section-card">
+          <div class="panel-heading">
+            <div>
+              <h3 class="panel-heading__title">异常通知对象</h3>
+              <p class="panel-heading__desc">配置异常订单通知的岗位范围。</p>
+            </div>
+          </div>
+          <el-form label-position="top">
+            <el-form-item label="通知岗位">
+              <el-input
+                v-model="form.abnormal_order_notify_roles"
+                placeholder="例如：平台运营, 财务审核, 客服值班"
+              />
+            </el-form-item>
+          </el-form>
+        </div>
+      </div>
+    </section>
+
+    <section class="page-panel surface-card footer-shell">
       <div class="footer-actions">
         <el-button type="primary" :loading="loading" @click="save">保存参数</el-button>
       </div>
@@ -113,6 +278,33 @@ onMounted(loadData)
   padding-bottom: 8px;
 }
 
+.tab-shell {
+  padding: 16px;
+}
+
+.tab-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.tab-pill {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text-primary, #0f172a);
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab-pill--active {
+  border-color: rgba(59, 130, 246, 0.24);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.16), rgba(14, 165, 233, 0.08));
+  color: #1d4ed8;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -123,10 +315,13 @@ onMounted(loadData)
   padding: 16px;
 }
 
+.footer-shell {
+  padding: 16px;
+}
+
 .footer-actions {
   display: flex;
   justify-content: flex-end;
-  margin-top: 16px;
 }
 
 @media (max-width: 960px) {

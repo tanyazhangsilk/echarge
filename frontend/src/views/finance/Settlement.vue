@@ -235,8 +235,13 @@ const openBatchDetail = async (row) => {
   detailLoading.value = true
   detailOrders.value = []
   try {
-    const resp = await http.get('/operator/orders/history')
-    const list = Array.isArray(resp?.data?.data) ? resp.data.data : []
+    const resp = await http.get('/operator/orders/history', {
+      params: {
+        page: 1,
+        page_size: 200,
+      },
+    })
+    const list = resp?.data?.data?.items || []
     const orders = list
       .filter(
         (item) =>

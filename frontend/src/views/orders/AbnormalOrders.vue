@@ -48,7 +48,7 @@ const stats = computed(() => [
     value: summary.total_count,
     suffix: ' 单',
     trend: '当前筛选条件下的异常订单',
-    trendLabel: '支持按原因和时间范围查询',
+    trendLabel: '支持按原因与时间范围查询',
     tone: 'danger',
     icon: WarningFilled,
   },
@@ -57,7 +57,7 @@ const stats = computed(() => [
     value: Number(summary.total_amount || 0).toFixed(2),
     prefix: '¥',
     trend: '异常订单涉及金额',
-    trendLabel: '便于财务复核',
+    trendLabel: '用于财务核查',
     tone: 'warning',
     icon: Money,
   },
@@ -66,7 +66,7 @@ const stats = computed(() => [
     value: summary.reason_count,
     suffix: ' 类',
     trend: '异常原因种类数',
-    trendLabel: '统计口径来自服务端',
+    trendLabel: '按异常原因归类统计',
     tone: 'info',
     icon: Bell,
   },
@@ -75,7 +75,7 @@ const stats = computed(() => [
     value: summary.abnormal_count,
     suffix: ' 单',
     trend: '异常状态订单数量',
-    trendLabel: '用于快速识别处理规模',
+    trendLabel: '用于安排处理优先级',
     tone: 'primary',
     icon: RefreshRight,
   },
@@ -114,7 +114,7 @@ const loadOrders = async () => {
       reason_count: 0,
       abnormal_count: 0,
     })
-    errorMessage.value = error?.response?.data?.message || '异常订单加载失败，请稍后重试。'
+    errorMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '异常订单加载失败，请稍后重试。'
     ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false

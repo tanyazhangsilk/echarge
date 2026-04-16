@@ -20,6 +20,7 @@ export const fetchOperatorProfile = () => http.get('/operator/settings/profile')
 export const updateOperatorProfile = (payload) => http.put('/operator/settings/profile', payload)
 
 export const fetchOperatorStations = (params = {}) => http.get('/operator/stations', { params })
+export const fetchOperatorStationOptions = (params = {}) => http.get('/operator/stations/options', { params })
 export const fetchStationChargers = (stationId) => http.get(`/operator/stations/${stationId}/chargers`)
 export const updateStationVisibility = (stationId, visibility) =>
   http.post(`/operator/stations/${stationId}/visibility`, { visibility })
@@ -34,5 +35,6 @@ export const fetchOperatorAbnormalOrders = (params = {}) => http.get('/operator/
 export const fetchOperatorOrderDetail = (orderId) => http.get(`/operator/orders/${orderId}`)
 export const startDemoCharging = (payload = {}) => http.post('/operator/orders/demo-start', payload)
 export const finishOperatorOrder = (orderId) => http.post(`/operator/orders/${orderId}/finish`)
+export const forceStopOperatorOrder = (orderId) => http.post(`/operator/orders/${orderId}/force-stop`)
 export const markOperatorOrderAbnormal = (orderId, abnormalReason) =>
   http.post(`/operator/orders/${orderId}/mark-abnormal`, { abnormal_reason: abnormalReason })

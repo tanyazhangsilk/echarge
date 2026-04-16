@@ -173,7 +173,7 @@ const loadStations = async () => {
       pending_count: 0,
       private_count: 0,
     })
-    errorMessage.value = error?.response?.data?.message || '电站列表加载失败，请稍后重试。'
+    errorMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '电站列表加载失败，请稍后重试。'
     ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
@@ -187,7 +187,7 @@ const loadTemplates = async () => {
     templates.value = data.data || []
   } catch (error) {
     console.error(error)
-    ElMessage.error(error?.response?.data?.message || '电价模板加载失败')
+    ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '电价模板加载失败')
   } finally {
     templateLoading.value = false
   }
@@ -203,7 +203,7 @@ const openChargerDrawer = async (station) => {
   } catch (error) {
     console.error(error)
     chargers.value = []
-    ElMessage.error(error?.response?.data?.message || '电桩列表加载失败')
+    ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '电桩列表加载失败')
   } finally {
     chargerLoading.value = false
   }
@@ -223,7 +223,7 @@ const handleVisibilityChange = async (station, visibility) => {
   } catch (error) {
     if (error !== 'cancel') {
       console.error(error)
-      ElMessage.error(error?.response?.data?.message || '可见性修改失败')
+      ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '可见性修改失败')
     }
   }
 }
@@ -251,7 +251,7 @@ const submitBindTemplate = async () => {
     await loadStations()
   } catch (error) {
     console.error(error)
-    ElMessage.error(error?.response?.data?.message || '模板绑定失败')
+    ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '模板绑定失败')
   } finally {
     bindSubmitting.value = false
   }
@@ -283,7 +283,7 @@ const submitApplyStation = async () => {
     await loadStations()
   } catch (error) {
     console.error(error)
-    ElMessage.error(error?.response?.data?.message || '站点申请提交失败')
+    ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '站点申请提交失败')
   } finally {
     applySubmitting.value = false
   }
@@ -319,9 +319,7 @@ watch(
   },
 )
 
-onMounted(async () => {
-  await Promise.all([loadStations(), loadTemplates()])
-})
+onMounted(loadStations)
 
 onBeforeUnmount(() => {
   if (searchTimer) {

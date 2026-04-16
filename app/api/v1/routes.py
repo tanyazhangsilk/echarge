@@ -46,6 +46,8 @@ from app.services.operator_demo_service import (
     ensure_operator_price_templates,
     ensure_station_chargers,
     get_operator_station_page,
+    get_operator_station_page_fast,
+    get_operator_station_options,
     infer_charger_power_kw,
     serialize_operator_charger,
     serialize_operator_station,
@@ -65,12 +67,30 @@ marketing_audit_store: dict[int, dict[str, Any]] = {}
 blacklist_store: set[int] = set()
 system_param_store: dict[str, Any] = {
     "station_auto_publish": False,
+    "operator_auto_approve": False,
+    "station_public_requires_review": True,
     "invoice_auto_approve_limit": 300.0,
     "settlement_platform_rate": 10,
+    "settlement_cycle_days": 1,
+    "settlement_minimum_amount": 100.0,
     "abnormal_order_sla_minutes": 30,
     "user_refund_limit_per_day": 2,
     "support_email": "support@echarge.com",
+    "support_phone": "400-800-1024",
+    "notification_email_enabled": True,
+    "notification_sms_enabled": True,
+    "invoice_notice_enabled": True,
+    "abnormal_order_notify_roles": "平台运营, 财务审核",
 }
+permission_settings_store: list[dict[str, Any]] = [
+    {"module": "运营商管理", "view": True, "edit": True, "approve": True, "export": False},
+    {"module": "电站管理", "view": True, "edit": True, "approve": True, "export": True},
+    {"module": "订单管理", "view": True, "edit": True, "approve": False, "export": True},
+    {"module": "财务管理", "view": True, "edit": True, "approve": True, "export": True},
+    {"module": "用户管理", "view": True, "edit": True, "approve": False, "export": True},
+    {"module": "营销管理", "view": True, "edit": False, "approve": True, "export": False},
+    {"module": "系统设置", "view": True, "edit": True, "approve": False, "export": False},
+]
 template_store: list[dict[str, Any]] = []
 tag_store: list[dict[str, Any]] = []
 discount_campaign_store: list[dict[str, Any]] = []
@@ -121,11 +141,24 @@ class SettingsProfilePayload(BaseModel):
 
 class SystemParamsPayload(BaseModel):
     station_auto_publish: bool
+    operator_auto_approve: bool
+    station_public_requires_review: bool
     invoice_auto_approve_limit: float
     settlement_platform_rate: int
+    settlement_cycle_days: int
+    settlement_minimum_amount: float
     abnormal_order_sla_minutes: int
     user_refund_limit_per_day: int
     support_email: str
+    support_phone: str
+    notification_email_enabled: bool
+    notification_sms_enabled: bool
+    invoice_notice_enabled: bool
+    abnormal_order_notify_roles: str
+
+
+class PermissionSettingsPayload(BaseModel):
+    modules: list[dict[str, Any]]
 
 
 class BankCardSubmitPayload(BaseModel):
@@ -216,6 +249,37 @@ def get_operator_by_context(db: Session, context: RoleContext) -> Operator | Non
     return get_current_operator(db)
 
 
+def resolve_operator_id(db: Session, context: RoleContext) -> int:
+    if context.operator_id is not None:
+        row = db.query(Operator.id).filter(Operator.id == context.operator_id).first()
+        if row:
+            return row[0]
+
+    fallback = db.query(Operator.id).order_by(Operator.id.asc()).first()
+    if not fallback:
+        raise HTTPException(status_code=404, detail="运营商不存在")
+    return fallback[0]
+
+
+def get_operator_basic_info(db: Session, operator_id: int) -> dict[str, Any] | None:
+    row = (
+        db.query(
+            Operator.id.label("id"),
+            Operator.name.label("name"),
+            Operator.is_verified.label("is_verified"),
+        )
+        .filter(Operator.id == operator_id)
+        .first()
+    )
+    if not row:
+        return None
+    return {
+        "id": row.id,
+        "name": row.name,
+        "is_verified": bool(row.is_verified),
+    }
+
+
 def get_or_create_demo_user(db: Session) -> User:
     user = db.query(User).order_by(User.id.asc()).first()
     if user:
@@ -303,6 +367,19 @@ def resolve_bank_card_audit_status(cards: list[OperatorBankCard]) -> tuple[str, 
 
 def resolve_settlement_qualification(operator: Operator | None, cards: list[OperatorBankCard]) -> tuple[bool, str]:
     is_verified = bool(operator and operator.is_verified)
+    approved_default_card = next((card for card in cards if card.is_default and card.bind_status == 1), None)
+    if is_verified and approved_default_card:
+        return True, "已具备 T+1 清分资格"
+
+    missing_parts: list[str] = []
+    if not is_verified:
+        missing_parts.append("运营商未认证")
+    if not approved_default_card:
+        missing_parts.append("未配置默认且审核通过的收款卡")
+    return False, "，".join(missing_parts) if missing_parts else "暂不具备清分资格"
+
+
+def resolve_settlement_qualification_from_flag(is_verified: bool, cards: list[OperatorBankCard]) -> tuple[bool, str]:
     approved_default_card = next((card for card in cards if card.is_default and card.bind_status == 1), None)
     if is_verified and approved_default_card:
         return True, "已具备 T+1 清分资格"
@@ -576,13 +653,14 @@ async def get_settlements(
     context: RoleContext = Depends(get_role_context),
     db: Session = Depends(get_db),
 ):
+    operator_id = resolve_operator_id(db, context) if context.role == "operator" else None
     query = (
         db.query(OperatorSettlementRecord)
         .options(joinedload(OperatorSettlementRecord.operator))
         .order_by(OperatorSettlementRecord.settle_date.desc(), OperatorSettlementRecord.operator_id.asc())
     )
-    if context.role == "operator" and context.operator_id is not None:
-        query = query.filter(OperatorSettlementRecord.operator_id == context.operator_id)
+    if operator_id is not None:
+        query = query.filter(OperatorSettlementRecord.operator_id == operator_id)
 
     records = query.all()
     if records:
@@ -848,14 +926,13 @@ async def get_operator_stations(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    if context.operator_id is None:
-        return {"code": 404, "message": "运营商不存在"}
+    operator_id = resolve_operator_id(db, context)
 
     return {
         "code": 200,
-        "data": get_operator_station_page(
+        "data": get_operator_station_page_fast(
             db,
-            operator_id=context.operator_id,
+            operator_id=operator_id,
             page=page,
             page_size=page_size,
             keyword=keyword,
@@ -865,19 +942,31 @@ async def get_operator_stations(
     }
 
 
+@api_router.get("/operator/stations/options", tags=["operator"])
+async def get_operator_station_option_list(
+    keyword: str | None = None,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator_id = resolve_operator_id(db, context)
+    return {
+        "code": 200,
+        "data": get_operator_station_options(db, operator_id=operator_id, keyword=keyword),
+    }
+
+
 @api_router.get("/operator/stations/{station_id}/chargers", tags=["operator"])
 async def get_operator_station_chargers(
     station_id: int,
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    if context.operator_id is None:
-        return {"code": 404, "message": "运营商不存在"}
+    operator_id = resolve_operator_id(db, context)
 
     station = (
         db.query(Station)
         .options(joinedload(Station.chargers).joinedload(Charger.station))
-        .filter(Station.id == station_id, Station.operator_id == context.operator_id, Station.is_deleted.is_(False))
+        .filter(Station.id == station_id, Station.operator_id == operator_id, Station.is_deleted.is_(False))
         .first()
     )
     if not station:
@@ -893,9 +982,10 @@ async def update_operator_station_visibility(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    operator_id = resolve_operator_id(db, context)
     station = (
         db.query(Station)
-        .filter(Station.id == station_id, Station.operator_id == context.operator_id, Station.is_deleted.is_(False))
+        .filter(Station.id == station_id, Station.operator_id == operator_id, Station.is_deleted.is_(False))
         .first()
     )
     if not station:
@@ -930,13 +1020,12 @@ async def bind_operator_station_template(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    if context.operator_id is None:
-        return {"code": 404, "message": "运营商不存在"}
+    operator_id = resolve_operator_id(db, context)
 
     station = (
         db.query(Station)
         .options(joinedload(Station.price_template), joinedload(Station.operator), joinedload(Station.chargers))
-        .filter(Station.id == station_id, Station.operator_id == context.operator_id, Station.is_deleted.is_(False))
+        .filter(Station.id == station_id, Station.operator_id == operator_id, Station.is_deleted.is_(False))
         .first()
     )
     if not station:
@@ -946,7 +1035,7 @@ async def bind_operator_station_template(
         db.query(PriceTemplate)
         .filter(
             PriceTemplate.id == payload.template_id,
-            PriceTemplate.operator_id == context.operator_id,
+            PriceTemplate.operator_id == operator_id,
             PriceTemplate.is_deleted.is_(False),
         )
         .first()
@@ -965,12 +1054,11 @@ async def get_operator_pricing_templates(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    if context.operator_id is None:
-        return {"code": 404, "message": "运营商不存在"}
+    operator_id = resolve_operator_id(db, context)
 
     templates = (
         db.query(PriceTemplate)
-        .filter(PriceTemplate.operator_id == context.operator_id, PriceTemplate.is_deleted.is_(False))
+        .filter(PriceTemplate.operator_id == operator_id, PriceTemplate.is_deleted.is_(False))
         .order_by(PriceTemplate.updated_at.desc(), PriceTemplate.id.desc())
         .all()
     )
@@ -1070,11 +1158,12 @@ async def get_operator_history_orders(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    operator_id = resolve_operator_id(db, context)
     return {
         "code": 200,
         "data": get_order_page(
             db,
-            operator_id=context.operator_id,
+            operator_id=operator_id,
             page=page,
             page_size=page_size,
             keyword=keyword,
@@ -1099,11 +1188,12 @@ async def get_operator_realtime_orders(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    operator_id = resolve_operator_id(db, context)
     return {
         "code": 200,
         "data": get_order_page(
             db,
-            operator_id=context.operator_id,
+            operator_id=operator_id,
             page=page,
             page_size=page_size,
             keyword=keyword,
@@ -1129,11 +1219,12 @@ async def get_operator_abnormal_orders(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    operator_id = resolve_operator_id(db, context)
     return {
         "code": 200,
         "data": get_order_page(
             db,
-            operator_id=context.operator_id,
+            operator_id=operator_id,
             page=page,
             page_size=page_size,
             keyword=keyword,
@@ -1153,7 +1244,8 @@ async def get_operator_order_detail(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    order_data = get_order_detail_data(db, order_id, operator_id=context.operator_id)
+    operator_id = resolve_operator_id(db, context)
+    order_data = get_order_detail_data(db, order_id, operator_id=operator_id)
     if not order_data:
         return {"code": 404, "message": "订单不存在或无权限访问"}
     return {"code": 200, "data": order_data}
@@ -1165,7 +1257,8 @@ async def operator_finish_order(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    order = finish_order(db, order_id, operator_id=context.operator_id)
+    operator_id = resolve_operator_id(db, context)
+    order = finish_order(db, order_id, operator_id=operator_id)
     if not order:
         return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
     return {"code": 200, "message": "订单已完成并转入历史订单", "data": serialize_order(order)}
@@ -1177,7 +1270,8 @@ async def operator_force_stop_order(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    order = force_stop_order(db, order_id, operator_id=context.operator_id)
+    operator_id = resolve_operator_id(db, context)
+    order = force_stop_order(db, order_id, operator_id=operator_id)
     if not order:
         return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
     return {"code": 200, "message": "订单已强制停止", "data": serialize_order(order)}
@@ -1190,7 +1284,8 @@ async def operator_mark_order_abnormal(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    order = mark_order_abnormal(db, order_id, payload.abnormal_reason, operator_id=context.operator_id)
+    operator_id = resolve_operator_id(db, context)
+    order = mark_order_abnormal(db, order_id, payload.abnormal_reason, operator_id=operator_id)
     if not order:
         return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
     return {"code": 200, "message": "订单已标记异常并转入异常订单", "data": serialize_order(order)}
@@ -1201,19 +1296,20 @@ async def get_operator_bank_cards(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    operator = db.query(Operator).filter(Operator.id == context.operator_id).first()
+    operator_id = resolve_operator_id(db, context)
+    operator = get_operator_basic_info(db, operator_id)
     if not operator:
         return {"code": 404, "message": "运营商不存在"}
 
     cards = (
         db.query(OperatorBankCard)
-        .filter(OperatorBankCard.operator_id == context.operator_id)
+        .filter(OperatorBankCard.operator_id == operator_id)
         .order_by(OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
         .all()
     )
 
     audit_status, audit_status_text = resolve_bank_card_audit_status(cards)
-    settlement_eligible, settlement_tip = resolve_settlement_qualification(operator, cards)
+    settlement_eligible, settlement_tip = resolve_settlement_qualification_from_flag(operator["is_verified"], cards)
 
     default_card_raw = next((card for card in cards if card.is_default and card.bind_status == 1), None)
     if default_card_raw is None:
@@ -1222,9 +1318,9 @@ async def get_operator_bank_cards(
     return {
         "code": 200,
         "data": {
-            "operator_id": operator.id,
-            "operator_name": operator.name,
-            "operator_verified": bool(operator.is_verified),
+            "operator_id": operator["id"],
+            "operator_name": operator["name"],
+            "operator_verified": operator["is_verified"],
             "audit_status": audit_status,
             "audit_status_text": audit_status_text,
             "cards": [serialize_bank_card(card) for card in cards],
@@ -1242,7 +1338,8 @@ async def submit_operator_bank_card(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    operator = db.query(Operator).filter(Operator.id == context.operator_id).first()
+    operator_id = resolve_operator_id(db, context)
+    operator = get_operator_basic_info(db, operator_id)
     if not operator:
         return {"code": 404, "message": "运营商不存在"}
 
@@ -1255,7 +1352,7 @@ async def submit_operator_bank_card(
 
     existing_cards = (
         db.query(OperatorBankCard)
-        .filter(OperatorBankCard.operator_id == context.operator_id)
+        .filter(OperatorBankCard.operator_id == operator_id)
         .order_by(OperatorBankCard.created_at.desc())
         .all()
     )
@@ -1266,7 +1363,7 @@ async def submit_operator_bank_card(
             card.is_default = False
 
     card = OperatorBankCard(
-        operator_id=context.operator_id,
+        operator_id=operator_id,
         account_name=account_name,
         bank_name=bank_name,
         bank_account=bank_account,
@@ -1294,25 +1391,26 @@ async def get_operator_bank_card_audit_status(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    operator = db.query(Operator).filter(Operator.id == context.operator_id).first()
+    operator_id = resolve_operator_id(db, context)
+    operator = get_operator_basic_info(db, operator_id)
     if not operator:
         return {"code": 404, "message": "运营商不存在"}
 
     cards = (
         db.query(OperatorBankCard)
-        .filter(OperatorBankCard.operator_id == context.operator_id)
+        .filter(OperatorBankCard.operator_id == operator_id)
         .order_by(OperatorBankCard.created_at.desc())
         .all()
     )
     audit_status, audit_status_text = resolve_bank_card_audit_status(cards)
-    settlement_eligible, settlement_tip = resolve_settlement_qualification(operator, cards)
+    settlement_eligible, settlement_tip = resolve_settlement_qualification_from_flag(operator["is_verified"], cards)
 
     return {
         "code": 200,
         "data": {
             "audit_status": audit_status,
             "audit_status_text": audit_status_text,
-            "operator_verified": bool(operator.is_verified),
+            "operator_verified": operator["is_verified"],
             "settlement_eligible": settlement_eligible,
             "settlement_tip": settlement_tip,
         },
@@ -1326,14 +1424,15 @@ async def get_invoices(
     context: RoleContext = Depends(get_role_context),
     db: Session = Depends(get_db),
 ):
+    operator_id = resolve_operator_id(db, context) if context.role == "operator" else None
     query = (
         db.query(Invoice)
         .options(joinedload(Invoice.user), joinedload(Invoice.operator), joinedload(Invoice.related_order))
         .order_by(Invoice.created_at.desc())
     )
 
-    if context.role == "operator" and context.operator_id is not None:
-        query = query.filter(Invoice.operator_id == context.operator_id)
+    if operator_id is not None:
+        query = query.filter(Invoice.operator_id == operator_id)
 
     if status in (0, 1, 2):
         query = query.filter(Invoice.status == status)
@@ -1352,7 +1451,7 @@ async def get_invoices(
     data = [
         serialize_invoice_record(
             inv,
-            can_process=(context.role == "operator" and inv.operator_id == context.operator_id and inv.status == 0),
+            can_process=(context.role == "operator" and inv.operator_id == operator_id and inv.status == 0),
         )
         for inv in invoices
     ]
@@ -1410,6 +1509,7 @@ async def get_invoice_detail(
     context: RoleContext = Depends(get_role_context),
     db: Session = Depends(get_db),
 ):
+    operator_id = resolve_operator_id(db, context) if context.role == "operator" else None
     inv = (
         db.query(Invoice)
         .options(joinedload(Invoice.user), joinedload(Invoice.operator), joinedload(Invoice.related_order))
@@ -1419,14 +1519,14 @@ async def get_invoice_detail(
     if not inv:
         return {"code": 404, "message": "发票申请不存在"}
 
-    if context.role == "operator" and inv.operator_id != context.operator_id:
+    if operator_id is not None and inv.operator_id != operator_id:
         return {"code": 403, "message": "无权限查看该发票"}
 
     return {
         "code": 200,
         "data": serialize_invoice_record(
             inv,
-            can_process=(context.role == "operator" and inv.operator_id == context.operator_id and inv.status == 0),
+            can_process=(operator_id is not None and inv.operator_id == operator_id and inv.status == 0),
         ),
     }
 
@@ -1637,6 +1737,59 @@ async def get_station_audits(
             for s in stations
         ],
     }
+
+
+@api_router.get("/admin/stations/options", tags=["admin"])
+async def get_admin_station_options(
+    keyword: str | None = None,
+    _context: RoleContext = Depends(require_admin_context),
+    db: Session = Depends(get_db),
+):
+    query = (
+        db.query(
+            Station.id.label("id"),
+            Station.name.label("station_name"),
+        )
+        .filter(Station.is_deleted.is_(False))
+        .order_by(Station.updated_at.desc(), Station.id.desc())
+    )
+
+    if keyword and keyword.strip():
+        query = query.filter(Station.name.like(f"%{keyword.strip()}%"))
+
+    return {
+        "code": 200,
+        "data": [{"id": row.id, "station_name": row.station_name} for row in query.all()],
+    }
+
+
+@api_router.get("/admin/settings/permissions", tags=["admin"])
+async def get_admin_permission_settings(_context: RoleContext = Depends(require_admin_context)):
+    return {"code": 200, "data": {"modules": permission_settings_store}}
+
+
+@api_router.put("/admin/settings/permissions", tags=["admin"])
+async def update_admin_permission_settings(
+    payload: PermissionSettingsPayload,
+    _context: RoleContext = Depends(require_admin_context),
+):
+    permission_settings_store.clear()
+    permission_settings_store.extend(payload.modules)
+    return {"code": 200, "message": "权限配置已保存", "data": {"modules": permission_settings_store}}
+
+
+@api_router.get("/admin/settings/params", tags=["admin"])
+async def get_admin_system_params(_context: RoleContext = Depends(require_admin_context)):
+    return {"code": 200, "data": system_param_store}
+
+
+@api_router.put("/admin/settings/params", tags=["admin"])
+async def update_admin_system_params(
+    payload: SystemParamsPayload,
+    _context: RoleContext = Depends(require_admin_context),
+):
+    system_param_store.update(payload.model_dump())
+    return {"code": 200, "message": "系统参数已保存", "data": system_param_store}
 
 
 @api_router.post("/admin/audit/stations/{station_id}/process", tags=["admin"])

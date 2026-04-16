@@ -12,9 +12,12 @@ export const processMarketingAudit = (id, payload) => http.post(`/admin/marketin
 
 export const fetchSystemParams = () => http.get('/admin/settings/params')
 export const updateSystemParams = (payload) => http.put('/admin/settings/params', payload)
+export const fetchAdminPermissionSettings = () => http.get('/admin/settings/permissions')
+export const updateAdminPermissionSettings = (payload) => http.put('/admin/settings/permissions', payload)
 
 export const fetchStationAudits = () => http.get('/admin/audit/stations')
 export const processStationAudit = (stationId, payload) => http.post(`/admin/audit/stations/${stationId}/process`, payload)
+export const fetchAdminStationOptions = (params = {}) => http.get('/admin/stations/options', { params })
 
 export const fetchAdminOrders = (params = {}) => http.get('/admin/orders', { params })
 export const fetchAdminAbnormalOrders = (params = {}) => http.get('/admin/orders/abnormal', { params })

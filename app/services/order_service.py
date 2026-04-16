@@ -6,9 +6,9 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import case, func, or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, load_only
 
-from app.models.models import Charger, Order, Station, User
+from app.models.models import Charger, Operator, Order, PriceTemplate, Station, User
 
 
 ORDER_STATUS_LABELS = {
@@ -204,12 +204,7 @@ def _build_filtered_order_query(
     abnormal_reason: str | None = None,
     default_status: int | None = None,
 ):
-    query = (
-        db.query(Order)
-        .outerjoin(User, Order.user_id == User.id)
-        .outerjoin(Station, Order.station_id == Station.id)
-        .outerjoin(Charger, Order.charger_id == Charger.id)
-    )
+    query = db.query(Order)
 
     if operator_id is not None:
         query = query.filter(Order.operator_id == operator_id)
@@ -221,8 +216,14 @@ def _build_filtered_order_query(
     if station_id is not None:
         query = query.filter(Order.station_id == station_id)
 
-    if keyword and keyword.strip():
-        search = f"%{keyword.strip()}%"
+    normalized_keyword = (keyword or "").strip()
+    if normalized_keyword:
+        search = f"%{normalized_keyword}%"
+        query = (
+            query.outerjoin(User, Order.user_id == User.id)
+            .outerjoin(Station, Order.station_id == Station.id)
+            .outerjoin(Charger, Order.charger_id == Charger.id)
+        )
         query = query.filter(
             or_(
                 Order.order_no.like(search),
@@ -257,10 +258,38 @@ def _load_orders_by_ids(db: Session, order_ids: list[int]) -> list[Order]:
         for item in (
             db.query(Order)
             .options(
-                joinedload(Order.user),
-                joinedload(Order.operator),
-                joinedload(Order.station).joinedload(Station.price_template),
-                joinedload(Order.charger).joinedload(Charger.station),
+                load_only(
+                    Order.id,
+                    Order.order_no,
+                    Order.user_id,
+                    Order.operator_id,
+                    Order.station_id,
+                    Order.charger_id,
+                    Order.vin,
+                    Order.start_time,
+                    Order.end_time,
+                    Order.charge_duration,
+                    Order.total_kwh,
+                    Order.ele_fee,
+                    Order.service_fee,
+                    Order.total_fee,
+                    Order.pay_status,
+                    Order.status,
+                    Order.abnormal_reason,
+                    Order.settle_status,
+                    Order.created_at,
+                    Order.updated_at,
+                ),
+                joinedload(Order.user).load_only(User.id, User.phone, User.nickname, User.vin_code),
+                joinedload(Order.operator).load_only(Operator.id, Operator.name),
+                joinedload(Order.station)
+                .load_only(Station.id, Station.name, Station.template_id)
+                .joinedload(Station.price_template)
+                .load_only(PriceTemplate.id, PriceTemplate.name, PriceTemplate.rules_json),
+                joinedload(Order.charger)
+                .load_only(Charger.id, Charger.sn_code, Charger.type, Charger.station_id)
+                .joinedload(Charger.station)
+                .load_only(Station.id, Station.name),
             )
             .filter(Order.id.in_(order_ids))
             .all()
@@ -294,6 +323,109 @@ def _build_order_summary(query, total: int) -> dict[str, Any]:
         "station_count": int(summary_row[7] or 0),
         "reason_count": int(summary_row[8] or 0),
     }
+
+
+def _order_duration_minutes_from_row(row: Any) -> int:
+    if row.charge_duration is not None:
+        return row.charge_duration
+    if row.start_time and row.end_time:
+        return max(int((row.end_time - row.start_time).total_seconds() / 60), 0)
+    if row.start_time and row.status == 0:
+        return max(int((datetime.now() - row.start_time).total_seconds() / 60), 0)
+    return 0
+
+
+def _serialize_order_row(row: Any) -> dict[str, Any]:
+    duration = _order_duration_minutes_from_row(row)
+    user_phone = row.user_phone or ""
+    user_nickname = row.user_nickname or (f"用户{str(user_phone)[-4:]}" if user_phone else "")
+    station_name = row.station_name or ""
+    charger_suffix = row.charger_sn[-4:] if row.charger_sn else f"{row.charger_id:04d}"
+    charger_name = f"{(station_name[:8] or '充电站')}-{charger_suffix}号桩"
+
+    return {
+        "id": row.id,
+        "order_no": row.order_no,
+        "user_id": row.user_id,
+        "user_phone": user_phone,
+        "user_nickname": user_nickname,
+        "operator_id": row.operator_id,
+        "operator_name": row.operator_name or "",
+        "station_id": row.station_id,
+        "station_name": station_name,
+        "charger_id": row.charger_id,
+        "charger_sn": row.charger_sn or "",
+        "charger_name": charger_name,
+        "vin": row.vin or row.user_vin_code,
+        "start_time": row.start_time.strftime("%Y-%m-%d %H:%M:%S") if row.start_time else "",
+        "end_time": row.end_time.strftime("%Y-%m-%d %H:%M:%S") if row.end_time else "",
+        "charge_duration": duration,
+        "charge_duration_text": f"{duration} 分钟",
+        "charge_amount": float(row.total_kwh or 0),
+        "electricity_fee": float(row.ele_fee or 0),
+        "ele_fee": float(row.ele_fee or 0),
+        "service_fee": float(row.service_fee or 0),
+        "total_amount": float(row.total_fee or 0),
+        "total_fee": float(row.total_fee or 0),
+        "pay_status": row.pay_status,
+        "pay_status_label": PAY_STATUS_LABELS.get(row.pay_status, "unknown"),
+        "pay_status_text": PAY_STATUS_TEXTS.get(row.pay_status, "未知"),
+        "order_status": ORDER_STATUS_LABELS.get(row.status, "unknown"),
+        "status": row.status,
+        "order_status_code": row.status,
+        "status_text": ORDER_STATUS_TEXTS.get(row.status, "未知状态"),
+        "abnormal_reason": row.abnormal_reason,
+        "settlement_status": row.settle_status,
+        "settlement_status_label": SETTLEMENT_STATUS_LABELS.get(row.settle_status, "unknown"),
+        "created_at": row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else "",
+        "updated_at": row.updated_at.strftime("%Y-%m-%d %H:%M:%S") if row.updated_at else "",
+    }
+
+
+def _load_order_rows_by_ids(db: Session, order_ids: list[int]) -> list[dict[str, Any]]:
+    if not order_ids:
+        return []
+
+    rows = (
+        db.query(
+            Order.id,
+            Order.order_no,
+            Order.user_id,
+            Order.operator_id,
+            Order.station_id,
+            Order.charger_id,
+            Order.vin,
+            Order.start_time,
+            Order.end_time,
+            Order.charge_duration,
+            Order.total_kwh,
+            Order.ele_fee,
+            Order.service_fee,
+            Order.total_fee,
+            Order.pay_status,
+            Order.status,
+            Order.abnormal_reason,
+            Order.settle_status,
+            Order.created_at,
+            Order.updated_at,
+            User.phone.label("user_phone"),
+            User.nickname.label("user_nickname"),
+            User.vin_code.label("user_vin_code"),
+            Operator.name.label("operator_name"),
+            Station.name.label("station_name"),
+            Charger.sn_code.label("charger_sn"),
+        )
+        .select_from(Order)
+        .outerjoin(User, Order.user_id == User.id)
+        .outerjoin(Operator, Order.operator_id == Operator.id)
+        .outerjoin(Station, Order.station_id == Station.id)
+        .outerjoin(Charger, Order.charger_id == Charger.id)
+        .filter(Order.id.in_(order_ids))
+        .all()
+    )
+
+    row_map = {row.id: _serialize_order_row(row) for row in rows}
+    return [row_map[item_id] for item_id in order_ids if item_id in row_map]
 
 
 def get_order_page(
@@ -343,7 +475,7 @@ def get_order_page(
             .all()
         )
     ]
-    items = [serialize_order(order) for order in _load_orders_by_ids(db, order_ids)]
+    items = _load_order_rows_by_ids(db, order_ids)
 
     return {
         "items": items,

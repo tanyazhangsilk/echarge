@@ -89,8 +89,8 @@ export const MENU_CONFIG = {
     {
       label: '订单监管',
       items: [
-        { index: '/admin/orders', title: '全局订单监管', icon: Tickets },
-        { index: '/admin/orders/abnormal', title: '全局异常订单监管', icon: Connection },
+        { index: '/admin/orders', title: '全局订单管理', icon: Tickets },
+        { index: '/admin/orders/abnormal', title: '异常订单管理', icon: Connection },
       ],
     },
     {
@@ -110,9 +110,9 @@ export const MENU_CONFIG = {
     {
       label: '系统配置',
       items: [
-        { index: '/admin/marketing', title: '营销合规审计', icon: Promotion },
+        { index: '/admin/marketing', title: '营销合规审核', icon: Promotion },
         { index: '/admin/settings', title: '权限控制', icon: DataAnalysis },
-        { index: '/admin/settings/params', title: '系统参数设置', icon: Setting },
+        { index: '/admin/settings/params/basic', title: '系统参数配置', icon: Setting },
       ],
     },
   ],
@@ -139,7 +139,7 @@ export const MENU_CONFIG = {
       label: '订单管理',
       items: [
         { index: '/operator/orders/history', title: '历史订单', icon: Tickets },
-        { index: '/operator/orders/realtime', title: '实时订单监控', icon: Bell },
+        { index: '/operator/orders/realtime', title: '实时订单', icon: Bell },
         { index: '/operator/orders/abnormal', title: '异常订单', icon: Connection },
       ],
     },

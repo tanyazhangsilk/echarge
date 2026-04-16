@@ -180,7 +180,12 @@ const fetchAllData = async () => {
   try {
     const [batchResp, orderResp] = await Promise.all([
       http.get('/admin/finance/settlements'),
-      http.get('/admin/orders'),
+      http.get('/admin/orders', {
+        params: {
+          page: 1,
+          page_size: 1,
+        },
+      }),
     ])
 
     const batchPayload = batchResp?.data || {}
@@ -208,23 +213,10 @@ const fetchAllData = async () => {
     }
     operatorRowsByDate.value = grouped
 
-    const allOrders = Array.isArray(orderResp?.data?.data) ? orderResp.data.data : []
-    const pendingOrders = allOrders.filter(
-      (order) =>
-        Number(order.order_status_code) === 1 &&
-        Number(order.pay_status) === 1 &&
-        Number(order.settlement_status) === 0,
-    )
-    const settledOrders = allOrders.filter(
-      (order) =>
-        Number(order.order_status_code) === 1 &&
-        Number(order.pay_status) === 1 &&
-        Number(order.settlement_status) === 1,
-    )
-
-    stats.pendingOrderCount = pendingOrders.length
-    stats.pendingAmount = pendingOrders.reduce((sum, order) => sum + Number(order.total_amount || 0), 0)
-    stats.settledAmount = settledOrders.reduce((sum, order) => sum + Number(order.total_amount || 0), 0)
+    const orderSummary = orderResp?.data?.data?.summary || {}
+    stats.pendingOrderCount = Number(orderSummary.completed_count || 0)
+    stats.pendingAmount = Number(orderSummary.total_amount || 0)
+    stats.settledAmount = batchRows.value.reduce((sum, row) => sum + Number(row.settle_amount || 0), 0)
     stats.platformFee = batchRows.value.reduce((sum, row) => sum + Number(row.platform_fee || 0), 0)
   } catch (error) {
     ElMessage.error('加载清分中心数据失败，请检查网络或后端服务')
@@ -470,7 +462,7 @@ onMounted(() => {
         type="info"
         :closable="false"
         class="mb-4"
-        title="明细用于区分运营商资格状态、批次状态与打款状态，支持论文中的业务闭环说明。"
+        title="明细展示运营商资格状态、批次状态与打款状态，便于财务复核。"
       />
 
       <el-table :data="detailRows" stripe border>

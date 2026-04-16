@@ -9,14 +9,12 @@ import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import {
   fetchOperatorRealtimeOrders,
-  finishOperatorOrder,
+  forceStopOperatorOrder,
   markOperatorOrderAbnormal,
-  startDemoCharging,
 } from '../../api/operator'
 
 const router = useRouter()
 const loading = ref(false)
-const actionLoading = ref(false)
 const errorMessage = ref('')
 const orders = ref([])
 const total = ref(0)
@@ -42,7 +40,7 @@ const stats = computed(() => [
     value: summary.total_count,
     suffix: ' 单',
     trend: '当前充电中的订单数量',
-    trendLabel: '状态变化后列表会自动更新',
+    trendLabel: '按实时状态持续更新',
     tone: 'primary',
     icon: Lightning,
   },
@@ -51,7 +49,7 @@ const stats = computed(() => [
     value: Number(summary.total_charge_amount || 0).toFixed(2),
     suffix: ' kWh',
     trend: '在充订单累计电量',
-    trendLabel: '由服务端汇总返回',
+    trendLabel: '按在充订单汇总',
     tone: 'success',
     icon: DataAnalysis,
   },
@@ -60,7 +58,7 @@ const stats = computed(() => [
     value: Number(summary.total_ele_fee || 0).toFixed(2),
     prefix: '¥',
     trend: '当前电费汇总',
-    trendLabel: '按订单实时计算',
+    trendLabel: '按在充订单实时计算',
     tone: 'warning',
     icon: Money,
   },
@@ -69,7 +67,7 @@ const stats = computed(() => [
     value: Number(summary.total_service_fee || 0).toFixed(2),
     prefix: '¥',
     trend: '当前服务费汇总',
-    trendLabel: '与电费共同组成订单总费用',
+    trendLabel: '与电费合并计入订单总费用',
     tone: 'info',
     icon: RefreshRight,
   },
@@ -100,7 +98,7 @@ const loadOrders = async () => {
       total_ele_fee: 0,
       total_service_fee: 0,
     })
-    errorMessage.value = error?.response?.data?.message || '实时订单加载失败，请稍后重试。'
+    errorMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '实时订单加载失败，请稍后重试。'
     ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
@@ -115,36 +113,21 @@ const refreshAfterMutation = async () => {
   }
 }
 
-const handleDemoStart = async () => {
-  actionLoading.value = true
+const handleForceStop = async (row) => {
   try {
-    const { data } = await startDemoCharging()
-    ElMessage.success(data.message || '实时订单已创建')
-    pagination.page = 1
-    await loadOrders()
-  } catch (error) {
-    console.error(error)
-    ElMessage.error(error?.response?.data?.message || '模拟开始充电失败')
-  } finally {
-    actionLoading.value = false
-  }
-}
-
-const handleFinish = async (row) => {
-  try {
-    await ElMessageBox.confirm(`确认结束订单 ${row.order_no} 吗？`, '结束充电', {
+    await ElMessageBox.confirm(`确认强制停止订单 ${row.order_no} 吗？`, '强制停止', {
       type: 'warning',
       confirmButtonText: '确认',
       cancelButtonText: '取消',
     })
     busyOrderId.value = row.id
-    const { data } = await finishOperatorOrder(row.id)
-    ElMessage.success(data.message || '订单已完成')
+    const { data } = await forceStopOperatorOrder(row.id)
+    ElMessage.success(data.message || '订单已强制停止')
     await refreshAfterMutation()
   } catch (error) {
     if (error !== 'cancel') {
       console.error(error)
-      ElMessage.error(error?.response?.data?.message || '结束充电失败')
+      ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '强制停止失败')
     }
   } finally {
     busyOrderId.value = null
@@ -166,7 +149,7 @@ const handleMarkAbnormal = async (row) => {
   } catch (error) {
     if (error !== 'cancel') {
       console.error(error)
-      ElMessage.error(error?.response?.data?.message || '标记异常失败')
+      ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '标记异常失败')
     }
   } finally {
     busyOrderId.value = null
@@ -200,7 +183,6 @@ onMounted(loadOrders)
       chip="实时监控"
     >
       <template #actions>
-        <el-button type="primary" :loading="actionLoading" @click="handleDemoStart">模拟开始充电</el-button>
         <el-button :icon="RefreshRight" :loading="loading" @click="loadOrders">刷新列表</el-button>
       </template>
     </PageSectionHeader>
@@ -263,10 +245,10 @@ onMounted(loadOrders)
             <el-tag type="warning">{{ row.status_text }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
-            <el-button link type="success" :loading="busyOrderId === row.id" @click="handleFinish(row)">结束充电</el-button>
+            <el-button link type="warning" :loading="busyOrderId === row.id" @click="handleForceStop(row)">强制停止</el-button>
             <el-button link type="danger" :loading="busyOrderId === row.id" @click="handleMarkAbnormal(row)">标记异常</el-button>
           </template>
         </el-table-column>

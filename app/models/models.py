@@ -117,6 +117,12 @@ class Fleet(Base, BaseModel):
 
 class Station(Base, BaseModel):
     __tablename__ = "eq_stations"
+    __table_args__ = (
+        Index("ix_eq_stations_operator_id", "operator_id"),
+        Index("ix_eq_stations_status", "status"),
+        Index("ix_eq_stations_visibility", "visibility"),
+        Index("ix_eq_stations_operator_status_visibility", "operator_id", "status", "visibility"),
+    )
 
     operator_id: Mapped[int] = mapped_column(ForeignKey("sys_operators.id"), comment="所属运营商ID")
     template_id: Mapped[int | None] = mapped_column(
@@ -140,6 +146,10 @@ class Station(Base, BaseModel):
 
 class Charger(Base, BaseModel):
     __tablename__ = "eq_chargers"
+    __table_args__ = (
+        Index("ix_eq_chargers_station_id", "station_id"),
+        Index("ix_eq_chargers_station_status", "station_id", "status"),
+    )
 
     station_id: Mapped[int] = mapped_column(ForeignKey("eq_stations.id"), comment="所属充电站ID")
     sn_code: Mapped[str] = mapped_column(String(50), unique=True, index=True, comment="充电桩序列号")
@@ -166,6 +176,10 @@ class Order(Base, BaseModel):
     __table_args__ = (
         Index("ix_trade_orders_station_id", "station_id"),
         Index("ix_trade_orders_status", "status"),
+        Index("ix_trade_orders_operator_id", "operator_id"),
+        Index("ix_trade_orders_start_time", "start_time"),
+        Index("ix_trade_orders_end_time", "end_time"),
+        Index("ix_trade_orders_operator_status_start_time", "operator_id", "status", "start_time"),
         Index("ix_trade_orders_created_at", "created_at"),
     )
 

@@ -7,8 +7,8 @@ import { ElMessage } from 'element-plus'
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
-import { fetchAdminOrders, fetchStationAudits } from '../../api/admin'
-import { fetchOperatorHistoryOrders, fetchOperatorStations } from '../../api/operator'
+import { fetchAdminOrders, fetchAdminStationOptions } from '../../api/admin'
+import { fetchOperatorHistoryOrders, fetchOperatorStationOptions } from '../../api/operator'
 import { ROLES } from '../../config/permissions'
 
 const route = useRoute()
@@ -20,6 +20,7 @@ const errorMessage = ref('')
 const orders = ref([])
 const total = ref(0)
 const stationOptions = ref([])
+const stationOptionsLoaded = ref(false)
 
 const pagination = reactive({
   page: 1,
@@ -28,6 +29,7 @@ const pagination = reactive({
 
 const filters = reactive({
   keyword: '',
+  status: '',
   stationId: '',
   dateRange: [],
 })
@@ -44,6 +46,12 @@ let searchTimer = null
 const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
 const pageTitle = computed(() => (isAdmin.value ? '订单管理' : '历史订单'))
 const pageChip = computed(() => (isAdmin.value ? '平台订单' : '订单中心'))
+const statusOptions = [
+  { label: '全部状态', value: '' },
+  { label: '充电中', value: 0 },
+  { label: '已完成', value: 1 },
+  { label: '异常结束', value: 2 },
+]
 
 const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
 
@@ -53,7 +61,7 @@ const stats = computed(() => [
     value: summary.total_count,
     suffix: ' 单',
     trend: '当前筛选条件下的完成订单',
-    trendLabel: '统计结果来自服务端分页接口',
+    trendLabel: '按筛选条件汇总',
     tone: 'primary',
     icon: Tickets,
   },
@@ -62,7 +70,7 @@ const stats = computed(() => [
     value: Number(summary.total_charge_amount || 0).toFixed(2),
     suffix: ' kWh',
     trend: '已完成订单累计充电量',
-    trendLabel: '按筛选条件实时汇总',
+    trendLabel: '统计周期内累计值',
     tone: 'success',
     icon: DataAnalysis,
   },
@@ -80,7 +88,7 @@ const stats = computed(() => [
     value: Number(summary.total_service_fee || 0).toFixed(2),
     prefix: '¥',
     trend: '服务费汇总',
-    trendLabel: '便于对账与复核',
+    trendLabel: '用于财务对账',
     tone: 'info',
     icon: RefreshRight,
   },
@@ -93,7 +101,7 @@ const buildQueryParams = () => ({
   station_id: filters.stationId || undefined,
   start_date: filters.dateRange?.[0] || undefined,
   end_date: filters.dateRange?.[1] || undefined,
-  status: isAdmin.value ? 1 : undefined,
+  status: isAdmin.value ? (filters.status === '' ? undefined : Number(filters.status)) : 1,
 })
 
 const loadOrders = async () => {
@@ -120,7 +128,7 @@ const loadOrders = async () => {
       total_amount: 0,
       total_service_fee: 0,
     })
-    errorMessage.value = error?.response?.data?.message || '历史订单加载失败，请稍后重试。'
+    errorMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '历史订单加载失败，请稍后重试。'
     ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
@@ -128,22 +136,25 @@ const loadOrders = async () => {
 }
 
 const loadStationOptions = async () => {
+  if (stationOptionsLoaded.value || stationLoading.value) {
+    return
+  }
   stationLoading.value = true
   try {
     if (isAdmin.value) {
-      const { data } = await fetchStationAudits()
+      const { data } = await fetchAdminStationOptions()
       stationOptions.value = (data.data || []).map((item) => ({
         label: item.station_name,
         value: item.id,
       }))
-      return
+    } else {
+      const { data } = await fetchOperatorStationOptions()
+      stationOptions.value = (data.data || []).map((item) => ({
+        label: item.station_name,
+        value: item.id,
+      }))
     }
-
-    const { data } = await fetchOperatorStations({ page: 1, page_size: 100 })
-    stationOptions.value = (data.data?.items || []).map((item) => ({
-      label: item.station_name,
-      value: item.id,
-    }))
+    stationOptionsLoaded.value = true
   } catch (error) {
     console.error(error)
     stationOptions.value = []
@@ -154,6 +165,7 @@ const loadStationOptions = async () => {
 
 const resetFilters = () => {
   filters.keyword = ''
+  filters.status = ''
   filters.stationId = ''
   filters.dateRange = []
 }
@@ -174,7 +186,7 @@ const handleSizeChange = (size) => {
 }
 
 watch(
-  () => [filters.keyword, filters.stationId, JSON.stringify(filters.dateRange)],
+  () => [filters.keyword, filters.status, filters.stationId, JSON.stringify(filters.dateRange)],
   () => {
     if (searchTimer) {
       clearTimeout(searchTimer)
@@ -186,8 +198,8 @@ watch(
   },
 )
 
-onMounted(async () => {
-  await Promise.all([loadOrders(), loadStationOptions()])
+onMounted(() => {
+  loadOrders()
 })
 
 onBeforeUnmount(() => {
@@ -239,12 +251,23 @@ onBeforeUnmount(() => {
       <div class="filter-row">
         <el-input v-model="filters.keyword" clearable placeholder="订单号 / 用户账号 / 昵称 / VIN" style="width: 320px" />
         <el-select
+          v-if="isAdmin"
+          v-model="filters.status"
+          clearable
+          placeholder="选择状态"
+          style="width: 160px"
+        >
+          <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+        <el-select
           v-model="filters.stationId"
           clearable
           filterable
           :loading="stationLoading"
           placeholder="选择电站"
           style="width: 220px"
+          @visible-change="(visible) => visible && loadStationOptions()"
+          @focus="loadStationOptions"
         >
           <el-option v-for="item in stationOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>

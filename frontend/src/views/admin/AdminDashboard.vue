@@ -420,7 +420,7 @@ onMounted(loadData)
         <div class="panel-heading">
           <div>
             <h3 class="panel-heading__title">平台公告与动态</h3>
-            <p class="panel-heading__desc">用于论文截图展示平台治理闭环，也便于后续接入真实消息流。</p>
+            <p class="panel-heading__desc">展示平台治理动态、运营提醒与系统公告。</p>
           </div>
         </div>
 

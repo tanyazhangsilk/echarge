@@ -12,8 +12,8 @@ const goSettings = () => {
   <div class="page-shell">
     <el-result
       icon="info"
-      title="页面已迁移"
-      sub-title="请前往系统设置页面维护平台参数。"
+      title="系统设置"
+      sub-title="请在系统设置中维护平台参数与规则配置。"
     >
       <template #extra>
         <el-button type="primary" @click="goSettings">进入系统设置</el-button>

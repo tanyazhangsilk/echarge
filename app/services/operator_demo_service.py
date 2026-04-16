@@ -268,6 +268,10 @@ def serialize_operator_station(
     price_template_name: str | None = None,
 ) -> dict[str, Any]:
     resolved_charger_count = charger_count if charger_count is not None else len(station.chargers or [])
+    # 未审核通过的电站不允许以公开状态展示
+    resolved_visibility = station.visibility
+    if station.status != 0 and resolved_visibility == "public":
+        resolved_visibility = "private"
     return {
         "id": station.id,
         "station_name": station.name,
@@ -275,8 +279,8 @@ def serialize_operator_station(
         "address": infer_station_address(station),
         "status": station.status,
         "status_text": station_status_text(station.status),
-        "visibility": station.visibility,
-        "visibility_text": visibility_text(station.visibility),
+        "visibility": resolved_visibility,
+        "visibility_text": visibility_text(resolved_visibility),
         "charger_count": int(resolved_charger_count),
         "price_template_id": station.template_id,
         "price_template_name": (
@@ -351,7 +355,10 @@ def get_operator_station_page(
         query = query.filter(Station.status == status)
 
     if visibility and visibility.strip():
-        query = query.filter(Station.visibility == visibility.strip().lower())
+        normalized_visibility = visibility.strip().lower()
+        query = query.filter(Station.visibility == normalized_visibility)
+        if normalized_visibility == "public":
+            query = query.filter(Station.status == 0)
 
     total = query.order_by(None).count()
     rows = (
@@ -395,3 +402,145 @@ def get_operator_station_page(
             "private_count": int(summary_row[3] or 0),
         },
     }
+
+
+def _station_address_text(station_id: int, station_name: str) -> str:
+    districts = ["南山区", "福田区", "宝安区", "龙华区", "龙岗区"]
+    district = districts[station_id % len(districts)]
+    return f"深圳市{district}示范路{station_id}号 · {station_name}"
+
+
+def get_operator_station_page_fast(
+    db: Session,
+    *,
+    operator_id: int,
+    page: int = 1,
+    page_size: int = 10,
+    keyword: str | None = None,
+    status: int | None = None,
+    visibility: str | None = None,
+) -> dict[str, Any]:
+    safe_page, safe_page_size = _normalize_page(page, page_size)
+    charger_count_subquery = (
+        db.query(
+            Charger.station_id.label("station_id"),
+            func.count(Charger.id).label("charger_count"),
+        )
+        .group_by(Charger.station_id)
+        .subquery()
+    )
+
+    query = (
+        db.query(
+            Station.id.label("station_id"),
+            Station.name.label("station_name"),
+            Station.status.label("station_status"),
+            Station.visibility.label("station_visibility"),
+            Station.template_id.label("price_template_id"),
+            Station.created_at.label("created_at"),
+            Station.updated_at.label("updated_at"),
+            func.coalesce(charger_count_subquery.c.charger_count, 0).label("charger_count"),
+            Operator.name.label("operator_name"),
+            PriceTemplate.name.label("template_name"),
+        )
+        .join(Operator, Station.operator_id == Operator.id)
+        .outerjoin(PriceTemplate, Station.template_id == PriceTemplate.id)
+        .outerjoin(charger_count_subquery, charger_count_subquery.c.station_id == Station.id)
+        .filter(Station.operator_id == operator_id, Station.is_deleted.is_(False))
+    )
+
+    if keyword and keyword.strip():
+        search = f"%{keyword.strip()}%"
+        query = query.filter(
+            or_(
+                Station.name.like(search),
+                Operator.name.like(search),
+                PriceTemplate.name.like(search),
+            )
+        )
+
+    if status is not None:
+        query = query.filter(Station.status == status)
+
+    if visibility and visibility.strip():
+        normalized_visibility = visibility.strip().lower()
+        query = query.filter(Station.visibility == normalized_visibility)
+        if normalized_visibility == "public":
+            query = query.filter(Station.status == 0)
+
+    total = query.order_by(None).count()
+    rows = (
+        query.order_by(Station.updated_at.desc(), Station.id.desc())
+        .offset((safe_page - 1) * safe_page_size)
+        .limit(safe_page_size)
+        .all()
+    )
+
+    summary_row = (
+        db.query(
+            func.count(Station.id),
+            func.coalesce(func.sum(case((Station.status == 0, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Station.status == 3, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Station.visibility == "private", 1), else_=0)), 0),
+        )
+        .filter(Station.operator_id == operator_id, Station.is_deleted.is_(False))
+        .one()
+    )
+
+    items = []
+    for row in rows:
+        resolved_visibility = row.station_visibility
+        if row.station_status != 0 and resolved_visibility == "public":
+            resolved_visibility = "private"
+
+        items.append(
+            {
+                "id": row.station_id,
+                "station_name": row.station_name,
+                "operator_name": row.operator_name or "",
+                "address": _station_address_text(row.station_id, row.station_name),
+                "status": row.station_status,
+                "status_text": station_status_text(row.station_status),
+                "visibility": resolved_visibility,
+                "visibility_text": visibility_text(resolved_visibility),
+                "charger_count": int(row.charger_count or 0),
+                "price_template_id": row.price_template_id,
+                "price_template_name": row.template_name or "未绑定模板",
+                "created_at": _now_text(row.created_at),
+                "updated_at": _now_text(row.updated_at),
+            }
+        )
+
+    return {
+        "items": items,
+        "total": int(total),
+        "page": safe_page,
+        "page_size": safe_page_size,
+        "summary": {
+            "total_count": int(summary_row[0] or 0),
+            "online_count": int(summary_row[1] or 0),
+            "pending_count": int(summary_row[2] or 0),
+            "private_count": int(summary_row[3] or 0),
+        },
+    }
+
+
+def get_operator_station_options(
+    db: Session,
+    *,
+    operator_id: int,
+    keyword: str | None = None,
+) -> list[dict[str, Any]]:
+    query = (
+        db.query(
+            Station.id.label("id"),
+            Station.name.label("station_name"),
+        )
+        .filter(Station.operator_id == operator_id, Station.is_deleted.is_(False))
+        .order_by(Station.updated_at.desc(), Station.id.desc())
+    )
+
+    if keyword and keyword.strip():
+        query = query.filter(Station.name.like(f"%{keyword.strip()}%"))
+
+    return [{"id": row.id, "station_name": row.station_name} for row in query.all()]
