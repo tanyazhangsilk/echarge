@@ -17,24 +17,7 @@ http.interceptors.request.use((config) => {
   return config
 })
 
-http.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    const config = error?.config
-    const isTimeout = error?.code === 'ECONNABORTED'
-    const canRetry =
-      config &&
-      String(config.method || 'get').toLowerCase() === 'get' &&
-      config.retry === true &&
-      !config.__retryOnce
-
-    if (canRetry && isTimeout) {
-      config.__retryOnce = true
-      return http(config)
-    }
-    return Promise.reject(error)
-  },
-)
+http.interceptors.response.use((response) => response, (error) => Promise.reject(error))
 
 export default http
 

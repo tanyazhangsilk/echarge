@@ -7,6 +7,7 @@ import { DataAnalysis, Lightning, Money, Plus, RefreshRight, Tickets } from '@el
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
+import ErrorBlock from '../../components/console/ErrorBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import {
   fetchOperatorOrderStartOptions,
@@ -54,7 +55,7 @@ const queryParams = computed(() => ({ page: pagination.page, page_size: paginati
 const listCacheKey = computed(() => buildRequestCacheKey('/operator/orders/realtime', queryParams.value))
 const startCacheKey = computed(() => buildRequestCacheKey('/operator/orders/start-options', { scope: 'start-options' }))
 const manualStations = computed(() => startStations.value.filter((item) => Number(item.status) === 0 || item.is_local_draft))
-const sourceTypeLabel = computed(() => (startMode.value === 'manual_demo' ? '手动模拟充电' : '扫码充电'))
+const sourceTypeLabel = computed(() => (startMode.value === 'manual_demo' ? '模拟开始充电' : '扫码充电'))
 
 const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
 
@@ -65,21 +66,20 @@ const stats = computed(() => [
   { label: '实时服务费', value: Number(summary.total_service_fee || 0).toFixed(2), prefix: '¥', trend: '实时服务费汇总', trendLabel: '与电费共同构成总额', tone: 'info', icon: Tickets },
 ])
 
-const applyPayload = (payload = {}, fromCache = false) => {
+const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) => {
   orders.value = payload.items || []
   total.value = Number(payload.total || orders.value.length)
   pagination.page = Number(payload.page || pagination.page)
   pagination.pageSize = Number(payload.page_size || pagination.pageSize)
   Object.assign(summary, payload.summary || {})
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '缓存结果' : '最近刷新'} ${formatCacheUpdatedAt(Date.now())}`
+  cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(updatedAt)}`
 }
 
 const loadOrders = async ({ background = false } = {}) => {
   const cached = getRequestCache(listCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
-    applyPayload(cached.value, true)
-    cacheLabel.value = `缓存结果 ${formatCacheUpdatedAt(cached.updatedAt)}`
+    applyPayload(cached.value, true, cached.updatedAt)
   }
 
   loading.value = !cached || !background
@@ -88,16 +88,15 @@ const loadOrders = async ({ background = false } = {}) => {
   try {
     const { data } = await fetchOperatorRealtimeOrders(queryParams.value)
     const payload = data?.data || getDemoOrderListPayload('realtime')
-    applyPayload(payload)
+    applyPayload(payload, false, Date.now())
     setRequestCache(listCacheKey.value, payload)
-    cacheLabel.value = `最近刷新 ${formatCacheUpdatedAt(Date.now())}`
   } catch (error) {
     const demoPayload = getDemoOrderListPayload('realtime')
     if (!orders.value.length) {
-      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize })
-      cacheLabel.value = '演示数据'
+      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, false, Date.now())
+      cacheLabel.value = '当前内容可用'
     }
-    errorMessage.value = cached ? '已显示最近一次结果，后台刷新失败' : '实时订单已切换为演示数据'
+    errorMessage.value = cached ? '最新实时订单暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可用的实时订单。'
   } finally {
     loading.value = false
   }
@@ -114,7 +113,9 @@ const applyStartOptions = (payload = {}, fromCache = false) => {
     null
   startChargers.value = (payload.chargers || []).filter((item) => ![2, 3].includes(Number(item.status)))
   startForm.charger_id = startChargers.value[0]?.id || null
-  cacheLabel.value = `${fromCache ? '缓存结果' : cacheLabel.value || '最近刷新'}`
+  if (!cacheLabel.value) {
+    cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(Date.now())}`
+  }
 }
 
 const loadChargersByStation = async (stationId) => {
@@ -197,7 +198,7 @@ const submitStartOrder = async () => {
       user: user || demoStartUsers[0],
       sourceType: startForm.source_type,
     })
-    ElMessage.success('实时订单已按演示链路创建')
+    ElMessage.success('实时订单已创建')
   } finally {
     startLoading.value = false
     startDialogVisible.value = false
@@ -214,7 +215,7 @@ const handleFinish = async (row) => {
   } catch (error) {
     if (error !== 'cancel') {
       finishLocalDemoOrder(row.id)
-      ElMessage.success('订单已按演示链路转入历史订单')
+      ElMessage.success('订单已转入历史订单')
     }
   } finally {
     busyOrderId.value = null
@@ -235,7 +236,7 @@ const handleMarkAbnormal = async (row) => {
     if (error !== 'cancel') {
       const reason = error?.value?.trim?.() || '会话异常结束'
       markLocalDemoOrderAbnormal(row.id, reason)
-      ElMessage.success('订单已按演示链路转入异常订单')
+      ElMessage.success('订单已转入异常订单')
     }
   } finally {
     busyOrderId.value = null
@@ -268,10 +269,10 @@ onActivated(() => loadOrders({ background: true }))
 
 <template>
   <div class="page-shell realtime-page">
-    <PageSectionHeader eyebrow="订单中心" title="实时订单" description="监控当前充电中的订单，并支持手动模拟与扫码充电入口。" chip="实时监控">
+    <PageSectionHeader eyebrow="订单中心" title="实时订单" description="监控当前充电中的订单，并支持模拟开始与扫码充电入口。" chip="实时监控">
       <template #actions>
         <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
-        <el-button type="primary" :icon="Plus" @click="openStartDialog('manual_demo')">手动模拟充电</el-button>
+        <el-button type="primary" :icon="Plus" @click="openStartDialog('manual_demo')">模拟开始充电</el-button>
         <el-button type="primary" plain :icon="Tickets" @click="openStartDialog('qr_code')">扫码充电</el-button>
         <el-button :icon="RefreshRight" :loading="loading" @click="loadOrders()">刷新列表</el-button>
       </template>
@@ -289,7 +290,12 @@ onActivated(() => loadOrders({ background: true }))
         </div>
       </div>
 
-      <el-alert v-if="errorMessage" :title="errorMessage" type="warning" show-icon :closable="false" class="panel-alert" />
+      <ErrorBlock
+        v-if="errorMessage"
+        title="实时订单已恢复显示"
+        :description="errorMessage"
+        @retry="loadOrders()"
+      />
 
       <TableSkeletonBlock v-if="loading && !tableReady" :rows="6" :columns="8" />
 
@@ -334,7 +340,7 @@ onActivated(() => loadOrders({ background: true }))
           </el-select>
         </el-form-item>
         <el-form-item label="订单来源">
-          <el-tag type="primary">{{ startMode === 'manual_demo' ? '手动模拟' : '扫码充电' }}</el-tag>
+          <el-tag type="primary">{{ startMode === 'manual_demo' ? '模拟发起' : '扫码充电' }}</el-tag>
         </el-form-item>
       </el-form>
       <template #footer>

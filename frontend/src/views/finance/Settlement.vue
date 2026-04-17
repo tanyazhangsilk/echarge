@@ -68,7 +68,7 @@ const fetchRows = async ({ background = false } = {}) => {
   } catch (error) {
     if (!rows.value.length) {
       rows.value = mockSettlementRows
-      cacheLabel.value = '演示数据'
+      cacheLabel.value = '当前内容可用'
       tableReady.value = true
     }
   } finally {

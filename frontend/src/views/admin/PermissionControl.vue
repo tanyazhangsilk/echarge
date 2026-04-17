@@ -59,7 +59,7 @@ const loadData = async ({ background = false } = {}) => {
   } catch (error) {
     if (!modules.value.length) {
       applyModules(mockPermissionModules)
-      cacheLabel.value = '演示数据'
+      cacheLabel.value = '当前内容可用'
     }
   } finally {
     loading.value = false

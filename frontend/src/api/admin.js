@@ -15,7 +15,7 @@ export const updateSystemParams = (payload) => http.put('/admin/settings/params'
 export const fetchAdminPermissionSettings = () => http.get('/admin/settings/permissions')
 export const updateAdminPermissionSettings = (payload) => http.put('/admin/settings/permissions', payload)
 
-export const fetchStationAudits = () => http.get('/admin/audit/stations')
+export const fetchStationAudits = (params = {}) => http.get('/admin/audit/stations', { params })
 export const processStationAudit = (stationId, payload) => http.post(`/admin/audit/stations/${stationId}/process`, payload)
 export const fetchAdminStationOptions = (params = {}) => http.get('/admin/stations/options', { params })
 

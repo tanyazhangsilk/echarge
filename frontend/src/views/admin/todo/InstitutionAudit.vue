@@ -29,7 +29,7 @@ const goBack = () => {
     <div class="placeholder-icon">
       <IconTool :size="28" />
     </div>
-    <p class="placeholder-eyebrow">Coming Soon</p>
+    <p class="placeholder-eyebrow">业务筹备中</p>
     <h1 class="placeholder-title">{{ title }}</h1>
     <p class="placeholder-description">{{ description }}</p>
 
@@ -72,8 +72,7 @@ const goBack = () => {
   margin: 18px 0 8px;
   color: var(--color-text-3);
   font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
 }
 
 .placeholder-title {

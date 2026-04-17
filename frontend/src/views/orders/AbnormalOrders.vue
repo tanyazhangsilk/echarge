@@ -7,6 +7,7 @@ import { ElMessage } from 'element-plus'
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
+import ErrorBlock from '../../components/console/ErrorBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import { fetchAdminAbnormalOrders } from '../../api/admin'
 import { fetchOperatorAbnormalOrders } from '../../api/operator'
@@ -50,21 +51,20 @@ const stats = computed(() => [
   { label: '异常单量', value: summary.abnormal_count, suffix: ' 单', trend: '已归档异常订单数', trendLabel: '用于安排复核优先级', tone: 'primary', icon: RefreshRight },
 ])
 
-const applyPayload = (payload = {}, fromCache = false) => {
+const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) => {
   orders.value = payload.items || []
   total.value = Number(payload.total || orders.value.length)
   pagination.page = Number(payload.page || pagination.page)
   pagination.pageSize = Number(payload.page_size || pagination.pageSize)
   Object.assign(summary, payload.summary || {})
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '缓存结果' : '最近刷新'} ${formatCacheUpdatedAt(Date.now())}`
+  cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(updatedAt)}`
 }
 
 const loadOrders = async ({ background = false } = {}) => {
   const cached = getRequestCache(listCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
-    applyPayload(cached.value, true)
-    cacheLabel.value = `缓存结果 ${formatCacheUpdatedAt(cached.updatedAt)}`
+    applyPayload(cached.value, true, cached.updatedAt)
   }
 
   loading.value = !cached || !background
@@ -73,17 +73,16 @@ const loadOrders = async ({ background = false } = {}) => {
   try {
     const response = isAdmin.value ? await fetchAdminAbnormalOrders(queryParams.value) : await fetchOperatorAbnormalOrders(queryParams.value)
     const payload = response.data.data || {}
-    applyPayload(payload)
+    applyPayload(payload, false, Date.now())
     setRequestCache(listCacheKey.value, payload)
   } catch (error) {
-    console.error(error)
     const demoPayload = getDemoOrderListPayload('abnormal')
     if (!orders.value.length) {
-      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, false)
-      cacheLabel.value = '演示数据'
+      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, false, Date.now())
+      cacheLabel.value = '当前内容可用'
     }
-    errorMessage.value = cached ? '已显示最近一次结果，后台刷新失败' : '异常订单接口暂不可用，已切换为演示数据'
-    if (!cached) ElMessage.warning(errorMessage.value)
+    errorMessage.value = cached ? '最新异常订单暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可用的异常订单。'
+    if (!cached) ElMessage.warning('异常订单暂未拉取成功，已恢复可展示内容。')
   } finally {
     loading.value = false
   }
@@ -152,7 +151,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <el-alert v-if="errorMessage" :title="errorMessage" type="warning" show-icon :closable="false" class="panel-alert" />
+      <ErrorBlock
+        v-if="errorMessage"
+        title="异常订单已恢复显示"
+        :description="errorMessage"
+        @retry="loadOrders()"
+      />
 
       <TableSkeletonBlock v-if="loading && !tableReady" :rows="6" :columns="8" />
 

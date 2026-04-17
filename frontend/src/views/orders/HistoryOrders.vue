@@ -7,12 +7,14 @@ import { ElMessage } from 'element-plus'
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
+import ErrorBlock from '../../components/console/ErrorBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import { fetchAdminOrders, fetchAdminStationOptions } from '../../api/admin'
 import { fetchOperatorHistoryOrders, fetchOperatorStationOptions } from '../../api/operator'
 import { ROLES } from '../../config/permissions'
 import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
 import { getDemoOrderListPayload } from '../../utils/demoOrderAdapter'
+import { getFallbackStationOptions } from '../../utils/stationFallbacks'
 
 const route = useRoute()
 const router = useRouter()
@@ -64,21 +66,20 @@ const stats = computed(() => [
   { label: '累计服务费', value: Number(summary.total_service_fee || 0).toFixed(2), prefix: '¥', trend: '服务费累计汇总', trendLabel: '便于财务核对', tone: 'info', icon: RefreshRight },
 ])
 
-const applyPayload = (payload = {}, fromCache = false) => {
+const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) => {
   orders.value = payload.items || []
   total.value = Number(payload.total || orders.value.length)
   pagination.page = Number(payload.page || pagination.page)
   pagination.pageSize = Number(payload.page_size || pagination.pageSize)
   Object.assign(summary, payload.summary || {})
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '缓存结果' : '最近刷新'} ${formatCacheUpdatedAt(Date.now())}`
+  cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(updatedAt)}`
 }
 
 const loadOrders = async ({ background = false } = {}) => {
   const cached = getRequestCache(listCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
-    applyPayload(cached.value, true)
-    cacheLabel.value = `缓存结果 ${formatCacheUpdatedAt(cached.updatedAt)}`
+    applyPayload(cached.value, true, cached.updatedAt)
   }
 
   loading.value = !cached || !background
@@ -87,17 +88,16 @@ const loadOrders = async ({ background = false } = {}) => {
   try {
     const response = isAdmin.value ? await fetchAdminOrders(queryParams.value) : await fetchOperatorHistoryOrders(queryParams.value)
     const payload = response.data.data || {}
-    applyPayload(payload)
+    applyPayload(payload, false, Date.now())
     setRequestCache(listCacheKey.value, payload)
   } catch (error) {
-    console.error(error)
     const demoPayload = getDemoOrderListPayload('history')
     if (!orders.value.length) {
-      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, false)
-      cacheLabel.value = '演示数据'
+      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, false, Date.now())
+      cacheLabel.value = '当前内容可用'
     }
-    errorMessage.value = cached ? '已显示最近一次结果，后台刷新失败' : '历史订单接口暂不可用，已切换为演示数据'
-    if (!cached) ElMessage.warning(errorMessage.value)
+    errorMessage.value = cached ? '最新订单暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可用的历史订单。'
+    if (!cached) ElMessage.warning('历史订单暂未拉取成功，已恢复可展示内容。')
   } finally {
     loading.value = false
   }
@@ -111,8 +111,8 @@ const loadStationOptions = async () => {
     stationOptions.value = (data.data || []).map((item) => ({ label: item.station_name, value: item.id }))
     stationOptionsLoaded.value = true
   } catch (error) {
-    console.error(error)
-    stationOptions.value = []
+    stationOptions.value = getFallbackStationOptions().map((item) => ({ label: item.station_name, value: item.id }))
+    stationOptionsLoaded.value = true
   } finally {
     stationLoading.value = false
   }
@@ -187,7 +187,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <el-alert v-if="errorMessage" :title="errorMessage" type="warning" show-icon :closable="false" class="panel-alert" />
+      <ErrorBlock
+        v-if="errorMessage"
+        title="历史订单已恢复显示"
+        :description="errorMessage"
+        @retry="loadOrders()"
+      />
 
       <TableSkeletonBlock v-if="loading && !tableReady" :rows="6" :columns="9" />
 

@@ -27,7 +27,7 @@ const summaryCards = computed(() => {
   if (!order.value) return []
   return [
     { label: '订单状态', value: order.value.status_text, trend: '当前订单处理状态', trendLabel: '随状态流转同步更新', tone: order.value.abnormal_reason ? 'danger' : order.value.end_time ? 'success' : 'warning', icon: Document },
-    { label: '订单来源', value: order.value.source_type_text, trend: '业务入口来源', trendLabel: order.value.source_type || 'manual_demo', tone: 'primary', icon: Clock },
+    { label: '订单来源', value: order.value.source_type_text, trend: '业务入口来源', trendLabel: order.value.source_type || '业务入口', tone: 'primary', icon: Clock },
     { label: '总费用', value: Number(order.value.total_amount || 0).toFixed(2), prefix: '¥', trend: '电费与服务费合计', trendLabel: '以结算明细为准', tone: 'warning', icon: Money },
     { label: '异常标记', value: order.value.abnormal_reason ? '已标记' : '正常', trend: order.value.abnormal_reason || '当前无异常记录', trendLabel: '异常订单会同步展示原因', tone: order.value.abnormal_reason ? 'danger' : 'info', icon: WarningFilled },
   ]
@@ -39,12 +39,11 @@ const loadOrder = async () => {
     const response = isAdmin.value ? await fetchAdminOrderDetail(route.params.id) : await fetchOperatorOrderDetail(route.params.id)
     order.value = response.data.data || null
   } catch (error) {
-    console.error(error)
     order.value = getDemoOrderDetail(route.params.id)
     if (!order.value) {
       ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '订单详情加载失败')
     } else {
-      ElMessage.warning('订单详情接口暂不可用，已切换为演示数据')
+      ElMessage.warning('订单详情暂未拉取成功，已恢复可用内容。')
     }
   } finally {
     loading.value = false

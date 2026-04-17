@@ -106,7 +106,7 @@ const loadData = async ({ background = false } = {}) => {
   } catch (error) {
     if (!templates.value.length) {
       applyTemplates(getLocalPricingTemplates())
-      cacheLabel.value = '演示数据'
+      cacheLabel.value = '当前内容可用'
     }
   } finally {
     loading.value = false

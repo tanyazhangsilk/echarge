@@ -7,6 +7,7 @@ import { CircleCheck, Lightning, Plus, RefreshRight, Tickets, WarningFilled } fr
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
+import ErrorBlock from '../../components/console/ErrorBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import {
   batchCreateStationChargers,
@@ -28,6 +29,7 @@ const submitLoading = ref(false)
 const batchSubmitting = ref(false)
 const tableReady = ref(false)
 const cacheLabel = ref('')
+const errorMessage = ref('')
 
 const stations = ref([])
 const chargers = ref([])
@@ -56,7 +58,7 @@ const chargerCacheKey = computed(() => buildRequestCacheKey(`/operator/stations/
 
 const chargerStats = computed(() => [
   { label: '电桩总数', value: chargers.value.length, suffix: ' 台', trend: '当前电站全部设备', trendLabel: '支持新增与批量生成', tone: 'primary', icon: Lightning },
-  { label: '空闲可用', value: chargers.value.filter((item) => Number(item.status) === 0).length, suffix: ' 台', trend: '可立即发起充电', trendLabel: '适合扫码与手动模拟', tone: 'success', icon: CircleCheck },
+  { label: '空闲可用', value: chargers.value.filter((item) => Number(item.status) === 0).length, suffix: ' 台', trend: '可立即发起充电', trendLabel: '可用于扫码与人工发起', tone: 'success', icon: CircleCheck },
   { label: '充电中', value: chargers.value.filter((item) => Number(item.status) === 1).length, suffix: ' 台', trend: '当前被订单占用', trendLabel: '与实时订单联动展示', tone: 'warning', icon: Tickets },
   { label: '故障 / 停用', value: chargers.value.filter((item) => [2, 3].includes(Number(item.status))).length, suffix: ' 台', trend: '需跟进处理', trendLabel: '支持直接调整状态', tone: 'danger', icon: WarningFilled },
 ])
@@ -87,7 +89,7 @@ const loadStations = async ({ background = false } = {}) => {
     if (!selectedStationId.value && stations.value.length) {
       selectedStationId.value = String(route.query.stationId || '') || String(stations.value[0].id)
     }
-    cacheLabel.value = `缓存结果 ${formatCacheUpdatedAt(cached.updatedAt)}`
+    cacheLabel.value = `最近可用数据 ${formatCacheUpdatedAt(cached.updatedAt)}`
   }
 
   stationLoading.value = !cached || !background
@@ -101,12 +103,12 @@ const loadStations = async ({ background = false } = {}) => {
       selectedStationId.value = String(items[0].id)
     }
     setRequestCache(stationCacheKey.value, items)
-    cacheLabel.value = `最近刷新 ${formatCacheUpdatedAt(Date.now())}`
+    cacheLabel.value = `已更新 ${formatCacheUpdatedAt(Date.now())}`
   } catch (error) {
     if (!stations.value.length) {
       stations.value = getFallbackStationOptions()
       selectedStationId.value = String(route.query.stationId || stations.value[0]?.id || '')
-      cacheLabel.value = '演示数据'
+      cacheLabel.value = '当前内容可用'
     }
   } finally {
     stationLoading.value = false
@@ -116,7 +118,7 @@ const loadStations = async ({ background = false } = {}) => {
 const applyChargers = (remoteRows = [], fromCache = false) => {
   chargers.value = mergeChargersWithLocal(selectedStationId.value, remoteRows)
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '缓存结果' : '最近刷新'} ${formatCacheUpdatedAt(Date.now())}`
+  cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(Date.now())}`
 }
 
 const loadChargers = async ({ background = false } = {}) => {
@@ -128,21 +130,23 @@ const loadChargers = async ({ background = false } = {}) => {
   const cached = getRequestCache(chargerCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
     applyChargers(cached.value, true)
-    cacheLabel.value = `缓存结果 ${formatCacheUpdatedAt(cached.updatedAt)}`
+    cacheLabel.value = `最近可用数据 ${formatCacheUpdatedAt(cached.updatedAt)}`
   }
 
   loading.value = !cached || !background
+  errorMessage.value = ''
   try {
     const { data } = await fetchStationChargers(selectedStationId.value)
     const rows = Array.isArray(data?.data) ? data.data : []
     applyChargers(rows)
     setRequestCache(chargerCacheKey.value, rows)
-    cacheLabel.value = `最近刷新 ${formatCacheUpdatedAt(Date.now())}`
+    cacheLabel.value = `已更新 ${formatCacheUpdatedAt(Date.now())}`
   } catch (error) {
-    applyChargers([], !cached)
+    applyChargers(cached?.value || [], !cached)
     if (!cached) {
-      cacheLabel.value = '本地演示数据'
+      cacheLabel.value = '当前内容可用'
     }
+    errorMessage.value = cached ? '最新电桩信息暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可操作的电桩内容。'
   } finally {
     loading.value = false
   }
@@ -179,7 +183,7 @@ const submitAddCharger = async () => {
     ElMessage.success(data?.message || '电桩新增成功')
   } catch (error) {
     addLocalCharger(selectedStation.value, addForm)
-    ElMessage.success('电桩已先按演示配置加入当前电站')
+    ElMessage.success('电桩已加入当前站点')
   } finally {
     submitLoading.value = false
     addDialogVisible.value = false
@@ -212,7 +216,7 @@ const submitBatchCreate = async () => {
     ElMessage.success(data?.message || '批量生成成功')
   } catch (error) {
     batchAddLocalChargers(selectedStation.value, batchForm)
-    ElMessage.success('已生成本地演示电桩')
+    ElMessage.success('已批量生成电桩')
   } finally {
     batchSubmitting.value = false
     batchDialogVisible.value = false
@@ -257,7 +261,7 @@ onActivated(() => {
           <el-option v-for="item in stations" :key="item.id" :label="`${item.station_name} / ${item.status_text}`" :value="String(item.id)" />
         </el-select>
         <el-button type="primary" :icon="Plus" @click="openAddDialog">新增电桩</el-button>
-        <el-button type="primary" plain :icon="Tickets" @click="openBatchDialog">批量生成演示电桩</el-button>
+        <el-button type="primary" plain :icon="Tickets" @click="openBatchDialog">批量生成电桩</el-button>
         <el-button :icon="RefreshRight" :loading="loading" @click="loadChargers()">刷新</el-button>
       </template>
     </PageSectionHeader>
@@ -285,6 +289,13 @@ onActivated(() => {
           <p class="panel-heading__desc">按电站查看电桩编号、类型、功率和当前状态。</p>
         </div>
       </div>
+
+      <ErrorBlock
+        v-if="errorMessage"
+        title="电桩列表已恢复显示"
+        :description="errorMessage"
+        @retry="loadChargers()"
+      />
 
       <TableSkeletonBlock v-if="loading && !tableReady" :rows="6" :columns="5" />
 
@@ -334,7 +345,7 @@ onActivated(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="batchDialogVisible" width="520px" title="批量生成演示电桩">
+    <el-dialog v-model="batchDialogVisible" width="520px" title="批量生成电桩">
       <el-form label-width="96px">
         <el-form-item label="生成数量"><el-input-number v-model="batchForm.count" :min="1" :max="50" style="width: 100%" /></el-form-item>
         <el-form-item label="电桩类型">

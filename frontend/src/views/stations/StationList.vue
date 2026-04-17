@@ -7,6 +7,7 @@ import { Connection, Grid, OfficeBuilding, Plus, RefreshRight, SetUp, View } fro
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
+import ErrorBlock from '../../components/console/ErrorBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import {
   applyOperatorStation,
@@ -60,6 +61,15 @@ const applyForm = reactive({
   station_remark: '',
   planned_charger_count: 4,
   total_power_kw: 240,
+  parking_slot_count: 18,
+  service_radius_km: 3,
+  site_owner: '',
+  grid_capacity_remark: '',
+  construction_phase: '待审核后排期建设',
+  support_vehicle_types_text: '',
+  facility_tags_text: '',
+  safety_contact_name: '',
+  safety_contact_phone: '',
   cover_image: '',
   site_photos_text: '',
   qualification_remark: '',
@@ -85,7 +95,7 @@ const visibilityOptions = [
 ]
 
 const stats = computed(() => [
-  { label: '电站总数', value: summary.total_count, suffix: ' 座', trend: '当前主体全部电站', trendLabel: '含本地申请与演示站点', tone: 'primary', icon: OfficeBuilding },
+  { label: '电站总数', value: summary.total_count, suffix: ' 座', trend: '当前主体全部电站', trendLabel: '含待审核与已投运站点', tone: 'primary', icon: OfficeBuilding },
   { label: '已审核通过', value: summary.online_count, suffix: ' 座', trend: '可继续配置电桩与模板', trendLabel: '支持正式运营', tone: 'success', icon: Grid },
   { label: '待审核', value: summary.pending_count, suffix: ' 座', trend: '等待平台处理', trendLabel: '支持查看完整申请信息', tone: 'warning', icon: View },
   { label: '未公开', value: summary.private_count, suffix: ' 座', trend: '当前不对外展示', trendLabel: '可按策略切换为公开站点', tone: 'info', icon: Connection },
@@ -129,6 +139,15 @@ const resetApplyForm = () => {
     station_remark: '',
     planned_charger_count: 4,
     total_power_kw: 240,
+    parking_slot_count: 18,
+    service_radius_km: 3,
+    site_owner: '',
+    grid_capacity_remark: '',
+    construction_phase: '待审核后排期建设',
+    support_vehicle_types_text: '',
+    facility_tags_text: '',
+    safety_contact_name: '',
+    safety_contact_phone: '',
     cover_image: '',
     site_photos_text: '',
     qualification_remark: '',
@@ -142,7 +161,7 @@ const refreshSummary = (items) => {
   summary.private_count = items.filter((item) => item.visibility !== 'public').length
 }
 
-const applyPayload = (payload = {}, fromCache = false) => {
+const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) => {
   const items = Array.isArray(payload.items) ? payload.items : []
   stations.value = items
   total.value = Number(payload.total || items.length)
@@ -151,15 +170,14 @@ const applyPayload = (payload = {}, fromCache = false) => {
   Object.assign(summary, payload.summary || {})
   refreshSummary(items)
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '缓存结果' : '最近刷新'} ${formatCacheUpdatedAt(Date.now())}`
+  cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(updatedAt)}`
 }
 
 const loadStations = async ({ background = false, force = false } = {}) => {
   const cached = getRequestCache(queryCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
 
   if (cached && !force) {
-    applyPayload(cached.value, true)
-    cacheLabel.value = `缓存结果 ${formatCacheUpdatedAt(cached.updatedAt)}`
+    applyPayload(cached.value, true, cached.updatedAt)
   }
 
   loading.value = !cached || force || !background
@@ -168,16 +186,15 @@ const loadStations = async ({ background = false, force = false } = {}) => {
   try {
     const { data } = await fetchOperatorStations(queryParams.value)
     const payload = data?.data || getFallbackStationRows(queryParams.value)
-    applyPayload(payload)
+    applyPayload(payload, false, Date.now())
     setRequestCache(queryCacheKey.value, payload)
-    cacheLabel.value = `最近刷新 ${formatCacheUpdatedAt(Date.now())}`
   } catch (error) {
     const fallback = getFallbackStationRows(queryParams.value)
     if (!stations.value.length) {
-      applyPayload(fallback)
-      cacheLabel.value = '演示数据'
+      applyPayload(fallback, false, Date.now())
+      cacheLabel.value = '当前内容可用'
     }
-    errorMessage.value = cached ? '已显示最近一次结果，后台刷新失败' : '电站列表已切换为演示与本地申请数据'
+    errorMessage.value = cached ? '最新数据暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可用的电站内容。'
   } finally {
     loading.value = false
   }
@@ -185,12 +202,19 @@ const loadStations = async ({ background = false, force = false } = {}) => {
 
 const loadTemplates = async () => {
   if (templateLoading.value) return
+  const templateCacheKey = buildRequestCacheKey('/operator/pricing/templates', { scope: 'station-templates' })
+  const cached = getRequestCache(templateCacheKey, { ttl: CACHE_TTL, allowStale: true })
+  if (cached) {
+    templates.value = mergePricingTemplates(cached.value)
+  }
   templateLoading.value = true
   try {
     const { data } = await fetchOperatorPricingTemplates()
-    templates.value = mergePricingTemplates(data?.data || [])
+    const rows = data?.data || []
+    templates.value = mergePricingTemplates(rows)
+    setRequestCache(templateCacheKey, rows)
   } catch (error) {
-    templates.value = mergePricingTemplates([])
+    templates.value = mergePricingTemplates(cached?.value || [])
   } finally {
     templateLoading.value = false
   }
@@ -199,12 +223,17 @@ const loadTemplates = async () => {
 const openChargerDrawer = async (station) => {
   currentStation.value = station
   chargerDrawerVisible.value = true
+  const cacheKey = buildRequestCacheKey(`/operator/stations/${station.id}/chargers`, { scope: 'station-chargers', station_id: station.id })
+  const cached = getRequestCache(cacheKey, { ttl: CACHE_TTL, allowStale: true })
+  chargers.value = mergeChargersWithLocal(station.id, cached?.value || [])
   chargerLoading.value = true
   try {
     const { data } = await fetchStationChargers(station.id)
-    chargers.value = mergeChargersWithLocal(station.id, data?.data || [])
+    const rows = data?.data || []
+    chargers.value = mergeChargersWithLocal(station.id, rows)
+    setRequestCache(cacheKey, rows)
   } catch (error) {
-    chargers.value = mergeChargersWithLocal(station.id, [])
+    chargers.value = mergeChargersWithLocal(station.id, cached?.value || [])
   } finally {
     chargerLoading.value = false
   }
@@ -294,6 +323,15 @@ const submitApplyStation = async () => {
     station_remark: applyForm.station_remark.trim(),
     planned_charger_count: Number(applyForm.planned_charger_count),
     total_power_kw: Number(applyForm.total_power_kw),
+    parking_slot_count: Number(applyForm.parking_slot_count),
+    service_radius_km: Number(applyForm.service_radius_km),
+    site_owner: applyForm.site_owner.trim(),
+    grid_capacity_remark: applyForm.grid_capacity_remark.trim(),
+    construction_phase: applyForm.construction_phase.trim(),
+    support_vehicle_types: applyForm.support_vehicle_types_text.split(/[、,，\s]+/).map((item) => item.trim()).filter(Boolean),
+    facility_tags: applyForm.facility_tags_text.split(/[、,，\s]+/).map((item) => item.trim()).filter(Boolean),
+    safety_contact_name: applyForm.safety_contact_name.trim(),
+    safety_contact_phone: applyForm.safety_contact_phone.trim(),
     cover_image: applyForm.cover_image.trim(),
     site_photos: applyForm.site_photos_text.split('\n').map((item) => item.trim()).filter(Boolean),
     qualification_remark: applyForm.qualification_remark.trim(),
@@ -387,7 +425,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <el-alert v-if="errorMessage" :title="errorMessage" type="warning" show-icon :closable="false" class="panel-alert" />
+      <ErrorBlock
+        v-if="errorMessage"
+        title="电站列表已恢复显示"
+        :description="errorMessage"
+        @retry="loadStations({ force: true })"
+      />
 
       <TableSkeletonBlock v-if="loading && !tableReady" :rows="6" :columns="8" />
 
@@ -524,6 +567,15 @@ onBeforeUnmount(() => {
         <el-form-item label="停车费说明"><el-input v-model="applyForm.parking_fee_desc" /></el-form-item>
         <el-form-item label="规划电桩数"><el-input-number v-model="applyForm.planned_charger_count" :min="1" style="width: 100%" /></el-form-item>
         <el-form-item label="规划总功率"><el-input-number v-model="applyForm.total_power_kw" :min="1" style="width: 100%" /></el-form-item>
+        <el-form-item label="停车位数量"><el-input-number v-model="applyForm.parking_slot_count" :min="1" style="width: 100%" /></el-form-item>
+        <el-form-item label="服务半径(km)"><el-input-number v-model="applyForm.service_radius_km" :min="1" style="width: 100%" /></el-form-item>
+        <el-form-item label="场地方"><el-input v-model="applyForm.site_owner" placeholder="物业方 / 园区方 / 合作单位" /></el-form-item>
+        <el-form-item label="建设阶段"><el-input v-model="applyForm.construction_phase" placeholder="例如：待审核后排期建设" /></el-form-item>
+        <el-form-item label="供电说明" class="apply-form-grid__full"><el-input v-model="applyForm.grid_capacity_remark" type="textarea" :rows="3" placeholder="配电容量、扩容计划、接入条件等" /></el-form-item>
+        <el-form-item label="适配车辆" class="apply-form-grid__full"><el-input v-model="applyForm.support_vehicle_types_text" placeholder="例如：乘用车、网约车、物流车" /></el-form-item>
+        <el-form-item label="配套设施" class="apply-form-grid__full"><el-input v-model="applyForm.facility_tags_text" placeholder="例如：24小时、洗手间、便利店、休息区" /></el-form-item>
+        <el-form-item label="安全联系人"><el-input v-model="applyForm.safety_contact_name" placeholder="应急联系人" /></el-form-item>
+        <el-form-item label="安全联系电话"><el-input v-model="applyForm.safety_contact_phone" placeholder="应急联系电话" /></el-form-item>
         <el-form-item label="封面占位"><el-input v-model="applyForm.cover_image" placeholder="可填写图片说明或占位 URL" /></el-form-item>
         <el-form-item label="现场图片占位"><el-input v-model="applyForm.site_photos_text" type="textarea" :rows="4" placeholder="每行一条图片说明或占位链接" /></el-form-item>
         <el-form-item label="站点说明" class="apply-form-grid__full"><el-input v-model="applyForm.station_remark" type="textarea" :rows="4" /></el-form-item>
