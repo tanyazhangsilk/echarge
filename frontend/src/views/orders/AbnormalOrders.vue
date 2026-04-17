@@ -7,7 +7,6 @@ import { ElMessage } from 'element-plus'
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
-import ErrorBlock from '../../components/console/ErrorBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import { fetchAdminAbnormalOrders } from '../../api/admin'
 import { fetchOperatorAbnormalOrders } from '../../api/operator'
@@ -21,7 +20,6 @@ const CACHE_TTL = 45 * 1000
 
 const loading = ref(false)
 const tableReady = ref(false)
-const errorMessage = ref('')
 const orders = ref([])
 const total = ref(0)
 const cacheLabel = ref('')
@@ -42,47 +40,75 @@ const queryParams = computed(() => ({
   end_date: filters.dateRange?.[1] || undefined,
 }))
 const listCacheKey = computed(() => buildRequestCacheKey(isAdmin.value ? '/admin/orders/abnormal' : '/operator/orders/abnormal', queryParams.value))
-const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
+const formatMoney = (value) => `￥${Number(value || 0).toFixed(2)}`
 
 const stats = computed(() => [
-  { label: '异常订单', value: summary.total_count, suffix: ' 单', trend: '当前筛选结果', trendLabel: '支持按原因追踪', tone: 'danger', icon: WarningFilled },
-  { label: '异常金额', value: Number(summary.total_amount || 0).toFixed(2), prefix: '¥', trend: '异常订单涉及金额', trendLabel: '便于财务与客服跟进', tone: 'warning', icon: Money },
-  { label: '异常类型', value: summary.reason_count, suffix: ' 类', trend: '去重后的原因统计', trendLabel: '用于观察高频问题', tone: 'info', icon: Bell },
-  { label: '异常单量', value: summary.abnormal_count, suffix: ' 单', trend: '已归档异常订单数', trendLabel: '用于安排复核优先级', tone: 'primary', icon: RefreshRight },
+  {
+    label: '异常订单',
+    value: summary.total_count,
+    suffix: ' 单',
+    trend: '当前筛选结果',
+    trendLabel: '支持按原因追踪',
+    tone: 'danger',
+    icon: WarningFilled,
+  },
+  {
+    label: '异常金额',
+    value: Number(summary.total_amount || 0).toFixed(2),
+    prefix: '￥',
+    trend: '异常订单涉及金额',
+    trendLabel: '便于财务与客服跟进',
+    tone: 'warning',
+    icon: Money,
+  },
+  {
+    label: '异常类型',
+    value: summary.reason_count,
+    suffix: ' 类',
+    trend: '去重后的原因统计',
+    trendLabel: '用于识别高频问题',
+    tone: 'info',
+    icon: Bell,
+  },
+  {
+    label: '归档异常',
+    value: summary.abnormal_count,
+    suffix: ' 单',
+    trend: '已归档异常订单',
+    trendLabel: '用于安排复核优先级',
+    tone: 'primary',
+    icon: RefreshRight,
+  },
 ])
 
-const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) => {
-  orders.value = payload.items || []
+const applyPayload = (payload = {}, updatedAt = Date.now()) => {
+  orders.value = Array.isArray(payload.items) ? payload.items : []
   total.value = Number(payload.total || orders.value.length)
   pagination.page = Number(payload.page || pagination.page)
   pagination.pageSize = Number(payload.page_size || pagination.pageSize)
   Object.assign(summary, payload.summary || {})
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(updatedAt)}`
+  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(updatedAt)}`
 }
 
 const loadOrders = async ({ background = false } = {}) => {
   const cached = getRequestCache(listCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
-    applyPayload(cached.value, true, cached.updatedAt)
+    applyPayload(cached.value, cached.updatedAt)
   }
 
   loading.value = !cached || !background
-  errorMessage.value = ''
-
   try {
     const response = isAdmin.value ? await fetchAdminAbnormalOrders(queryParams.value) : await fetchOperatorAbnormalOrders(queryParams.value)
-    const payload = response.data.data || {}
-    applyPayload(payload, false, Date.now())
+    const payload = response.data?.data || {}
+    applyPayload(payload, Date.now())
     setRequestCache(listCacheKey.value, payload)
   } catch (error) {
-    const demoPayload = getDemoOrderListPayload('abnormal')
     if (!orders.value.length) {
-      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, false, Date.now())
-      cacheLabel.value = '当前内容可用'
+      const demoPayload = getDemoOrderListPayload('abnormal')
+      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, Date.now())
     }
-    errorMessage.value = cached ? '最新异常订单暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可用的异常订单。'
-    if (!cached) ElMessage.warning('异常订单暂未拉取成功，已恢复可展示内容。')
+    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -137,9 +163,16 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="filter-row">
-        <el-input v-model="filters.keyword" clearable placeholder="订单号 / 用户 / VIN / 订单来源" style="width: 320px" />
-        <el-input v-model="filters.reason" clearable placeholder="输入异常原因关键词" style="width: 240px" />
-        <el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" />
+        <el-input v-model="filters.keyword" clearable placeholder="订单号 / 用户 / VIN / 来源" style="width: 320px" />
+        <el-input v-model="filters.reason" clearable placeholder="异常原因关键词" style="width: 240px" />
+        <el-date-picker
+          v-model="filters.dateRange"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+        />
       </div>
     </section>
 
@@ -150,20 +183,17 @@ onBeforeUnmount(() => {
           <p class="panel-heading__desc">共 {{ total }} 条记录。</p>
         </div>
       </div>
-
-      <ErrorBlock
-        v-if="errorMessage"
-        title="异常订单已恢复显示"
-        :description="errorMessage"
-        @retry="loadOrders()"
-      />
-
       <TableSkeletonBlock v-if="loading && !tableReady" :rows="6" :columns="8" />
 
       <el-table v-else-if="orders.length" :data="orders" v-loading="loading" stripe>
         <el-table-column prop="order_no" label="订单编号" min-width="190" />
         <el-table-column label="用户" min-width="160">
-          <template #default="{ row }"><div class="user-cell"><strong>{{ row.user_nickname }}</strong><span>{{ row.user_phone }}</span></div></template>
+          <template #default="{ row }">
+            <div class="user-cell">
+              <strong>{{ row.user_nickname }}</strong>
+              <span>{{ row.user_phone }}</span>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column prop="source_type_text" label="订单来源" width="120" align="center" />
         <el-table-column prop="vin" label="VIN" min-width="170" />
@@ -174,9 +204,15 @@ onBeforeUnmount(() => {
         <el-table-column label="异常原因" min-width="260">
           <template #default="{ row }"><div class="reason-pill">{{ row.abnormal_reason || '未记录异常原因' }}</div></template>
         </el-table-column>
-        <el-table-column label="总费用" width="110" align="right"><template #default="{ row }">{{ formatMoney(row.total_amount) }}</template></el-table-column>
+        <el-table-column label="总费用" width="110" align="right">
+          <template #default="{ row }">{{ formatMoney(row.total_amount) }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="100" fixed="right">
-          <template #default="{ row }"><el-button link type="primary" @click="router.push(isAdmin ? `/admin/orders/detail/${row.id}` : `/operator/orders/detail/${row.id}`)">查看详情</el-button></template>
+          <template #default="{ row }">
+            <el-button link type="primary" @click="router.push(isAdmin ? `/admin/orders/detail/${row.id}` : `/operator/orders/detail/${row.id}`)">
+              查看详情
+            </el-button>
+          </template>
         </el-table-column>
       </el-table>
 
@@ -200,7 +236,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .stats-grid--abnormal { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .toolbar-actions, .filter-row { display: flex; flex-wrap: wrap; gap: 12px; }
-.panel-alert { margin-bottom: 16px; }
 .pager { display: flex; justify-content: flex-end; margin-top: 16px; }
 .user-cell { display: grid; gap: 4px; }
 .user-cell span { color: var(--color-text-2); }

@@ -7,7 +7,6 @@ import { DataAnalysis, Lightning, Money, Plus, RefreshRight, Tickets } from '@el
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
-import ErrorBlock from '../../components/console/ErrorBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import {
   fetchOperatorOrderStartOptions,
@@ -29,11 +28,10 @@ import { mergeChargersWithLocal } from '../../utils/chargerDemoStore'
 import { getFallbackStationOptions } from '../../utils/stationFallbacks'
 
 const router = useRouter()
-const CACHE_TTL = 30 * 1000
+const CACHE_TTL = 12 * 1000
 
 const loading = ref(false)
 const tableReady = ref(false)
-const errorMessage = ref('')
 const orders = ref([])
 const total = ref(0)
 const busyOrderId = ref(null)
@@ -57,52 +55,81 @@ const startCacheKey = computed(() => buildRequestCacheKey('/operator/orders/star
 const manualStations = computed(() => startStations.value.filter((item) => Number(item.status) === 0 || item.is_local_draft))
 const sourceTypeLabel = computed(() => (startMode.value === 'manual_demo' ? '模拟开始充电' : '扫码充电'))
 
-const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
+const formatMoney = (value) => `￥${Number(value || 0).toFixed(2)}`
 
 const stats = computed(() => [
-  { label: '实时订单', value: summary.total_count, suffix: ' 单', trend: '当前仍在充电中的订单', trendLabel: '支持结束与异常处理', tone: 'primary', icon: Lightning },
-  { label: '实时电量', value: Number(summary.total_charge_amount || 0).toFixed(2), suffix: ' kWh', trend: '在充订单累计电量', trendLabel: '用于跟踪当前负载', tone: 'success', icon: DataAnalysis },
-  { label: '实时电费', value: Number(summary.total_ele_fee || 0).toFixed(2), prefix: '¥', trend: '实时电费汇总', trendLabel: '按在充订单即时估算', tone: 'warning', icon: Money },
-  { label: '实时服务费', value: Number(summary.total_service_fee || 0).toFixed(2), prefix: '¥', trend: '实时服务费汇总', trendLabel: '与电费共同构成总额', tone: 'info', icon: Tickets },
+  {
+    label: '实时订单',
+    value: summary.total_count,
+    suffix: ' 单',
+    trend: '当前仍在充电中的订单',
+    trendLabel: '支持结束与异常处理',
+    tone: 'primary',
+    icon: Lightning,
+  },
+  {
+    label: '实时电量',
+    value: Number(summary.total_charge_amount || 0).toFixed(2),
+    suffix: ' kWh',
+    trend: '在充订单累计电量',
+    trendLabel: '用于跟踪当前负载',
+    tone: 'success',
+    icon: DataAnalysis,
+  },
+  {
+    label: '实时电费',
+    value: Number(summary.total_ele_fee || 0).toFixed(2),
+    prefix: '￥',
+    trend: '实时电费汇总',
+    trendLabel: '按在充订单即时估算',
+    tone: 'warning',
+    icon: Money,
+  },
+  {
+    label: '实时服务费',
+    value: Number(summary.total_service_fee || 0).toFixed(2),
+    prefix: '￥',
+    trend: '实时服务费汇总',
+    trendLabel: '与电费共同构成总额',
+    tone: 'info',
+    icon: Tickets,
+  },
 ])
 
-const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) => {
+const applyPayload = (payload = {}, updatedAt = Date.now()) => {
   orders.value = payload.items || []
   total.value = Number(payload.total || orders.value.length)
   pagination.page = Number(payload.page || pagination.page)
   pagination.pageSize = Number(payload.page_size || pagination.pageSize)
   Object.assign(summary, payload.summary || {})
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(updatedAt)}`
+  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(updatedAt)}`
 }
 
 const loadOrders = async ({ background = false } = {}) => {
   const cached = getRequestCache(listCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
-    applyPayload(cached.value, true, cached.updatedAt)
+    applyPayload(cached.value, cached.updatedAt)
   }
 
   loading.value = !cached || !background
-  errorMessage.value = ''
-
   try {
     const { data } = await fetchOperatorRealtimeOrders(queryParams.value)
     const payload = data?.data || getDemoOrderListPayload('realtime')
-    applyPayload(payload, false, Date.now())
+    applyPayload(payload, Date.now())
     setRequestCache(listCacheKey.value, payload)
   } catch (error) {
-    const demoPayload = getDemoOrderListPayload('realtime')
     if (!orders.value.length) {
-      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, false, Date.now())
-      cacheLabel.value = '当前内容可用'
+      const demoPayload = getDemoOrderListPayload('realtime')
+      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, Date.now())
     }
-    errorMessage.value = cached ? '最新实时订单暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可用的实时订单。'
+    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
 }
 
-const applyStartOptions = (payload = {}, fromCache = false) => {
+const applyStartOptions = (payload = {}, updatedAt = Date.now()) => {
   startUsers.value = payload.users?.length ? payload.users : [...demoStartUsers]
   startStations.value = payload.stations?.length ? payload.stations : getFallbackStationOptions()
   startForm.user_id = payload.default_user_id || startUsers.value[0]?.id || null
@@ -114,7 +141,7 @@ const applyStartOptions = (payload = {}, fromCache = false) => {
   startChargers.value = (payload.chargers || []).filter((item) => ![2, 3].includes(Number(item.status)))
   startForm.charger_id = startChargers.value[0]?.id || null
   if (!cacheLabel.value) {
-    cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(Date.now())}`
+    cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(updatedAt)}`
   }
 }
 
@@ -137,7 +164,7 @@ const loadChargersByStation = async (stationId) => {
 const loadStartOptions = async ({ background = false } = {}) => {
   const cached = getRequestCache(startCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
-    applyStartOptions(cached.value, true)
+    applyStartOptions(cached.value, cached.updatedAt)
     if (!startForm.charger_id) {
       loadChargersByStation(startForm.station_id)
     }
@@ -147,7 +174,7 @@ const loadStartOptions = async ({ background = false } = {}) => {
   try {
     const { data } = await fetchOperatorOrderStartOptions()
     const payload = data?.data || {}
-    applyStartOptions(payload)
+    applyStartOptions(payload, Date.now())
     setRequestCache(startCacheKey.value, payload)
     if (!payload.chargers?.length) {
       await loadChargersByStation(startForm.station_id)
@@ -209,14 +236,17 @@ const submitStartOrder = async () => {
 const handleFinish = async (row) => {
   try {
     await ElMessageBox.confirm(`确认结束订单 ${row.order_no} 吗？`, '结束充电', { type: 'warning' })
+  } catch {
+    return
+  }
+
+  try {
     busyOrderId.value = row.id
     await finishOperatorOrder(row.id)
     ElMessage.success('订单已完成')
   } catch (error) {
-    if (error !== 'cancel') {
-      finishLocalDemoOrder(row.id)
-      ElMessage.success('订单已转入历史订单')
-    }
+    finishLocalDemoOrder(row.id)
+    ElMessage.success('订单已转入历史订单')
   } finally {
     busyOrderId.value = null
     await loadOrders()
@@ -224,20 +254,24 @@ const handleFinish = async (row) => {
 }
 
 const handleMarkAbnormal = async (row) => {
+  let reason = ''
   try {
     const result = await ElMessageBox.prompt('请输入异常原因', '标记异常', {
       inputPlaceholder: '例如：设备通信中断、枪头异常、会话未正常结束',
       inputValidator: (value) => (value && value.trim() ? true : '异常原因不能为空'),
     })
+    reason = result.value.trim()
+  } catch {
+    return
+  }
+
+  try {
     busyOrderId.value = row.id
-    await markOperatorOrderAbnormal(row.id, result.value.trim())
+    await markOperatorOrderAbnormal(row.id, reason)
     ElMessage.success('订单已转入异常订单')
   } catch (error) {
-    if (error !== 'cancel') {
-      const reason = error?.value?.trim?.() || '会话异常结束'
-      markLocalDemoOrderAbnormal(row.id, reason)
-      ElMessage.success('订单已转入异常订单')
-    }
+    markLocalDemoOrderAbnormal(row.id, reason || '会话异常结束')
+    ElMessage.success('订单已转入异常订单')
   } finally {
     busyOrderId.value = null
     await loadOrders()
@@ -289,27 +323,28 @@ onActivated(() => loadOrders({ background: true }))
           <p class="panel-heading__desc">共 {{ total }} 条记录。</p>
         </div>
       </div>
-
-      <ErrorBlock
-        v-if="errorMessage"
-        title="实时订单已恢复显示"
-        :description="errorMessage"
-        @retry="loadOrders()"
-      />
-
       <TableSkeletonBlock v-if="loading && !tableReady" :rows="6" :columns="8" />
 
       <el-table v-else-if="orders.length" :data="orders" v-loading="loading" stripe>
         <el-table-column prop="order_no" label="订单编号" min-width="190" />
         <el-table-column label="用户" min-width="150">
-          <template #default="{ row }"><div class="cell-stack"><strong>{{ row.user_nickname }}</strong><span>{{ row.user_phone }}</span></div></template>
+          <template #default="{ row }">
+            <div class="cell-stack">
+              <strong>{{ row.user_nickname }}</strong>
+              <span>{{ row.user_phone }}</span>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column prop="source_type_text" label="订单来源" width="120" align="center" />
         <el-table-column prop="start_time" label="开始时间" width="170" />
         <el-table-column prop="station_name" label="电站" min-width="170" />
         <el-table-column prop="charger_name" label="电桩" min-width="160" />
-        <el-table-column label="电量(kWh)" width="110" align="right"><template #default="{ row }">{{ Number(row.charge_amount || 0).toFixed(2) }}</template></el-table-column>
-        <el-table-column label="总费用" width="110" align="right"><template #default="{ row }">{{ formatMoney(row.total_amount) }}</template></el-table-column>
+        <el-table-column label="电量(kWh)" width="110" align="right">
+          <template #default="{ row }">{{ Number(row.charge_amount || 0).toFixed(2) }}</template>
+        </el-table-column>
+        <el-table-column label="总费用" width="110" align="right">
+          <template #default="{ row }">{{ formatMoney(row.total_amount) }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="router.push(`/operator/orders/detail/${row.id}`)">查看详情</el-button>
@@ -354,10 +389,6 @@ onActivated(() => loadOrders({ background: true }))
 <style scoped>
 .stats-grid--realtime {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.panel-alert {
-  margin-bottom: 16px;
 }
 
 .cell-stack {

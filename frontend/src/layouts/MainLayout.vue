@@ -21,7 +21,14 @@ const drawerVisible = ref(false)
 const windowWidth = ref(window.innerWidth)
 const theme = ref(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
 
-const keepAliveNames = ['OperatorStations', 'OperatorOrdersHistory', 'OperatorOrdersAbnormal', 'AdminInstitutionStations']
+const keepAliveNames = [
+  'OperatorStations',
+  'OperatorStationsChargers',
+  'OperatorOrdersHistory',
+  'OperatorOrdersAbnormal',
+  'AdminInstitutionStations',
+  'OperatorFinanceInvoices',
+]
 
 const currentRole = computed(() => route.meta?.role || getStoredRole())
 const activeMenu = computed(() => route.path)

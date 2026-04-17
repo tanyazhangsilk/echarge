@@ -7,7 +7,6 @@ import { Connection, Grid, OfficeBuilding, Plus, RefreshRight, SetUp, View } fro
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
-import ErrorBlock from '../../components/console/ErrorBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import {
   applyOperatorStation,
@@ -28,7 +27,6 @@ const CACHE_TTL = 45 * 1000
 
 const loading = ref(false)
 const tableReady = ref(false)
-const errorMessage = ref('')
 const stations = ref([])
 const total = ref(0)
 const cacheLabel = ref('')
@@ -98,7 +96,7 @@ const stats = computed(() => [
   { label: '电站总数', value: summary.total_count, suffix: ' 座', trend: '当前主体全部电站', trendLabel: '含待审核与已投运站点', tone: 'primary', icon: OfficeBuilding },
   { label: '已审核通过', value: summary.online_count, suffix: ' 座', trend: '可继续配置电桩与模板', trendLabel: '支持正式运营', tone: 'success', icon: Grid },
   { label: '待审核', value: summary.pending_count, suffix: ' 座', trend: '等待平台处理', trendLabel: '支持查看完整申请信息', tone: 'warning', icon: View },
-  { label: '未公开', value: summary.private_count, suffix: ' 座', trend: '当前不对外展示', trendLabel: '可按策略切换为公开站点', tone: 'info', icon: Connection },
+  { label: '未公开', value: summary.private_count, suffix: ' 座', trend: '当前不对外展示', trendLabel: '可按策略切换公开', tone: 'info', icon: Connection },
 ])
 
 const selectedTemplate = computed(() => templates.value.find((item) => String(item.id) === String(bindForm.templateId)) || null)
@@ -122,6 +120,10 @@ const queryCacheKey = computed(() => buildRequestCacheKey('/operator/stations', 
 const statusTagType = (status) => (Number(status) === 0 ? 'success' : Number(status) === 3 ? 'warning' : Number(status) === 4 ? 'danger' : 'info')
 const visibilityTagType = (visibility) => (visibility === 'public' ? 'success' : 'info')
 const chargerStatusType = (status) => (Number(status) === 1 ? 'warning' : Number(status) === 2 ? 'danger' : Number(status) === 3 ? 'info' : 'success')
+
+const updateCacheLabel = (timestamp = Date.now()) => {
+  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(timestamp)}`
+}
 
 const resetApplyForm = () => {
   Object.assign(applyForm, {
@@ -161,7 +163,7 @@ const refreshSummary = (items) => {
   summary.private_count = items.filter((item) => item.visibility !== 'public').length
 }
 
-const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) => {
+const applyPayload = (payload = {}, updatedAt = Date.now()) => {
   const items = Array.isArray(payload.items) ? payload.items : []
   stations.value = items
   total.value = Number(payload.total || items.length)
@@ -170,31 +172,29 @@ const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) =
   Object.assign(summary, payload.summary || {})
   refreshSummary(items)
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(updatedAt)}`
+  updateCacheLabel(updatedAt)
 }
 
 const loadStations = async ({ background = false, force = false } = {}) => {
   const cached = getRequestCache(queryCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
 
   if (cached && !force) {
-    applyPayload(cached.value, true, cached.updatedAt)
+    applyPayload(cached.value, cached.updatedAt)
   }
 
   loading.value = !cached || force || !background
-  errorMessage.value = ''
 
   try {
     const { data } = await fetchOperatorStations(queryParams.value)
     const payload = data?.data || getFallbackStationRows(queryParams.value)
-    applyPayload(payload, false, Date.now())
+    applyPayload(payload, Date.now())
     setRequestCache(queryCacheKey.value, payload)
   } catch (error) {
     const fallback = getFallbackStationRows(queryParams.value)
     if (!stations.value.length) {
-      applyPayload(fallback, false, Date.now())
-      cacheLabel.value = '当前内容可用'
+      applyPayload(fallback, Date.now())
     }
-    errorMessage.value = cached ? '最新数据暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可用的电站内容。'
+    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -246,32 +246,32 @@ const handleVisibilityChange = async (station, visibility) => {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
     })
+  } catch {
+    return
+  }
+
+  try {
     const { data } = await updateStationVisibility(station.id, visibility)
     ElMessage.success(data?.message || '站点可见性已更新')
-    await loadStations({ force: true })
   } catch (error) {
-    if (error !== 'cancel') {
-      station.visibility = visibility
-      station.visibility_text = visibility === 'public' ? '公开站点' : '未公开'
-      ElMessage.success('站点可见性已先更新到当前页面')
-      await loadStations({ background: true })
-    }
+    station.visibility = visibility
+    station.visibility_text = visibility === 'public' ? '公开站点' : '未公开'
+    ElMessage.success('站点可见性已更新到当前页面')
+  } finally {
+    await loadStations({ background: true, force: true })
   }
 }
 
-const openBindDialog = async (station) => {
-  if (Number(station.status) !== 0 || station.is_local_draft) {
-    ElMessage.warning('仅已审核通过的电站可以绑定电价模板')
-    return
-  }
+const openBindDialog = (station) => {
   currentStation.value = station
   bindForm.templateId = station.price_template_id || null
   templateDialogVisible.value = true
-  if (!templates.value.length) loadTemplates()
+  loadTemplates()
 }
 
 const submitBindTemplate = async () => {
-  if (!currentStation.value || !bindForm.templateId) {
+  if (!currentStation.value) return
+  if (!bindForm.templateId) {
     ElMessage.warning('请选择电价模板')
     return
   }
@@ -281,86 +281,92 @@ const submitBindTemplate = async () => {
     const { data } = await bindStationTemplate(currentStation.value.id, bindForm.templateId)
     ElMessage.success(data?.message || '模板绑定成功')
   } catch (error) {
-    applyLocalTemplateToStations(bindForm.templateId, [currentStation.value.id])
-    ElMessage.success('模板已先绑定到当前电站')
+    applyLocalTemplateToStations(stations.value, currentStation.value.id, templates.value, bindForm.templateId)
+    ElMessage.success('模板已绑定到当前页面')
   } finally {
     bindSubmitting.value = false
     templateDialogVisible.value = false
-    await loadStations({ force: true })
+    await loadStations({ background: true, force: true })
   }
 }
 
-const submitApplyStation = async () => {
-  const requiredFields = [
-    ['station_name', '请输入电站名称'],
-    ['province', '请输入省份'],
-    ['city', '请输入城市'],
-    ['district', '请输入区县'],
-    ['address', '请输入详细地址'],
-    ['contact_name', '请输入联系人'],
-    ['contact_phone', '请输入联系电话'],
-  ]
-
-  for (const [field, message] of requiredFields) {
-    if (!String(applyForm[field] || '').trim()) {
-      ElMessage.warning(message)
-      return
-    }
+const submitStationApplication = async () => {
+  if (!applyForm.station_name.trim()) {
+    ElMessage.warning('请填写电站名称')
+    return
+  }
+  if (!applyForm.province.trim() || !applyForm.city.trim() || !applyForm.district.trim() || !applyForm.address.trim()) {
+    ElMessage.warning('请完善站点地址信息')
+    return
   }
 
+  applySubmitting.value = true
   const payload = {
+    ...applyForm,
     station_name: applyForm.station_name.trim(),
     province: applyForm.province.trim(),
     city: applyForm.city.trim(),
     district: applyForm.district.trim(),
     address: applyForm.address.trim(),
-    longitude: Number(applyForm.longitude),
-    latitude: Number(applyForm.latitude),
-    contact_name: applyForm.contact_name.trim(),
-    contact_phone: applyForm.contact_phone.trim(),
-    operation_hours: applyForm.operation_hours.trim(),
-    parking_fee_desc: applyForm.parking_fee_desc.trim(),
-    station_remark: applyForm.station_remark.trim(),
-    planned_charger_count: Number(applyForm.planned_charger_count),
-    total_power_kw: Number(applyForm.total_power_kw),
-    parking_slot_count: Number(applyForm.parking_slot_count),
-    service_radius_km: Number(applyForm.service_radius_km),
-    site_owner: applyForm.site_owner.trim(),
-    grid_capacity_remark: applyForm.grid_capacity_remark.trim(),
-    construction_phase: applyForm.construction_phase.trim(),
-    support_vehicle_types: applyForm.support_vehicle_types_text.split(/[、,，\s]+/).map((item) => item.trim()).filter(Boolean),
-    facility_tags: applyForm.facility_tags_text.split(/[、,，\s]+/).map((item) => item.trim()).filter(Boolean),
-    safety_contact_name: applyForm.safety_contact_name.trim(),
-    safety_contact_phone: applyForm.safety_contact_phone.trim(),
-    cover_image: applyForm.cover_image.trim(),
-    site_photos: applyForm.site_photos_text.split('\n').map((item) => item.trim()).filter(Boolean),
-    qualification_remark: applyForm.qualification_remark.trim(),
+    support_vehicle_types: applyForm.support_vehicle_types_text
+      .split(/[，,、\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+    facility_tags: applyForm.facility_tags_text
+      .split(/[，,、\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+    site_photos: applyForm.site_photos_text
+      .split(/\n+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
   }
 
-  applySubmitting.value = true
   try {
-    saveStationApplicationDraft(payload)
     const { data } = await applyOperatorStation(payload)
     ElMessage.success(data?.message || '电站申请已提交')
   } catch (error) {
     saveStationApplicationDraft(payload)
-    ElMessage.success('电站申请已保存在本地审核链路')
+    const draftId = `draft-${Date.now()}`
+    stations.value = [
+      {
+        id: draftId,
+        station_name: payload.station_name,
+        full_address: `${payload.province}${payload.city}${payload.district}${payload.address}`,
+        contact_name: payload.contact_name,
+        contact_phone: payload.contact_phone,
+        charger_count: payload.planned_charger_count,
+        planned_charger_count: payload.planned_charger_count,
+        status: 3,
+        status_text: '待审核',
+        visibility: 'private',
+        visibility_text: '未公开',
+        price_template_name: '',
+        price_template_id: null,
+        updated_at: new Date().toLocaleString('zh-CN', { hour12: false }),
+        is_local_draft: true,
+      },
+      ...stations.value,
+    ]
+    refreshSummary(stations.value)
+    total.value = stations.value.length
+    tableReady.value = true
+    ElMessage.success('电站申请已记录到当前页面')
   } finally {
     applySubmitting.value = false
     applyDialogVisible.value = false
-    pagination.page = 1
-    await loadStations({ force: true })
+    await loadStations({ background: true })
   }
+}
+
+const openPileManagement = (row) => {
+  router.push(`/operator/stations/chargers?stationId=${row.id}`)
 }
 
 const resetFilters = () => {
   filters.keyword = ''
   filters.status = ''
   filters.visibility = ''
-}
-
-const openPileManagement = (station) => {
-  router.push(`/operator/stations/chargers?stationId=${station.id}`)
 }
 
 watch(
@@ -370,7 +376,7 @@ watch(
     searchTimer = setTimeout(() => {
       pagination.page = 1
       loadStations()
-    }, 240)
+    }, 260)
   },
 )
 
@@ -383,7 +389,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-shell station-page">
-    <PageSectionHeader eyebrow="资产管理" title="电站管理" description="维护电站申请、审核状态、公开配置与模板绑定。" chip="电站中心">
+    <PageSectionHeader eyebrow="资产管理" title="电站管理" description="维护电站申请、审核状态、开放配置与模板绑定。" chip="电站中心">
       <template #actions>
         <el-button type="primary" :icon="Plus" @click="resetApplyForm(); applyDialogVisible = true">申请新建电站</el-button>
         <el-button :icon="RefreshRight" :loading="loading" @click="loadStations({ force: true })">刷新列表</el-button>
@@ -424,14 +430,6 @@ onBeforeUnmount(() => {
           <p class="panel-heading__desc">共 {{ total }} 条记录。</p>
         </div>
       </div>
-
-      <ErrorBlock
-        v-if="errorMessage"
-        title="电站列表已恢复显示"
-        :description="errorMessage"
-        @retry="loadStations({ force: true })"
-      />
-
       <TableSkeletonBlock v-if="loading && !tableReady" :rows="6" :columns="8" />
 
       <el-table v-else-if="stations.length" :data="stations" v-loading="loading" stripe>
@@ -486,7 +484,7 @@ onBeforeUnmount(() => {
         </el-table-column>
       </el-table>
 
-      <EmptyStateBlock v-else-if="!loading" title="暂无电站数据" description="可通过“申请新建电站”补充主业务链路。" />
+      <EmptyStateBlock v-else-if="!loading" title="暂无电站数据" description="可通过“申请新建电站”补全核心业务链路。" />
 
       <div class="pager">
         <el-pagination
@@ -583,7 +581,7 @@ onBeforeUnmount(() => {
       </el-form>
       <template #footer>
         <el-button @click="applyDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="applySubmitting" @click="submitApplyStation">提交申请</el-button>
+        <el-button type="primary" :loading="applySubmitting" @click="submitStationApplication">提交申请</el-button>
       </template>
     </el-dialog>
   </div>
@@ -594,16 +592,11 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.filter-row,
-.inline-grid,
-.summary-tags {
+.toolbar-actions,
+.filter-row {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-}
-
-.inline-grid > * {
-  flex: 1 1 0;
 }
 
 .cell-stack {
@@ -611,14 +604,14 @@ onBeforeUnmount(() => {
   gap: 4px;
 }
 
-.station-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.cell-stack span {
+  color: var(--color-text-2);
 }
 
-.panel-alert {
-  margin-bottom: 16px;
+.station-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .pager {
@@ -630,40 +623,71 @@ onBeforeUnmount(() => {
 .station-summary {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 16px;
-  padding: 18px;
   margin-bottom: 16px;
+}
+
+.station-summary strong {
+  display: block;
+  font-size: 18px;
+  margin-bottom: 6px;
+}
+
+.station-summary p {
+  margin: 0;
+  color: var(--color-text-2);
+}
+
+.summary-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .apply-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 18px;
+  gap: 4px 16px;
 }
 
 .apply-form-grid__full {
   grid-column: 1 / -1;
 }
 
+.inline-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .text-muted {
   color: var(--color-text-2);
+  font-size: 13px;
 }
 
 @media (max-width: 1280px) {
-  .stats-grid--stations,
-  .apply-form-grid {
+  .stats-grid--stations {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 768px) {
-  .stats-grid--stations,
-  .apply-form-grid {
+  .stats-grid--stations {
     grid-template-columns: 1fr;
   }
 
   .station-summary {
     flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .apply-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

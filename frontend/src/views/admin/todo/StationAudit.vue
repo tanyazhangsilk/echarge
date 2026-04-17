@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Bell, CircleCheck, OfficeBuilding, WarningFilled } from '@element-plus/icons-vue'
@@ -6,7 +6,6 @@ import { Bell, CircleCheck, OfficeBuilding, WarningFilled } from '@element-plus/
 import PageSectionHeader from '../../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../../components/console/EmptyStateBlock.vue'
-import ErrorBlock from '../../../components/console/ErrorBlock.vue'
 import TableSkeletonBlock from '../../../components/console/TableSkeletonBlock.vue'
 import { fetchStationAudits, processStationAudit } from '../../../api/admin'
 import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../../utils/requestCache'
@@ -22,7 +21,6 @@ const auditSubmitting = ref(false)
 const stations = ref([])
 const total = ref(0)
 const cacheLabel = ref('')
-const errorMessage = ref('')
 
 const filters = reactive({ keyword: '', status: '' })
 const pagination = reactive({ page: 1, pageSize: 10 })
@@ -43,10 +41,42 @@ const listCacheKey = computed(() =>
 )
 
 const stats = computed(() => [
-  { label: '申请总数', value: summary.total_count, suffix: ' 座', trend: '统一进入审核队列', trendLabel: '保持审核节奏稳定', tone: 'primary', icon: OfficeBuilding },
-  { label: '待审核', value: summary.pending_count, suffix: ' 座', trend: '待处理申请', trendLabel: '优先处理可投运电站', tone: 'warning', icon: Bell },
-  { label: '已通过', value: summary.approved_count, suffix: ' 座', trend: '已进入运营配置', trendLabel: '可继续配置电桩与模板', tone: 'success', icon: CircleCheck },
-  { label: '已驳回', value: summary.rejected_count, suffix: ' 座', trend: '待补充材料', trendLabel: '保持原因记录清晰', tone: 'danger', icon: WarningFilled },
+  {
+    label: '申请总数',
+    value: summary.total_count,
+    suffix: ' 座',
+    trend: '统一进入审核队列',
+    trendLabel: '保持审核节奏稳定',
+    tone: 'primary',
+    icon: OfficeBuilding,
+  },
+  {
+    label: '待审核',
+    value: summary.pending_count,
+    suffix: ' 座',
+    trend: '待处理申请',
+    trendLabel: '优先处理可投运电站',
+    tone: 'warning',
+    icon: Bell,
+  },
+  {
+    label: '已通过',
+    value: summary.approved_count,
+    suffix: ' 座',
+    trend: '已进入运营配置',
+    trendLabel: '可继续配置电桩与模板',
+    tone: 'success',
+    icon: CircleCheck,
+  },
+  {
+    label: '已驳回',
+    value: summary.rejected_count,
+    suffix: ' 座',
+    trend: '待补充材料',
+    trendLabel: '保持原因记录清晰',
+    tone: 'danger',
+    icon: WarningFilled,
+  },
 ])
 
 const statusTagType = (status) => (Number(status) === 0 ? 'success' : Number(status) === 3 ? 'warning' : Number(status) === 4 ? 'danger' : 'info')
@@ -107,7 +137,7 @@ const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) =
     ...(payload.summary || {}),
   })
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(updatedAt)}`
+  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(updatedAt)}`
 }
 
 const loadStations = async ({ background = false, force = false } = {}) => {
@@ -117,8 +147,6 @@ const loadStations = async ({ background = false, force = false } = {}) => {
   }
 
   loading.value = !cached || !background || force
-  errorMessage.value = ''
-
   try {
     const { data } = await fetchStationAudits(queryParams.value)
     const payload = normalizePayload(data?.data)
@@ -128,9 +156,8 @@ const loadStations = async ({ background = false, force = false } = {}) => {
     const fallback = buildClientPayload(getFallbackStationAudits())
     if (!stations.value.length) {
       applyPayload(fallback, false, Date.now())
-      cacheLabel.value = '当前内容可用'
     }
-    errorMessage.value = cached ? '最新审核结果暂未刷新成功，当前先展示最近一次可用内容。' : '服务暂不可用，当前先展示可处理的申请列表。'
+    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -145,21 +172,21 @@ const openDrawer = (row) => {
 const handleAudit = async (action) => {
   if (!currentStation.value) return
   if (action === 'reject' && !auditForm.remark.trim()) {
-    ElMessage.warning('驳回时请填写原因')
+    ElMessage.warning('椹冲洖鏃惰濉啓鍘熷洜')
     return
   }
 
   auditSubmitting.value = true
   try {
     const { data } = await processStationAudit(currentStation.value.id, { action, remark: auditForm.remark.trim() })
-    ElMessage.success(data?.message || '审核处理成功')
+    ElMessage.success(data?.message || '瀹℃牳澶勭悊鎴愬姛')
   } catch (error) {
     const nextStatus = action === 'approve' ? 0 : 4
     currentStation.value.status = nextStatus
     currentStation.value.status_text = nextStatus === 0 ? '已审核通过' : '已驳回'
     currentStation.value.audit_remark =
       auditForm.remark.trim() || (nextStatus === 0 ? '审核通过，可继续配置电桩和模板。' : '请补充材料后重新提交。')
-    ElMessage.success('审核结果已更新到当前页面')
+    ElMessage.success('瀹℃牳缁撴灉宸叉洿鏂板埌褰撳墠椤甸潰')
   } finally {
     auditSubmitting.value = false
     await loadStations({ background: true, force: true })
@@ -220,17 +247,9 @@ onBeforeUnmount(() => {
       <div class="panel-heading">
         <div>
           <h3 class="panel-heading__title">审核列表</h3>
-          <p class="panel-heading__desc">共 {{ total }} 条申请，当前按分页节奏加载与处理。</p>
+          <p class="panel-heading__desc">共 {{ total }} 条申请，按分页节奏加载与处理。</p>
         </div>
       </div>
-
-      <ErrorBlock
-        v-if="errorMessage"
-        title="审核列表已恢复显示"
-        :description="errorMessage"
-        @retry="loadStations({ force: true })"
-      />
-
       <TableSkeletonBlock v-if="loading && !tableReady" :rows="6" :columns="7" />
 
       <el-table v-else-if="stations.length" :data="stations" v-loading="loading" stripe>
@@ -429,3 +448,4 @@ onBeforeUnmount(() => {
   }
 }
 </style>
+

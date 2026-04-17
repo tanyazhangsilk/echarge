@@ -20,8 +20,17 @@ const CACHE_TTL = 60 * 1000
 const route = useRoute()
 const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
 
+const updateCacheLabel = (timestamp = Date.now()) => {
+  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(timestamp)}`
+}
+const toNonEmptyRows = (items, fallback = []) => {
+  if (Array.isArray(items) && items.length) return items
+  if (Array.isArray(fallback) && fallback.length) return fallback
+  return [...mockInvoiceRows]
+}
+
 const loading = ref(false)
-const rows = ref(readLocalState(STORAGE_KEY, mockInvoiceRows))
+const rows = ref(toNonEmptyRows(readLocalState(STORAGE_KEY, []), mockInvoiceRows))
 const keyword = ref('')
 const activeStatus = ref('all')
 const cacheLabel = ref('')
@@ -69,7 +78,15 @@ const stats = computed(() => [
   { label: '待开票', value: summary.pending_count, suffix: ' 笔', trend: '待处理池', trendLabel: '优先处理超时申请', tone: 'warning', icon: Document },
   { label: '已开票', value: summary.issued_count, suffix: ' 笔', trend: '已完成开票', trendLabel: '已触发邮件通知', tone: 'success', icon: Download },
   { label: '已驳回', value: summary.rejected_count, suffix: ' 笔', trend: '待补资料', trendLabel: '需记录驳回原因', tone: 'danger', icon: Close },
-  { label: '已开票金额', value: Number(summary.issued_amount || 0).toFixed(2), prefix: '¥', trend: '财务统计口径', trendLabel: isAdmin.value ? '全平台汇总' : '当前运营商汇总', tone: 'primary', icon: RefreshRight },
+  {
+    label: '已开票金额',
+    value: Number(summary.issued_amount || 0).toFixed(2),
+    prefix: '￥',
+    trend: '财务统计口径',
+    trendLabel: isAdmin.value ? '全平台汇总' : '当前运营商汇总',
+    tone: 'primary',
+    icon: RefreshRight,
+  },
 ])
 
 const getStatusType = (status) => (Number(status) === 0 ? 'warning' : Number(status) === 1 ? 'success' : 'danger')
@@ -84,20 +101,22 @@ const refreshSummary = () => {
     .reduce((sum, item) => sum + Number(item.amount || 0), 0)
 }
 
-const applyRows = (items = [], fromCache = false) => {
-  rows.value = Array.isArray(items) && items.length ? items : readLocalState(STORAGE_KEY, mockInvoiceRows)
-  writeLocalState(STORAGE_KEY, rows.value)
+const applyRows = (items = [], { updatedAt = Date.now(), persist = true } = {}) => {
+  const nextRows = toNonEmptyRows(items, rows.value)
+  rows.value = nextRows
+  if (persist && nextRows.length) {
+    writeLocalState(STORAGE_KEY, nextRows)
+  }
   refreshSummary()
   currentPage.value = 1
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '缓存结果' : '最近刷新'} ${formatCacheUpdatedAt(Date.now())}`
+  updateCacheLabel(updatedAt)
 }
 
 const fetchInvoices = async ({ background = false } = {}) => {
   const cached = getRequestCache(cacheKey, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
-    applyRows(cached.value, true)
-    cacheLabel.value = `缓存结果 ${formatCacheUpdatedAt(cached.updatedAt)}`
+    applyRows(cached.value, { updatedAt: cached.updatedAt, persist: false })
   }
 
   loading.value = !cached || !background
@@ -107,15 +126,17 @@ const fetchInvoices = async ({ background = false } = {}) => {
         keyword: keyword.value.trim() || undefined,
       },
     })
-    const items = Array.isArray(res?.data?.data) ? res.data.data : mockInvoiceRows
-    applyRows(items)
-    setRequestCache(cacheKey, items)
-    cacheLabel.value = `最近刷新 ${formatCacheUpdatedAt(Date.now())}`
-  } catch (error) {
-    if (!rows.value.length) {
-      applyRows(readLocalState(STORAGE_KEY, mockInvoiceRows))
-      cacheLabel.value = '本地配置'
+    const remoteItems = Array.isArray(res?.data?.data) ? res.data.data : []
+    const nextRows = toNonEmptyRows(remoteItems, rows.value)
+    applyRows(nextRows, { updatedAt: Date.now(), persist: nextRows.length > 0 })
+    if (nextRows.length) {
+      setRequestCache(cacheKey, nextRows)
     }
+  } catch (error) {
+    const localRows = readLocalState(STORAGE_KEY, [])
+    const fallbackRows = toNonEmptyRows(localRows, rows.value)
+    applyRows(fallbackRows, { updatedAt: Date.now(), persist: fallbackRows.length > 0 })
+    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -142,13 +163,20 @@ const submitProcess = async (action) => {
     await ElMessageBox.confirm(action === 'approve' ? '确认开具发票并发送邮件通知？' : '确认驳回该申请并发送通知？', '操作确认', {
       type: action === 'approve' ? 'success' : 'warning',
     })
+  } catch (error) {
+    return
+  }
+
+  let remoteSuccess = false
+  try {
     await http.post(`/finance/invoices/${currentInvoice.value.id}/process`, {
       action,
       file_url: uploadedFile.value,
       remark: processRemark.value,
     })
+    remoteSuccess = true
   } catch (error) {
-    if (error === 'cancel') return
+    remoteSuccess = false
   }
 
   rows.value = rows.value.map((item) =>
@@ -165,7 +193,7 @@ const submitProcess = async (action) => {
   writeLocalState(STORAGE_KEY, rows.value)
   refreshSummary()
   processDialogVisible.value = false
-  ElMessage.success(action === 'approve' ? '发票已处理为已开票' : '发票申请已驳回')
+  ElMessage.success(remoteSuccess ? (action === 'approve' ? '发票已处理为已开票' : '发票申请已驳回') : '发票状态已更新')
 }
 
 watch(activeStatus, () => {
@@ -180,7 +208,7 @@ onActivated(() => fetchInvoices({ background: true }))
   <div class="page-shell invoice-management-page">
     <PageSectionHeader
       eyebrow="财务管理"
-      :title="isAdmin ? '全平台发票管理' : '运营商发票管理'"
+      :title="isAdmin ? '平台发票管理' : '运营商发票管理'"
       :description="isAdmin ? '管理员可查看全平台发票记录并抽查详情。' : '运营商可处理待开票申请并上传发票文件。'"
       :chip="isAdmin ? '管理员视角' : '运营商视角'"
     >
@@ -230,7 +258,7 @@ onActivated(() => fetchInvoices({ background: true }))
         <el-table-column prop="user_phone" label="用户手机号" width="140" />
         <el-table-column prop="invoice_title" label="发票抬头" min-width="200" />
         <el-table-column label="金额" width="110" align="right">
-          <template #default="{ row }">¥{{ Number(row.amount || 0).toFixed(2) }}</template>
+          <template #default="{ row }">￥{{ Number(row.amount || 0).toFixed(2) }}</template>
         </el-table-column>
         <el-table-column label="状态" width="110" align="center">
           <template #default="{ row }"><el-tag :type="getStatusType(row.status)">{{ getStatusText(row) }}</el-tag></template>
@@ -308,22 +336,31 @@ onActivated(() => fetchInvoices({ background: true }))
   background: #fff;
   display: flex;
   justify-content: space-between;
-  cursor: pointer;
+  align-items: center;
+  gap: 12px;
+  color: var(--color-text-1);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.status-tab strong {
+  font-size: 16px;
+}
+
+.status-tab:hover {
+  border-color: rgba(64, 158, 255, 0.35);
+  transform: translateY(-1px);
 }
 
 .status-tab--active {
-  border-color: rgba(37, 99, 235, 0.28);
-  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.12);
+  border-color: rgba(64, 158, 255, 0.7);
+  background: linear-gradient(135deg, rgba(64, 158, 255, 0.08), rgba(34, 197, 94, 0.08));
+  box-shadow: 0 12px 24px -20px rgba(64, 158, 255, 0.7);
 }
 
 .pager {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
-}
-
-.text-muted {
-  color: var(--color-text-2);
 }
 
 @media (max-width: 1280px) {
@@ -335,6 +372,10 @@ onActivated(() => fetchInvoices({ background: true }))
 @media (max-width: 768px) {
   .stats-grid--invoice {
     grid-template-columns: 1fr;
+  }
+
+  .status-tab {
+    width: 100%;
   }
 }
 </style>

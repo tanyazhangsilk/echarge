@@ -7,7 +7,6 @@ import { ElMessage } from 'element-plus'
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
-import ErrorBlock from '../../components/console/ErrorBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import { fetchAdminOrders, fetchAdminStationOptions } from '../../api/admin'
 import { fetchOperatorHistoryOrders, fetchOperatorStationOptions } from '../../api/operator'
@@ -25,7 +24,6 @@ const tableReady = ref(false)
 const stationLoading = ref(false)
 const orders = ref([])
 const total = ref(0)
-const errorMessage = ref('')
 const stationOptions = ref([])
 const stationOptionsLoaded = ref(false)
 const cacheLabel = ref('')
@@ -57,47 +55,75 @@ const statusOptions = [
   { label: '异常结束', value: 2 },
 ]
 
-const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
+const formatMoney = (value) => `￥${Number(value || 0).toFixed(2)}`
 
 const stats = computed(() => [
-  { label: '历史订单', value: summary.total_count, suffix: ' 单', trend: '当前筛选结果', trendLabel: '含归档完成订单', tone: 'primary', icon: Tickets },
-  { label: '累计电量', value: Number(summary.total_charge_amount || 0).toFixed(2), suffix: ' kWh', trend: '已结束订单累计充电量', trendLabel: '用于统计运营规模', tone: 'success', icon: DataAnalysis },
-  { label: '累计营收', value: Number(summary.total_amount || 0).toFixed(2), prefix: '¥', trend: '订单总费用汇总', trendLabel: '包含电费与服务费', tone: 'warning', icon: Money },
-  { label: '累计服务费', value: Number(summary.total_service_fee || 0).toFixed(2), prefix: '¥', trend: '服务费累计汇总', trendLabel: '便于财务核对', tone: 'info', icon: RefreshRight },
+  {
+    label: '历史订单',
+    value: summary.total_count,
+    suffix: ' 单',
+    trend: '当前筛选结果',
+    trendLabel: '含归档完成订单',
+    tone: 'primary',
+    icon: Tickets,
+  },
+  {
+    label: '累计电量',
+    value: Number(summary.total_charge_amount || 0).toFixed(2),
+    suffix: ' kWh',
+    trend: '已结束订单累计充电量',
+    trendLabel: '用于统计运营规模',
+    tone: 'success',
+    icon: DataAnalysis,
+  },
+  {
+    label: '累计营收',
+    value: Number(summary.total_amount || 0).toFixed(2),
+    prefix: '￥',
+    trend: '订单总费用汇总',
+    trendLabel: '包含电费与服务费',
+    tone: 'warning',
+    icon: Money,
+  },
+  {
+    label: '累计服务费',
+    value: Number(summary.total_service_fee || 0).toFixed(2),
+    prefix: '￥',
+    trend: '服务费累计汇总',
+    trendLabel: '便于财务核对',
+    tone: 'info',
+    icon: RefreshRight,
+  },
 ])
 
-const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) => {
-  orders.value = payload.items || []
+const applyPayload = (payload = {}, updatedAt = Date.now()) => {
+  orders.value = Array.isArray(payload.items) ? payload.items : []
   total.value = Number(payload.total || orders.value.length)
   pagination.page = Number(payload.page || pagination.page)
   pagination.pageSize = Number(payload.page_size || pagination.pageSize)
   Object.assign(summary, payload.summary || {})
   tableReady.value = true
-  cacheLabel.value = `${fromCache ? '最近可用数据' : '已更新'} ${formatCacheUpdatedAt(updatedAt)}`
+  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(updatedAt)}`
 }
 
 const loadOrders = async ({ background = false } = {}) => {
   const cached = getRequestCache(listCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
-    applyPayload(cached.value, true, cached.updatedAt)
+    applyPayload(cached.value, cached.updatedAt)
   }
 
   loading.value = !cached || !background
-  errorMessage.value = ''
-
   try {
     const response = isAdmin.value ? await fetchAdminOrders(queryParams.value) : await fetchOperatorHistoryOrders(queryParams.value)
-    const payload = response.data.data || {}
-    applyPayload(payload, false, Date.now())
+    const payload = response.data?.data || {}
+    applyPayload(payload, Date.now())
     setRequestCache(listCacheKey.value, payload)
   } catch (error) {
-    const demoPayload = getDemoOrderListPayload('history')
     if (!orders.value.length) {
-      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, false, Date.now())
-      cacheLabel.value = '当前内容可用'
+      const demoPayload = getDemoOrderListPayload('history')
+      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, Date.now())
     }
-    errorMessage.value = cached ? '最新订单暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可用的历史订单。'
-    if (!cached) ElMessage.warning('历史订单暂未拉取成功，已恢复可展示内容。')
+    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -108,7 +134,7 @@ const loadStationOptions = async () => {
   stationLoading.value = true
   try {
     const { data } = isAdmin.value ? await fetchAdminStationOptions() : await fetchOperatorStationOptions()
-    stationOptions.value = (data.data || []).map((item) => ({ label: item.station_name, value: item.id }))
+    stationOptions.value = (data?.data || []).map((item) => ({ label: item.station_name, value: item.id }))
     stationOptionsLoaded.value = true
   } catch (error) {
     stationOptions.value = getFallbackStationOptions().map((item) => ({ label: item.station_name, value: item.id }))
@@ -160,7 +186,7 @@ onBeforeUnmount(() => {
       <div class="panel-heading">
         <div>
           <h3 class="panel-heading__title">筛选条件</h3>
-          <p class="panel-heading__desc">优先加载订单列表，电站选项在交互时再按需获取。</p>
+          <p class="panel-heading__desc">优先加载订单列表，电站选项在交互时按需获取。</p>
         </div>
         <div class="toolbar-actions">
           <el-button @click="resetFilters">重置</el-button>
@@ -172,10 +198,26 @@ onBeforeUnmount(() => {
         <el-select v-if="isAdmin" v-model="filters.status" clearable placeholder="选择状态" style="width: 160px">
           <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <el-select v-model="filters.stationId" clearable filterable :loading="stationLoading" placeholder="选择电站" style="width: 220px" @visible-change="(visible) => visible && loadStationOptions()" @focus="loadStationOptions">
+        <el-select
+          v-model="filters.stationId"
+          clearable
+          filterable
+          :loading="stationLoading"
+          placeholder="选择电站"
+          style="width: 220px"
+          @visible-change="(visible) => visible && loadStationOptions()"
+          @focus="loadStationOptions"
+        >
           <el-option v-for="item in stationOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <el-date-picker v-model="filters.dateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" />
+        <el-date-picker
+          v-model="filters.dateRange"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+        />
       </div>
     </section>
 
@@ -186,33 +228,45 @@ onBeforeUnmount(() => {
           <p class="panel-heading__desc">共 {{ total }} 条记录。</p>
         </div>
       </div>
-
-      <ErrorBlock
-        v-if="errorMessage"
-        title="历史订单已恢复显示"
-        :description="errorMessage"
-        @retry="loadOrders()"
-      />
-
       <TableSkeletonBlock v-if="loading && !tableReady" :rows="6" :columns="9" />
 
       <el-table v-else-if="orders.length" :data="orders" v-loading="loading" stripe>
         <el-table-column prop="order_no" label="订单编号" min-width="190" />
         <el-table-column label="用户" min-width="160">
-          <template #default="{ row }"><div class="time-range"><strong>{{ row.user_nickname }}</strong><span>{{ row.user_phone }}</span></div></template>
+          <template #default="{ row }">
+            <div class="time-range">
+              <strong>{{ row.user_nickname }}</strong>
+              <span>{{ row.user_phone }}</span>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column prop="source_type_text" label="订单来源" width="120" align="center" />
         <el-table-column label="起止时间" min-width="260">
-          <template #default="{ row }"><div class="time-range"><span>{{ row.start_time }}</span><span>{{ row.end_time || '-' }}</span></div></template>
+          <template #default="{ row }">
+            <div class="time-range">
+              <span>{{ row.start_time }}</span>
+              <span>{{ row.end_time || '-' }}</span>
+            </div>
+          </template>
         </el-table-column>
-        <el-table-column label="电量(kWh)" width="110" align="right"><template #default="{ row }">{{ Number(row.charge_amount || 0).toFixed(2) }}</template></el-table-column>
-        <el-table-column label="电费" width="100" align="right"><template #default="{ row }">{{ formatMoney(row.electricity_fee) }}</template></el-table-column>
-        <el-table-column label="服务费" width="100" align="right"><template #default="{ row }">{{ formatMoney(row.service_fee) }}</template></el-table-column>
-        <el-table-column label="总费用" width="110" align="right"><template #default="{ row }">{{ formatMoney(row.total_amount) }}</template></el-table-column>
+        <el-table-column label="电量(kWh)" width="110" align="right">
+          <template #default="{ row }">{{ Number(row.charge_amount || 0).toFixed(2) }}</template>
+        </el-table-column>
+        <el-table-column label="电费" width="100" align="right">
+          <template #default="{ row }">{{ formatMoney(row.electricity_fee) }}</template>
+        </el-table-column>
+        <el-table-column label="服务费" width="100" align="right">
+          <template #default="{ row }">{{ formatMoney(row.service_fee) }}</template>
+        </el-table-column>
+        <el-table-column label="总费用" width="110" align="right">
+          <template #default="{ row }">{{ formatMoney(row.total_amount) }}</template>
+        </el-table-column>
         <el-table-column prop="station_name" label="电站" min-width="160" />
         <el-table-column prop="charger_name" label="电桩" min-width="160" />
         <el-table-column label="操作" width="100" fixed="right">
-          <template #default="{ row }"><el-button link type="primary" @click="router.push(isAdmin ? `/admin/orders/detail/${row.id}` : `/operator/orders/detail/${row.id}`)">查看详情</el-button></template>
+          <template #default="{ row }">
+            <el-button link type="primary" @click="router.push(isAdmin ? `/admin/orders/detail/${row.id}` : `/operator/orders/detail/${row.id}`)">查看详情</el-button>
+          </template>
         </el-table-column>
       </el-table>
 
@@ -236,7 +290,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .stats-grid--history { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .toolbar-actions, .filter-row { display: flex; flex-wrap: wrap; gap: 12px; }
-.panel-alert { margin-bottom: 16px; }
 .pager { display: flex; justify-content: flex-end; margin-top: 16px; }
 .time-range { display: grid; gap: 4px; }
 .time-range span:last-child { color: var(--color-text-2); }

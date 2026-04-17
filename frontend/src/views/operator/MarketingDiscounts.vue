@@ -63,7 +63,7 @@ const loadData = async ({ background = false } = {}) => {
       applyRows(mockDiscounts, false, Date.now())
       cacheLabel.value = '当前内容可用'
     }
-    errorMessage.value = cached ? '最新活动暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可运营活动内容。'
+    errorMessage.value = '网络波动，已展示最近可用结果。'
   } finally {
     loading.value = false
   }
@@ -128,7 +128,7 @@ onActivated(() => loadData({ background: true }))
     <section class="page-panel surface-card table-shell">
       <ErrorBlock
         v-if="errorMessage"
-        title="活动列表已恢复显示"
+        title="活动列表状态提示"
         :description="errorMessage"
         @retry="loadData()"
       />

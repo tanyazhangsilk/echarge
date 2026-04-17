@@ -120,7 +120,7 @@ const loadData = async ({ background = false } = {}) => {
       )
       cacheLabel.value = '当前内容可用'
     }
-    errorMessage.value = cached ? '最新配置暂未刷新成功，当前先展示最近一次可用结果。' : '服务暂不可用，当前先展示可编辑的配置内容。'
+    errorMessage.value = '网络波动，已展示最近可用结果。'
   } finally {
     loading.value = false
   }
@@ -239,7 +239,7 @@ onActivated(() => loadData({ background: true }))
 
         <ErrorBlock
           v-if="errorMessage"
-          title="设置数据已恢复显示"
+          title="设置状态提示"
           :description="errorMessage"
           @retry="loadData()"
         />
