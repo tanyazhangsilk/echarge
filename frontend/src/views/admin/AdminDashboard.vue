@@ -260,7 +260,7 @@ onActivated(() => {
     <PageSectionHeader
       eyebrow="Admin Console"
       title="平台运营总览"
-      description="聚焦审核、订单、清分与风险预警的一体化驾驶舱"
+      description="聚焦审核、订单、清分与风险预警的运营总览。"
       chip="管理员视角"
     >
       <template #actions>
@@ -288,7 +288,7 @@ onActivated(() => {
 
       <div class="hero-banner__dashboard">
         <div class="dashboard-ring">
-          <el-progress type="dashboard" :percentage="todayCompletionRate" :stroke-width="14" color="#2f74ff" :show-text="false" />
+          <el-progress type="dashboard" :percentage="todayCompletionRate" :stroke-width="14" color="#2f74ff" :show-text="false" :width="136" />
           <div class="dashboard-ring__label">
             <strong>{{ todayCompletionRate }}%</strong>
             <span>订单完成率</span>
@@ -515,14 +515,14 @@ onActivated(() => {
 
 .hero-meta__date {
   color: var(--color-text-3);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .hero-banner {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 20px;
-  padding: 26px 28px;
+  grid-template-columns: minmax(0, 1fr) 286px;
+  gap: 16px;
+  padding: 20px 22px;
   background:
     radial-gradient(circle at 82% 10%, rgba(47, 116, 255, 0.2), transparent 34%),
     linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 252, 0.95));
@@ -532,35 +532,36 @@ onActivated(() => {
 .hero-banner__label {
   margin: 0;
   color: var(--color-primary-strong);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .hero-banner__title {
-  margin: 10px 0 0;
-  font-size: 28px;
+  margin: 8px 0 0;
+  font-size: 24px;
   line-height: 1.2;
   color: var(--color-text);
 }
 
 .hero-banner__desc {
-  margin: 12px 0 0;
+  margin: 10px 0 0;
   color: var(--color-text-2);
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .hero-banner__quick-actions {
-  margin-top: 16px;
+  margin-top: 14px;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }
 
 .hero-banner__dashboard {
   border-radius: 18px;
-  padding: 16px;
+  padding: 14px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(244, 248, 252, 0.72));
   border: 1px solid rgba(47, 116, 255, 0.14);
 }
@@ -580,26 +581,26 @@ onActivated(() => {
 }
 
 .dashboard-ring__label strong {
-  font-size: 28px;
+  font-size: 24px;
   color: var(--color-text);
   line-height: 1;
 }
 
 .dashboard-ring__label span {
-  margin-top: 4px;
+  margin-top: 3px;
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .dashboard-meta {
   display: grid;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 6px;
+  margin-top: 10px;
 }
 
 .dashboard-meta p {
   margin: 0;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--color-text-2);
 }
 
@@ -617,7 +618,7 @@ onActivated(() => {
 }
 
 .ops-pulse-item {
-  padding: 14px;
+  padding: 12px;
   border-radius: 14px;
   border: 1px solid var(--color-border);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(246, 249, 253, 0.9));
@@ -642,7 +643,7 @@ onActivated(() => {
 }
 
 .ops-pulse-item p {
-  margin: 10px 0 0;
+  margin: 8px 0 0;
   color: var(--color-text-3);
   font-size: 12px;
 }
@@ -659,7 +660,7 @@ onActivated(() => {
   justify-content: space-between;
   gap: 16px;
   width: 100%;
-  padding: 18px;
+  padding: 14px 16px;
   border: 1px solid var(--color-border);
   border-radius: 16px;
   background: var(--color-surface-3);
@@ -682,9 +683,10 @@ onActivated(() => {
 }
 
 .todo-item__desc {
-  margin: 10px 0 0;
+  margin: 8px 0 0;
   color: var(--color-text-2);
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .todo-item__side {
@@ -696,14 +698,14 @@ onActivated(() => {
 }
 
 .todo-item__count {
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
   color: var(--color-text);
 }
 
 .todo-item__action {
   color: var(--color-primary-strong);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .activity-item {
@@ -786,7 +788,7 @@ onActivated(() => {
   }
 
   .hero-banner {
-    padding: 20px;
+    padding: 16px;
   }
 
   .stats-grid--dashboard {

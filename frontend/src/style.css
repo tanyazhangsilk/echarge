@@ -57,7 +57,7 @@ html {
 .page-shell {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
   max-width: var(--content-max-width);
   margin: 0 auto;
   animation: pageReveal var(--motion-page) ease-out both;
@@ -68,8 +68,8 @@ html {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
-  padding: 24px;
+  gap: 14px;
+  padding: 18px 20px;
   position: relative;
   overflow: hidden;
 }
@@ -87,26 +87,28 @@ html {
 }
 
 .page-hero__eyebrow {
-  margin: 0 0 8px;
-  font-size: 12px;
-  letter-spacing: 0.12em;
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--color-text-3);
+  color: color-mix(in srgb, var(--color-text-3) 84%, transparent);
+  font-weight: 600;
 }
 
 .page-hero__title {
   margin: 0;
-  font-size: clamp(26px, 3vw, 36px);
-  line-height: 1.12;
+  font-size: clamp(22px, 2.6vw, 30px);
+  line-height: 1.1;
   color: var(--color-text);
   letter-spacing: 0.02em;
 }
 
 .page-hero__desc {
-  margin: 10px 0 0;
-  max-width: 760px;
+  margin: 8px 0 0;
+  max-width: 700px;
   color: var(--color-text-2);
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .stats-grid {
@@ -177,20 +179,21 @@ html {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .panel-heading__title {
   margin: 0;
-  font-size: 19px;
+  font-size: 17px;
   color: var(--color-text);
   letter-spacing: 0.02em;
 }
 
 .panel-heading__desc {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: var(--color-text-3);
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .toolbar-row {
@@ -312,11 +315,11 @@ html {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 4px 9px;
   border-radius: 999px;
   background: rgba(64, 158, 255, 0.1);
   color: var(--color-primary-strong);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -350,8 +353,8 @@ html {
 .list-card__meta {
   margin: 8px 0 0;
   color: var(--color-text-2);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .table-shell :deep(.el-table) {

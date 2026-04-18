@@ -131,7 +131,7 @@ onActivated(() => {
     <PageSectionHeader
       eyebrow="Operator Console"
       title="运营中心驾驶舱"
-      description="面向运营商日常经营的订单、营收、站点健康与告警一体化工作台。"
+      description="面向运营商日常经营的订单、营收与站点健康总览。"
       chip="运营商视角"
     >
       <template #actions>
@@ -156,7 +156,7 @@ onActivated(() => {
 
       <div class="operator-hero__right">
         <div class="ring-wrap">
-          <el-progress type="dashboard" :percentage="Math.round(onlineRate)" :stroke-width="14" color="#22a06b" :show-text="false" />
+          <el-progress type="dashboard" :percentage="Math.round(onlineRate)" :stroke-width="14" color="#22a06b" :show-text="false" :width="132" />
           <div class="ring-wrap__label">
             <strong>{{ onlineRate.toFixed(1) }}%</strong>
             <span>设备在线率</span>
@@ -293,9 +293,9 @@ onActivated(() => {
 
 .operator-hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: 20px;
-  padding: 24px;
+  grid-template-columns: minmax(0, 1fr) 232px;
+  gap: 16px;
+  padding: 18px 22px;
   background:
     radial-gradient(circle at 88% 8%, rgba(34, 160, 107, 0.2), transparent 32%),
     linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(244, 249, 246, 0.94));
@@ -304,37 +304,38 @@ onActivated(() => {
 .operator-hero__eyebrow {
   margin: 0;
   color: #22a06b;
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   font-weight: 700;
 }
 
 .operator-hero h2 {
-  margin: 10px 0 0;
+  margin: 8px 0 0;
   color: var(--color-text);
-  font-size: 28px;
+  font-size: 24px;
 }
 
 .operator-hero p {
-  margin: 12px 0 0;
+  margin: 8px 0 0;
   color: var(--color-text-2);
+  font-size: 13px;
 }
 
 .operator-hero__chips {
-  margin-top: 14px;
+  margin-top: 12px;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }
 
 .operator-hero__chips span {
-  padding: 6px 12px;
+  padding: 5px 10px;
   border-radius: 999px;
   background: rgba(34, 160, 107, 0.1);
   border: 1px solid rgba(34, 160, 107, 0.24);
   color: #16885a;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .operator-hero__right {
@@ -355,20 +356,20 @@ onActivated(() => {
 }
 
 .ring-wrap__label strong {
-  font-size: 24px;
+  font-size: 22px;
   color: var(--color-text);
   line-height: 1;
 }
 
 .ring-wrap__label span {
-  margin-top: 4px;
+  margin-top: 3px;
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .order-trend {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .order-trend__row {
@@ -381,7 +382,7 @@ onActivated(() => {
 .order-trend__date,
 .order-trend__revenue {
   color: var(--color-text-3);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .order-trend__track {
@@ -404,7 +405,7 @@ onActivated(() => {
 
 .alarm-list {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .alarm-card {

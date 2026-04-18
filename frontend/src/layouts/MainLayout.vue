@@ -36,13 +36,13 @@ const keepAliveNames = [
 const currentRole = computed(() => route.meta?.role || getStoredRole())
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta?.title || '运营后台')
-const pageSection = computed(() => route.meta?.section || ROLE_LABELS[currentRole.value])
+const pageSection = computed(() => route.meta?.section || ROLE_LABELS[currentRole.value] || '业务概览')
 const pageDescription = computed(() => route.meta?.description || '查看当前业务模块信息')
 const roleLabel = computed(() => ROLE_LABELS[currentRole.value] || '充电运营商')
 const visibleMenuGroups = computed(() => buildMenuByRole(currentRole.value))
 const isMobile = computed(() => windowWidth.value < 960)
 const breadcrumbs = computed(() => {
-  const items = [ROLE_LABELS[currentRole.value], pageSection.value]
+  const items = [ROLE_LABELS[currentRole.value], pageSection.value].filter(Boolean)
   if (pageTitle.value && pageTitle.value !== pageSection.value) items.push(pageTitle.value)
   return items
 })
@@ -82,11 +82,11 @@ onUnmounted(() => {
 
 <template>
   <el-container class="layout-root">
-    <el-aside v-if="!isMobile" :width="collapsed ? '80px' : '248px'" class="layout-aside">
+    <el-aside v-if="!isMobile" :width="collapsed ? '76px' : '236px'" class="layout-aside">
       <div class="brand">
         <div class="brand__mark">EC</div>
         <div v-show="!collapsed" class="brand__text">
-          <strong>E-Charge 聚合平台</strong>
+          <strong>E-Charge 联合平台</strong>
           <span>{{ roleLabel }}控制台</span>
         </div>
       </div>
@@ -113,11 +113,11 @@ onUnmounted(() => {
       </div>
     </el-aside>
 
-    <el-drawer v-model="drawerVisible" direction="ltr" :size="280" :with-header="false">
+    <el-drawer v-model="drawerVisible" direction="ltr" :size="272" :with-header="false">
       <div class="brand brand--mobile">
         <div class="brand__mark">EC</div>
         <div class="brand__text">
-          <strong>E-Charge 聚合平台</strong>
+          <strong>E-Charge 联合平台</strong>
           <span>{{ roleLabel }}控制台</span>
         </div>
       </div>
@@ -162,7 +162,7 @@ onUnmounted(() => {
         </div>
 
         <div class="header-right">
-          <el-input v-if="!isMobile" placeholder="搜索订单、电站、运营商、设备编号" :prefix-icon="Search" class="search-input" />
+          <el-input v-if="!isMobile" placeholder="搜索订单、电站、运营商或设备编号" :prefix-icon="Search" class="search-input" />
           <el-button v-else circle :icon="Search" />
 
           <el-button circle class="toolbar-btn" @click="toggleTheme">
@@ -181,11 +181,11 @@ onUnmounted(() => {
             <div class="notify-panel">
               <div class="notify-panel__item">
                 <strong>系统通知</strong>
-                <p>核心列表页已启用页面缓存与轻量刷新，切换返回时会优先展示最近结果。</p>
+                <p>核心业务页已启用状态保留与轻量刷新，切换返回时优先展示最近结果。</p>
               </div>
               <div class="notify-panel__item">
                 <strong>待办提醒</strong>
-                <p>电站申请、审核、电桩配置与订单处理链路已支持前端兜底演示态。</p>
+                <p>电站申请、审核、电桩配置与订单处理链路已整理为稳定演示状态。</p>
               </div>
             </div>
           </el-popover>
@@ -210,18 +210,10 @@ onUnmounted(() => {
         <div class="layout-main__inner">
           <router-view v-slot="{ Component, route: currentRoute }">
             <keep-alive :include="keepAliveNames">
-              <component
-                v-if="currentRoute.meta?.keepAlive"
-                :is="Component"
-                :key="currentRoute.name || currentRoute.path"
-              />
+              <component v-if="currentRoute.meta?.keepAlive" :is="Component" :key="currentRoute.name || currentRoute.path" />
             </keep-alive>
 
-            <component
-              :is="Component"
-              v-if="!currentRoute.meta?.keepAlive"
-              :key="currentRoute.fullPath"
-            />
+            <component v-if="!currentRoute.meta?.keepAlive" :is="Component" :key="currentRoute.fullPath" />
           </router-view>
         </div>
       </el-main>
@@ -249,8 +241,8 @@ onUnmounted(() => {
 .brand {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 16px 18px 14px;
+  gap: 12px;
+  padding: 14px 16px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -258,9 +250,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
   background: linear-gradient(135deg, #36cfc9, #409eff);
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -270,17 +262,18 @@ onUnmounted(() => {
 .brand__text {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .brand__text strong {
-  font-size: 15px;
+  font-size: 14px;
   color: #fff;
 }
 
 .brand__text span {
-  margin-top: 4px;
+  margin-top: 3px;
   color: var(--color-sidebar-text-soft);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .brand--mobile {
@@ -293,18 +286,18 @@ onUnmounted(() => {
 .menu-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 10px 18px;
+  padding: 14px 8px 16px;
 }
 
 .menu-group + .menu-group {
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 .menu-group__label {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   padding: 0 12px;
   color: var(--color-sidebar-text-soft);
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -314,7 +307,8 @@ onUnmounted(() => {
 }
 
 .menu :deep(.el-menu-item) {
-  margin-bottom: 6px;
+  margin-bottom: 5px;
+  min-height: 42px;
   border-radius: 12px;
   color: var(--color-sidebar-text) !important;
 }
@@ -336,9 +330,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  height: 74px;
-  padding: 0 20px;
+  gap: 16px;
+  height: 68px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--color-border);
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(14px);
@@ -349,8 +343,8 @@ onUnmounted(() => {
 .layout-header::after {
   content: '';
   position: absolute;
-  left: 20px;
-  right: 20px;
+  left: 16px;
+  right: 16px;
   bottom: 0;
   height: 2px;
   border-radius: 999px;
@@ -366,7 +360,7 @@ onUnmounted(() => {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 
 .header-right {
@@ -374,7 +368,7 @@ onUnmounted(() => {
 }
 
 .header-action {
-  font-size: 20px;
+  font-size: 18px;
   cursor: pointer;
   color: var(--color-text-2);
 }
@@ -387,36 +381,36 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: 5px;
+  margin-bottom: 4px;
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .page-breadcrumb__item {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .page-breadcrumb__arrow {
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .page-meta__title {
   margin: 0;
-  font-size: 20px;
+  font-size: 18px;
   color: var(--color-text);
 }
 
 .page-meta__sub {
-  margin: 4px 0 0;
+  margin: 3px 0 0;
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .search-input {
-  width: 280px;
+  width: 248px;
 }
 
 .search-input :deep(.el-input__wrapper) {
@@ -443,15 +437,16 @@ onUnmounted(() => {
 .notify-panel__item p {
   margin: 6px 0 0;
   color: var(--color-text-3);
-  line-height: 1.6;
+  line-height: 1.55;
+  font-size: 12px;
 }
 
 .role-switcher {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   cursor: pointer;
-  padding: 8px 12px;
+  padding: 7px 10px;
   border: 1px solid var(--color-border);
   border-radius: 12px;
   background: var(--color-surface);
@@ -459,7 +454,7 @@ onUnmounted(() => {
 
 .role-switcher__label {
   color: var(--color-text-3);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .role-switcher__icon {
@@ -467,7 +462,7 @@ onUnmounted(() => {
 }
 
 .layout-main {
-  padding: 18px;
+  padding: 16px;
   overflow-y: auto;
   background:
     radial-gradient(800px 400px at 100% -10%, rgba(64, 158, 255, 0.08), transparent 55%),
@@ -475,7 +470,7 @@ onUnmounted(() => {
 }
 
 .layout-main__inner {
-  max-width: min(1520px, 100%);
+  max-width: min(1560px, 100%);
   margin: 0 auto;
   animation: pageReveal 320ms ease-out both;
 }
@@ -495,16 +490,16 @@ onUnmounted(() => {
 
 @media (max-width: 960px) {
   .layout-header {
-    height: 72px;
+    height: 64px;
     padding: 0 14px;
   }
 
   .layout-main {
-    padding: 14px;
+    padding: 12px;
   }
 
   .page-meta__title {
-    font-size: 18px;
+    font-size: 17px;
   }
 
   .page-meta__sub,

@@ -21,7 +21,7 @@ defineProps({
 
 <template>
   <section class="page-hero surface-card page-section-header">
-    <div>
+    <div class="page-hero__main">
       <p v-if="eyebrow" class="page-hero__eyebrow">{{ eyebrow }}</p>
       <h1 class="page-hero__title">{{ title }}</h1>
       <p v-if="description" class="page-hero__desc">{{ description }}</p>
@@ -35,21 +35,25 @@ defineProps({
 
 <style scoped>
 .page-section-header {
-  animation: headerReveal 420ms ease both;
+  animation: headerReveal 380ms ease both;
+}
+
+.page-hero__main {
+  min-width: 0;
 }
 
 .page-hero__actions {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
 }
 
 @keyframes headerReveal {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
