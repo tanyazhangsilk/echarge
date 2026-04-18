@@ -82,7 +82,7 @@ onUnmounted(() => {
 
 <template>
   <el-container class="layout-root">
-    <el-aside v-if="!isMobile" :width="collapsed ? '88px' : '280px'" class="layout-aside">
+    <el-aside v-if="!isMobile" :width="collapsed ? '80px' : '248px'" class="layout-aside">
       <div class="brand">
         <div class="brand__mark">EC</div>
         <div v-show="!collapsed" class="brand__text">
@@ -250,7 +250,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 18px 20px 16px;
+  padding: 16px 18px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -293,7 +293,7 @@ onUnmounted(() => {
 .menu-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 18px 12px 20px;
+  padding: 16px 10px 18px;
 }
 
 .menu-group + .menu-group {
@@ -337,8 +337,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  height: 78px;
-  padding: 0 24px;
+  height: 74px;
+  padding: 0 20px;
   border-bottom: 1px solid var(--color-border);
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(14px);
@@ -349,8 +349,8 @@ onUnmounted(() => {
 .layout-header::after {
   content: '';
   position: absolute;
-  left: 24px;
-  right: 24px;
+  left: 20px;
+  right: 20px;
   bottom: 0;
   height: 2px;
   border-radius: 999px;
@@ -416,7 +416,7 @@ onUnmounted(() => {
 }
 
 .search-input {
-  width: 320px;
+  width: 280px;
 }
 
 .search-input :deep(.el-input__wrapper) {
@@ -467,7 +467,7 @@ onUnmounted(() => {
 }
 
 .layout-main {
-  padding: 20px;
+  padding: 18px;
   overflow-y: auto;
   background:
     radial-gradient(800px 400px at 100% -10%, rgba(64, 158, 255, 0.08), transparent 55%),
@@ -475,7 +475,7 @@ onUnmounted(() => {
 }
 
 .layout-main__inner {
-  max-width: var(--content-max-width);
+  max-width: min(1520px, 100%);
   margin: 0 auto;
   animation: pageReveal 320ms ease-out both;
 }

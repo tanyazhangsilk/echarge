@@ -1,4 +1,4 @@
-﻿<script setup>
+<script setup>
 import { computed, onActivated, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -9,7 +9,7 @@ import MetricCard from '../../components/console/MetricCard.vue'
 import { fetchSystemParams, updateSystemParams } from '../../api/admin'
 import { mockSystemParams } from '../../mock/backoffice'
 import { readLocalState, writeLocalState } from '../../utils/localState'
-import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
+import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 
 const STORAGE_KEY = 'echarge-admin-system-params'
 const CACHE_TTL = 60 * 1000
@@ -22,10 +22,10 @@ const cacheLabel = ref('')
 const form = reactive(readLocalState(STORAGE_KEY, mockSystemParams))
 
 const tabs = [
-  { key: 'basic', label: '鍩虹鍙傛暟', path: '/admin/settings/params/basic' },
-  { key: 'billing', label: '璁¤垂鍙傛暟', path: '/admin/settings/params/billing' },
-  { key: 'settlement', label: '娓呭垎鍙傛暟', path: '/admin/settings/params/settlement' },
-  { key: 'notification', label: '閫氱煡鍙傛暟', path: '/admin/settings/params/notification' },
+  { key: 'basic', label: '基础参数', path: '/admin/settings/params/basic' },
+  { key: 'billing', label: '计费参数', path: '/admin/settings/params/billing' },
+  { key: 'settlement', label: '清分参数', path: '/admin/settings/params/settlement' },
+  { key: 'notification', label: '通知参数', path: '/admin/settings/params/notification' },
 ]
 
 const activeTab = computed(() => {
@@ -35,9 +35,6 @@ const activeTab = computed(() => {
 
 const tabMeta = computed(() => tabs.find((item) => item.key === activeTab.value) || tabs[0])
 const cacheKey = computed(() => buildRequestCacheKey('/admin/settings/params', { section: activeTab.value }))
-const updateCacheLabel = (timestamp = Date.now()) => {
-  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(timestamp)}`
-}
 
 const stats = computed(() => [
   {
@@ -45,35 +42,46 @@ const stats = computed(() => [
     value: form.operator_auto_approve ? '已开启' : '未开启',
     tone: form.operator_auto_approve ? 'success' : 'warning',
   },
-  { label: '平台清分比例', value: Number(form.settlement_platform_rate || 0), suffix: '%', tone: 'primary' },
-  { label: '异常工单时限', value: Number(form.abnormal_order_sla_minutes || 0), suffix: ' 分钟', tone: 'danger' },
-  { label: '客服热线', value: form.support_phone || '-', tone: 'info' },
+  {
+    label: '平台清分比例',
+    value: Number(form.settlement_platform_rate || 0),
+    suffix: '%',
+    tone: 'primary',
+  },
+  {
+    label: '异常工单时限',
+    value: Number(form.abnormal_order_sla_minutes || 0),
+    suffix: ' 分钟',
+    tone: 'danger',
+  },
+  {
+    label: '客服热线',
+    value: form.support_phone || '-',
+    tone: 'info',
+  },
 ])
 
-const applyForm = (payload = {}, fromCache = false) => {
+const applyForm = (payload = {}, updatedAt = Date.now()) => {
   Object.assign(form, mockSystemParams, payload || {})
   writeLocalState(STORAGE_KEY, form)
-  updateCacheLabel(Date.now())
+  cacheLabel.value = formatCacheLabel(updatedAt)
 }
 
-const loadData = async ({ background = false } = {}) => {
+const loadData = async ({ background = false, force = false } = {}) => {
   const cached = getRequestCache(cacheKey.value, { ttl: CACHE_TTL, allowStale: true })
-  if (cached) {
-    applyForm(cached.value, true)
-    updateCacheLabel(cached.updatedAt)
+  if (cached && !force) {
+    applyForm(cached.value, cached.updatedAt)
   }
 
-  loading.value = !cached || !background
+  loading.value = force || !cached || !background
   try {
     const res = await fetchSystemParams()
     const payload = res?.data?.data || mockSystemParams
-    applyForm(payload)
-    setRequestCache(cacheKey.value, payload)
-    updateCacheLabel(Date.now())
+    applyForm(payload, Date.now())
+    setRequestCache(cacheKey.value, { ...form })
   } catch (error) {
     if (!cacheLabel.value) {
-      applyForm(readLocalState(STORAGE_KEY, mockSystemParams))
-      cacheLabel.value = '本地配置'
+      applyForm(readLocalState(STORAGE_KEY, mockSystemParams), Date.now())
     }
   } finally {
     loading.value = false
@@ -87,10 +95,10 @@ const save = async () => {
     ElMessage.success('系统参数已保存')
   } catch (error) {
     writeLocalState(STORAGE_KEY, form)
-    ElMessage.success('鍚庣鏆傛湭杩斿洖鎴愬姛锛屽凡鍏堜繚瀛樺湪鏈湴閰嶇疆')
+    ElMessage.success('后端暂未返回成功，已先保存当前系统参数')
   } finally {
     setRequestCache(cacheKey.value, { ...form })
-    updateCacheLabel(Date.now())
+    cacheLabel.value = formatCacheLabel(Date.now())
     loading.value = false
   }
 }
@@ -101,8 +109,12 @@ const switchTab = (path) => {
   }
 }
 
-onMounted(loadData)
-onActivated(() => loadData({ background: true }))
+onMounted(() => loadData({ background: true }))
+onActivated(() => {
+  if (shouldRefreshRequestCache(cacheKey.value, CACHE_TTL)) {
+    loadData({ background: true })
+  }
+})
 </script>
 
 <template>
@@ -110,7 +122,7 @@ onActivated(() => loadData({ background: true }))
     <PageSectionHeader eyebrow="系统配置" title="系统参数配置" description="维护平台基础审核、计费、清分与通知参数。" :chip="tabMeta.label">
       <template #actions>
         <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
-        <el-button :icon="RefreshRight" :loading="loading" @click="loadData()">鍒锋柊</el-button>
+        <el-button :icon="RefreshRight" :loading="loading" @click="loadData({ force: true })">刷新</el-button>
       </template>
     </PageSectionHeader>
 
@@ -145,18 +157,18 @@ onActivated(() => loadData({ background: true }))
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">鍑嗗叆娴佺▼</h3>
+              <h3 class="panel-heading__title">准入流程</h3>
               <p class="panel-heading__desc">控制运营商入驻与站点发布流程。</p>
             </div>
           </div>
           <el-form label-position="top">
-            <el-form-item label="杩愯惀鍟嗚嚜鍔ㄩ€氳繃">
+            <el-form-item label="运营商自动通过">
               <el-switch v-model="form.operator_auto_approve" />
             </el-form-item>
-            <el-form-item label="鐢电珯瀹℃牳閫氳繃鍚庤嚜鍔ㄥ叕寮€">
+            <el-form-item label="电站审核通过后自动公开">
               <el-switch v-model="form.station_auto_publish" />
             </el-form-item>
-            <el-form-item label="鍏紑绔欑偣闇€瀹℃牳">
+            <el-form-item label="公开站点需要复审">
               <el-switch v-model="form.station_public_requires_review" />
             </el-form-item>
           </el-form>
@@ -165,15 +177,15 @@ onActivated(() => loadData({ background: true }))
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">瀹㈡湇淇℃伅</h3>
+              <h3 class="panel-heading__title">客服信息</h3>
               <p class="panel-heading__desc">配置平台对外服务邮箱与热线。</p>
             </div>
           </div>
           <el-form label-position="top">
-            <el-form-item label="鏈嶅姟閭">
+            <el-form-item label="服务邮箱">
               <el-input v-model="form.support_email" />
             </el-form-item>
-            <el-form-item label="鏈嶅姟鐑嚎">
+            <el-form-item label="服务热线">
               <el-input v-model="form.support_phone" />
             </el-form-item>
           </el-form>
@@ -191,10 +203,10 @@ onActivated(() => loadData({ background: true }))
             </div>
           </div>
           <el-form label-position="top">
-            <el-form-item label="鍙戠エ鑷姩瀹℃牳闃堝€硷紙鍏冿級">
+            <el-form-item label="发票自动审核阈值（元）">
               <el-input-number v-model="form.invoice_auto_approve_limit" :min="0" :step="50" style="width: 100%" />
             </el-form-item>
-            <el-form-item label="鐢ㄦ埛姣忔棩閫€娆句笂闄愶紙娆★級">
+            <el-form-item label="用户每日退款上限（次）">
               <el-input-number v-model="form.user_refund_limit_per_day" :min="1" :step="1" style="width: 100%" />
             </el-form-item>
           </el-form>
@@ -203,12 +215,12 @@ onActivated(() => loadData({ background: true }))
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">寮傚父澶勭悊</h3>
+              <h3 class="panel-heading__title">异常处理</h3>
               <p class="panel-heading__desc">控制异常订单处理时限。</p>
             </div>
           </div>
           <el-form label-position="top">
-            <el-form-item label="寮傚父璁㈠崟澶勭悊鏃堕檺锛堝垎閽燂級">
+            <el-form-item label="异常订单处理时限（分钟）">
               <el-input-number v-model="form.abnormal_order_sla_minutes" :min="5" :step="5" style="width: 100%" />
             </el-form-item>
           </el-form>
@@ -221,7 +233,7 @@ onActivated(() => loadData({ background: true }))
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">骞冲彴娓呭垎</h3>
+              <h3 class="panel-heading__title">平台清分</h3>
               <p class="panel-heading__desc">配置平台分成比例与起结金额门槛。</p>
             </div>
           </div>
@@ -229,7 +241,7 @@ onActivated(() => loadData({ background: true }))
             <el-form-item label="平台清分比例（%）">
               <el-input-number v-model="form.settlement_platform_rate" :min="1" :max="100" style="width: 100%" />
             </el-form-item>
-            <el-form-item label="鏈€浣庣粨绠楅噾棰濓紙鍏冿級">
+            <el-form-item label="最低结算金额（元）">
               <el-input-number v-model="form.settlement_minimum_amount" :min="0" :step="50" style="width: 100%" />
             </el-form-item>
           </el-form>
@@ -238,7 +250,7 @@ onActivated(() => loadData({ background: true }))
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">缁撶畻鍛ㄦ湡</h3>
+              <h3 class="panel-heading__title">结算周期</h3>
               <p class="panel-heading__desc">控制自动清分的周期配置。</p>
             </div>
           </div>
@@ -256,18 +268,18 @@ onActivated(() => loadData({ background: true }))
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">閫氱煡娓犻亾</h3>
+              <h3 class="panel-heading__title">通知渠道</h3>
               <p class="panel-heading__desc">维护邮件、短信和发票通知开关。</p>
             </div>
           </div>
           <el-form label-position="top">
-            <el-form-item label="鍚敤閭欢閫氱煡">
+            <el-form-item label="启用邮件通知">
               <el-switch v-model="form.notification_email_enabled" />
             </el-form-item>
-            <el-form-item label="鍚敤鐭俊閫氱煡">
+            <el-form-item label="启用短信通知">
               <el-switch v-model="form.notification_sms_enabled" />
             </el-form-item>
-            <el-form-item label="鍚敤鍙戠エ閫氱煡">
+            <el-form-item label="启用发票通知">
               <el-switch v-model="form.invoice_notice_enabled" />
             </el-form-item>
           </el-form>
@@ -276,13 +288,13 @@ onActivated(() => loadData({ background: true }))
         <div class="soft-card section-card">
           <div class="panel-heading">
             <div>
-              <h3 class="panel-heading__title">寮傚父閫氱煡瀵硅薄</h3>
+              <h3 class="panel-heading__title">异常通知对象</h3>
               <p class="panel-heading__desc">维护异常订单通知岗位范围。</p>
             </div>
           </div>
           <el-form label-position="top">
-            <el-form-item label="閫氱煡宀椾綅">
-              <el-input v-model="form.abnormal_order_notify_roles" placeholder="渚嬪锛氬钩鍙拌繍钀? 璐㈠姟瀹℃牳, 瀹㈡湇鍊肩彮" />
+            <el-form-item label="通知岗位">
+              <el-input v-model="form.abnormal_order_notify_roles" placeholder="例如：平台运营、财务审核、客服值班" />
             </el-form-item>
           </el-form>
         </div>
@@ -291,7 +303,7 @@ onActivated(() => loadData({ background: true }))
 
     <section class="page-panel surface-card footer-shell">
       <div class="footer-actions">
-        <el-button type="primary" :loading="loading" @click="save">淇濆瓨鍙傛暟</el-button>
+        <el-button type="primary" :loading="loading" @click="save">保存参数</el-button>
       </div>
     </section>
   </div>

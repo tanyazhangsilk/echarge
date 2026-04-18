@@ -16,7 +16,13 @@ import {
   updateStationCharger,
 } from '../../api/operator'
 import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
-import { addLocalCharger, batchAddLocalChargers, mergeChargersWithLocal, updateLocalChargerStatus } from '../../utils/chargerDemoStore'
+import {
+  addLocalCharger,
+  batchAddLocalChargers,
+  getFallbackChargersForStation,
+  regenerateLocalChargers,
+  updateLocalChargerStatus,
+} from '../../utils/chargerDemoStore'
 import { getFallbackStationOptions } from '../../utils/stationFallbacks'
 
 const route = useRoute()
@@ -28,6 +34,7 @@ const submitLoading = ref(false)
 const batchSubmitting = ref(false)
 const tableReady = ref(false)
 const cacheLabel = ref('')
+const initialized = ref(false)
 
 const stations = ref([])
 const chargers = ref([])
@@ -45,10 +52,17 @@ const addForm = reactive({
 })
 
 const batchForm = reactive({
-  count: 5,
+  count: 6,
   type: 'DC',
   power_kw: 120,
 })
+
+const statusOptions = [
+  { label: '空闲', value: 0 },
+  { label: '充电中', value: 1 },
+  { label: '故障', value: 2 },
+  { label: '停用', value: 3 },
+]
 
 const selectedStation = computed(() => stations.value.find((item) => String(item.id) === String(selectedStationId.value)) || null)
 const stationCacheKey = computed(() => buildRequestCacheKey('/operator/stations/options', { scope: 'pile-management' }))
@@ -59,8 +73,8 @@ const chargerStats = computed(() => [
     label: '电桩总数',
     value: chargers.value.length,
     suffix: ' 台',
-    trend: '当前电站全部设备',
-    trendLabel: '支持新增与批量生成',
+    trend: '当前站点全部设备',
+    trendLabel: '支持新增、批量生成和状态切换',
     tone: 'primary',
     icon: Lightning,
   },
@@ -69,7 +83,7 @@ const chargerStats = computed(() => [
     value: chargers.value.filter((item) => Number(item.status) === 0).length,
     suffix: ' 台',
     trend: '可立即发起充电',
-    trendLabel: '用于扫码与手动发起',
+    trendLabel: '用于演示扫码和手动启动',
     tone: 'success',
     icon: CircleCheck,
   },
@@ -87,18 +101,11 @@ const chargerStats = computed(() => [
     value: chargers.value.filter((item) => [2, 3].includes(Number(item.status))).length,
     suffix: ' 台',
     trend: '需跟进处理',
-    trendLabel: '支持直接调整状态',
+    trendLabel: '支持快速切换演示状态',
     tone: 'danger',
     icon: WarningFilled,
   },
 ])
-
-const statusOptions = [
-  { label: '空闲', value: 0 },
-  { label: '充电中', value: 1 },
-  { label: '故障', value: 2 },
-  { label: '停用', value: 3 },
-]
 
 const statusTagType = (status) => (Number(status) === 1 ? 'warning' : Number(status) === 2 ? 'danger' : Number(status) === 3 ? 'info' : 'success')
 
@@ -116,12 +123,18 @@ const resetAddForm = () => {
   })
 }
 
+const applyChargers = (remoteRows = [], updatedAt = Date.now()) => {
+  chargers.value = getFallbackChargersForStation(selectedStation.value, remoteRows)
+  tableReady.value = true
+  updateCacheLabel(updatedAt)
+}
+
 const loadStations = async ({ background = false } = {}) => {
   const cached = getRequestCache(stationCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
     stations.value = Array.isArray(cached.value) && cached.value.length ? cached.value : getFallbackStationOptions()
     if (!selectedStationId.value && stations.value.length) {
-      selectedStationId.value = String(route.query.stationId || '') || String(stations.value[0].id)
+      selectedStationId.value = String(route.query.stationId || stations.value[0].id)
     }
     updateCacheLabel(cached.updatedAt)
   }
@@ -149,15 +162,10 @@ const loadStations = async ({ background = false } = {}) => {
   }
 }
 
-const applyChargers = (remoteRows = [], updatedAt = Date.now()) => {
-  chargers.value = mergeChargersWithLocal(selectedStationId.value, remoteRows)
-  tableReady.value = true
-  updateCacheLabel(updatedAt)
-}
-
 const loadChargers = async ({ background = false } = {}) => {
   if (!selectedStationId.value) {
     chargers.value = []
+    tableReady.value = true
     return
   }
 
@@ -169,14 +177,29 @@ const loadChargers = async ({ background = false } = {}) => {
   loading.value = !cached || !background
   try {
     const { data } = await fetchStationChargers(selectedStationId.value)
-    const rows = Array.isArray(data?.data) ? data.data : []
-    applyChargers(rows, Date.now())
-    setRequestCache(chargerCacheKey.value, rows)
+    const remoteRows = Array.isArray(data?.data) ? data.data : []
+    const nextRows = remoteRows.length ? remoteRows : getFallbackChargersForStation(selectedStation.value, [])
+    applyChargers(nextRows, Date.now())
+    setRequestCache(chargerCacheKey.value, nextRows)
   } catch (error) {
-    applyChargers(cached?.value || [], Date.now())
+    const fallbackRows = cached?.value?.length ? cached.value : getFallbackChargersForStation(selectedStation.value, [])
+    applyChargers(fallbackRows, Date.now())
   } finally {
     loading.value = false
   }
+}
+
+const rebuildDemoChargers = async () => {
+  if (!selectedStation.value) {
+    ElMessage.warning('请先选择电站')
+    return
+  }
+  const demoRows = regenerateLocalChargers(selectedStation.value, {
+    count: Math.max(4, Number(selectedStation.value.planned_charger_count || 6)),
+  })
+  setRequestCache(chargerCacheKey.value, demoRows)
+  await loadChargers({ background: true })
+  ElMessage.success('演示电桩数据已重建')
 }
 
 const openAddDialog = () => {
@@ -194,7 +217,7 @@ const submitAddCharger = async () => {
     return
   }
   if (!addForm.sn_code.trim() || !addForm.charger_name.trim()) {
-    ElMessage.warning('请填写电桩编号与名称')
+    ElMessage.warning('请填写电桩编号和名称')
     return
   }
 
@@ -210,7 +233,7 @@ const submitAddCharger = async () => {
     ElMessage.success('电桩新增成功')
   } catch (error) {
     addLocalCharger(selectedStation.value, addForm)
-    ElMessage.success('电桩已加入当前站点')
+    ElMessage.success('后端暂未写入成功，已先补入当前演示电桩')
   } finally {
     submitLoading.value = false
     addDialogVisible.value = false
@@ -223,7 +246,7 @@ const openBatchDialog = () => {
     ElMessage.warning('请先选择电站')
     return
   }
-  Object.assign(batchForm, { count: 5, type: 'DC', power_kw: 120 })
+  Object.assign(batchForm, { count: 6, type: 'DC', power_kw: 120 })
   batchDialogVisible.value = true
 }
 
@@ -243,7 +266,7 @@ const submitBatchCreate = async () => {
     ElMessage.success('批量生成成功')
   } catch (error) {
     batchAddLocalChargers(selectedStation.value, batchForm)
-    ElMessage.success('已批量生成演示电桩')
+    ElMessage.success('后端暂未写入成功，已生成演示电桩')
   } finally {
     batchSubmitting.value = false
     batchDialogVisible.value = false
@@ -257,21 +280,26 @@ const updateChargerStatus = async (row, status) => {
     ElMessage.success('电桩状态已更新')
   } catch (error) {
     updateLocalChargerStatus(selectedStationId.value, row.id, status)
-    ElMessage.success('电桩状态已更新到当前页面')
+    ElMessage.success('后端未返回成功，已更新当前演示状态')
   } finally {
     await loadChargers({ background: true })
   }
 }
 
-watch(selectedStationId, (value, oldValue) => {
-  if (value && value !== oldValue) {
-    loadChargers()
-  }
-})
+watch(
+  selectedStationId,
+  async (value, oldValue) => {
+    if (!initialized.value || !value || value === oldValue) return
+    await loadChargers({ background: true })
+  },
+)
 
 onMounted(async () => {
   await loadStations({ background: true })
-  await loadChargers({ background: true })
+  if (selectedStationId.value) {
+    await loadChargers({ background: true })
+  }
+  initialized.value = true
 })
 
 onActivated(() => {
@@ -286,13 +314,24 @@ onActivated(() => {
 
 <template>
   <div class="page-shell charger-page">
-    <PageSectionHeader eyebrow="资产管理" title="电桩管理" description="维护单桩新增、批量生成、设备状态与所属电站。" chip="设备配置">
+    <PageSectionHeader
+      eyebrow="资产管理"
+      title="电桩管理"
+      description="维护单桩新增、批量生成、设备状态与所属电站。"
+      chip="设备配置"
+    >
       <template #actions>
         <el-select v-model="selectedStationId" placeholder="请选择电站" filterable :loading="stationLoading" style="width: 300px">
-          <el-option v-for="item in stations" :key="item.id" :label="`${item.station_name} / ${item.status_text}`" :value="String(item.id)" />
+          <el-option
+            v-for="item in stations"
+            :key="item.id"
+            :label="`${item.station_name} / ${item.status_text}`"
+            :value="String(item.id)"
+          />
         </el-select>
         <el-button type="primary" :icon="Plus" @click="openAddDialog">新增电桩</el-button>
         <el-button type="primary" plain :icon="Tickets" @click="openBatchDialog">批量生成电桩</el-button>
+        <el-button plain @click="rebuildDemoChargers">重建演示电桩</el-button>
         <el-button :icon="RefreshRight" :loading="loading" @click="loadChargers()">刷新</el-button>
       </template>
     </PageSectionHeader>
@@ -324,20 +363,26 @@ onActivated(() => {
           <template #default="{ row }">{{ Number(row.power_kw || 0).toFixed(0) }}</template>
         </el-table-column>
         <el-table-column label="状态" width="120" align="center">
-          <template #default="{ row }"><el-tag :type="statusTagType(row.status)">{{ row.status_text }}</el-tag></template>
+          <template #default="{ row }">
+            <el-tag :type="statusTagType(row.status)">{{ row.status_text }}</el-tag>
+          </template>
         </el-table-column>
         <el-table-column prop="updated_at" label="最近更新" width="180" />
         <el-table-column label="快捷操作" width="280" fixed="right">
           <template #default="{ row }">
-            <el-button link type="success" @click="updateChargerStatus(row, 0)">置为空闲</el-button>
-            <el-button link type="warning" @click="updateChargerStatus(row, 1)">置为充电中</el-button>
+            <el-button link type="success" @click="updateChargerStatus(row, 0)">设为空闲</el-button>
+            <el-button link type="warning" @click="updateChargerStatus(row, 1)">设为充电中</el-button>
             <el-button link type="danger" @click="updateChargerStatus(row, 2)">标记故障</el-button>
             <el-button link type="info" @click="updateChargerStatus(row, 3)">停用</el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <EmptyStateBlock v-else-if="!loading" title="暂无电桩数据" description="当前电站下还没有可展示的电桩。" />
+      <EmptyStateBlock
+        v-else-if="!loading"
+        title="暂无电桩数据"
+        description="当前站点暂未读取到电桩记录，可直接生成演示电桩继续演示。"
+      />
     </section>
 
     <el-dialog v-model="addDialogVisible" title="新增电桩" width="560px">

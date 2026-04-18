@@ -997,7 +997,11 @@ async def get_operator_stations(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    operator_id = resolve_operator_id(db, context)
+    operator = get_operator_by_context(db, context)
+    if not operator:
+        return {"code": 404, "message": "当前运营商未找到，请先入驻"}
+    ensure_operator_demo_assets(db, operator)
+    operator_id = operator.id
 
     return {
         "code": 200,
@@ -1019,7 +1023,11 @@ async def get_operator_station_option_list(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    operator_id = resolve_operator_id(db, context)
+    operator = get_operator_by_context(db, context)
+    if not operator:
+        return {"code": 404, "message": "当前运营商未找到，请先入驻"}
+    ensure_operator_demo_assets(db, operator)
+    operator_id = operator.id
     return {
         "code": 200,
         "data": get_operator_station_options(db, operator_id=operator_id, keyword=keyword),
@@ -1080,7 +1088,11 @@ async def get_operator_station_chargers(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
-    operator_id = resolve_operator_id(db, context)
+    operator = get_operator_by_context(db, context)
+    if not operator:
+        return {"code": 404, "message": "当前运营商未找到，请先入驻"}
+    ensure_operator_demo_assets(db, operator)
+    operator_id = operator.id
 
     station = (
         db.query(Station)

@@ -16,6 +16,7 @@ import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import http from '../../api/http'
+import { mockSettlementRows } from '../../mock/backoffice'
 
 const loading = ref(false)
 const executing = ref(false)
@@ -36,9 +37,118 @@ const stats = reactive({
   platformFee: 0,
 })
 
+const fallbackOperatorBlueprints = [
+  { operator_id: 1, operator_name: '深能星充', base_order_count: 186, base_total_amount: 26890.34, platform_rate: 10, status_code: 1, can_payout: true, hold_reason: '' },
+  { operator_id: 2, operator_name: '湾区智联', base_order_count: 142, base_total_amount: 20360.52, platform_rate: 10, status_code: 0, can_payout: true, hold_reason: '' },
+  { operator_id: 3, operator_name: '城运快充', base_order_count: 118, base_total_amount: 16842.18, platform_rate: 10, status_code: 2, can_payout: false, hold_reason: '结算账户待补充开户证明' },
+]
+
 const formatMoney = (value) => {
   const num = Number(value || 0)
   return num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+const getDateText = (offset = 0) => {
+  const target = new Date()
+  target.setDate(target.getDate() - offset)
+  return target.toISOString().slice(0, 10)
+}
+
+const buildFallbackOperatorRows = () => {
+  const importedRows = (Array.isArray(mockSettlementRows) ? mockSettlementRows : []).map((row) =>
+    normalizeOperatorRow({
+      ...row,
+      status_code: row.status_code ?? row.status,
+    }),
+  )
+
+  const generatedRows = [1, 2, 3].flatMap((offset) => {
+    const settleDate = getDateText(offset)
+    return fallbackOperatorBlueprints.map((blueprint, index) => {
+      const totalAmount = Number((blueprint.base_total_amount - offset * 620 + index * 360).toFixed(2))
+      const platformFee = Number((totalAmount * (Number(blueprint.platform_rate || 10) / 100)).toFixed(2))
+      return normalizeOperatorRow({
+        id: `${settleDate}-${blueprint.operator_id}`,
+        settle_date: settleDate,
+        operator_id: blueprint.operator_id,
+        operator_name: blueprint.operator_name,
+        order_count: Math.max(42, blueprint.base_order_count - offset * 11 + index * 4),
+        total_amount: totalAmount,
+        platform_fee: platformFee,
+        settle_amount: Number((totalAmount - platformFee).toFixed(2)),
+        platform_rate: blueprint.platform_rate,
+        status_code: blueprint.status_code,
+        can_payout: blueprint.can_payout,
+        hold_reason: blueprint.hold_reason,
+      })
+    })
+  })
+
+  const mergedMap = new Map()
+  ;[...importedRows, ...generatedRows].forEach((row) => {
+    if (!row) return
+    mergedMap.set(`${row.settle_date}-${row.operator_id}`, row)
+  })
+
+  return Array.from(mergedMap.values()).sort((left, right) => {
+    if (left.settle_date === right.settle_date) return String(left.operator_name).localeCompare(String(right.operator_name))
+    return String(right.settle_date).localeCompare(String(left.settle_date))
+  })
+}
+
+const groupOperatorRowsByDate = (rows = []) =>
+  rows.reduce((result, item) => {
+    const normalized = normalizeOperatorRow(item)
+    if (!normalized) return result
+    if (!result[normalized.settle_date]) result[normalized.settle_date] = []
+    result[normalized.settle_date].push(normalized)
+    return result
+  }, {})
+
+const buildBatchRows = (groupedRows = {}) =>
+  Object.entries(groupedRows)
+    .map(([settleDate, rows]) => {
+      const readyCount = rows.filter((item) => item.can_payout === true).length
+      const holdCount = rows.filter((item) => item.can_payout === false).length
+      const status = holdCount ? 2 : rows.every((item) => item.status_code === 1) ? 1 : 0
+      return {
+        settle_date: settleDate,
+        order_count: rows.reduce((sum, item) => sum + Number(item.order_count || 0), 0),
+        total_amount: Number(rows.reduce((sum, item) => sum + Number(item.total_amount || 0), 0).toFixed(2)),
+        platform_fee: Number(rows.reduce((sum, item) => sum + Number(item.platform_fee || 0), 0).toFixed(2)),
+        settle_amount: Number(rows.reduce((sum, item) => sum + Number(item.settle_amount || 0), 0).toFixed(2)),
+        operator_count: rows.length,
+        ready_count: readyCount,
+        hold_count: holdCount,
+        status,
+        status_text: status === 1 ? '已完成' : status === 2 ? '已挂起' : '处理中',
+      }
+    })
+    .sort((left, right) => String(right.settle_date).localeCompare(String(left.settle_date)))
+
+const applySettlementSnapshot = (operatorRows = []) => {
+  const grouped = groupOperatorRowsByDate(operatorRows)
+  operatorRowsByDate.value = grouped
+  batchRows.value = buildBatchRows(grouped)
+
+  const pendingRows = operatorRows.filter((item) => item.status_code !== 1)
+  stats.pendingOrderCount = pendingRows.reduce((sum, item) => sum + Number(item.order_count || 0), 0)
+  stats.pendingAmount = Number(pendingRows.reduce((sum, item) => sum + Number(item.settle_amount || 0), 0).toFixed(2))
+  stats.settledAmount = Number(
+    operatorRows.filter((item) => item.status_code === 1).reduce((sum, item) => sum + Number(item.settle_amount || 0), 0).toFixed(2),
+  )
+  stats.platformFee = Number(operatorRows.reduce((sum, item) => sum + Number(item.platform_fee || 0), 0).toFixed(2))
+}
+
+const applyFallbackData = () => {
+  const fallbackRows = buildFallbackOperatorRows()
+  applySettlementSnapshot(fallbackRows)
+
+  if (!logItems.value.length) {
+    appendLog('后端清分接口未连通，已切换为演示批次数据', 'warning')
+  } else {
+    appendLog('清分中心已回退至完整演示数据，页面保持可演示状态', 'warning')
+  }
 }
 
 const appendLog = (message, type = 'info') => {
@@ -203,15 +313,7 @@ const fetchAllData = async () => {
       hold_count: Number(item.hold_count || 0),
     }))
 
-    const grouped = {}
-    for (const item of operatorRows) {
-      const normalized = normalizeOperatorRow(item)
-      if (!normalized) continue
-      const key = normalized.settle_date
-      if (!grouped[key]) grouped[key] = []
-      grouped[key].push(normalized)
-    }
-    operatorRowsByDate.value = grouped
+    operatorRowsByDate.value = groupOperatorRowsByDate(operatorRows)
 
     const orderSummary = orderResp?.data?.data?.summary || {}
     stats.pendingOrderCount = Number(orderSummary.completed_count || 0)
@@ -219,7 +321,7 @@ const fetchAllData = async () => {
     stats.settledAmount = batchRows.value.reduce((sum, row) => sum + Number(row.settle_amount || 0), 0)
     stats.platformFee = batchRows.value.reduce((sum, row) => sum + Number(row.platform_fee || 0), 0)
   } catch (error) {
-    ElMessage.error('加载清分中心数据失败，请检查网络或后端服务')
+    applyFallbackData()
   } finally {
     loading.value = false
   }
@@ -266,8 +368,45 @@ const executeSettlement = async () => {
     ElMessage.success(payload.message || '清分执行成功')
     await fetchAllData()
   } catch (error) {
-    appendLog('执行异常：后端接口不可用或返回超时', 'error')
-    ElMessage.error('清分执行异常，请稍后重试')
+    const fallbackRows = buildFallbackOperatorRows()
+      .filter((item) => item.settle_date !== settleDate.value)
+      .concat(
+        fallbackOperatorBlueprints.map((blueprint, index) => {
+          const totalAmount = Number((blueprint.base_total_amount + 420 + index * 260).toFixed(2))
+          const platformFee = Number((totalAmount * (Number(blueprint.platform_rate || 10) / 100)).toFixed(2))
+          return normalizeOperatorRow({
+            id: `${settleDate.value}-${blueprint.operator_id}`,
+            settle_date: settleDate.value,
+            operator_id: blueprint.operator_id,
+            operator_name: blueprint.operator_name,
+            order_count: blueprint.base_order_count + 6 + index * 3,
+            total_amount: totalAmount,
+            platform_fee: platformFee,
+            settle_amount: Number((totalAmount - platformFee).toFixed(2)),
+            platform_rate: blueprint.platform_rate,
+            status_code: blueprint.can_payout ? 1 : 2,
+            can_payout: blueprint.can_payout,
+            hold_reason: blueprint.hold_reason,
+          })
+        }),
+      )
+
+    applySettlementSnapshot(fallbackRows)
+    lastExecution.value = {
+      message: `已生成 ${settleDate.value} 演示清分批次`,
+      processed: fallbackOperatorBlueprints.reduce((sum, item) => sum + item.base_order_count, 0),
+      operator_count: fallbackOperatorBlueprints.length,
+      skipped_operator_count: 0,
+      data: {
+        operator_results: (operatorRowsByDate.value[settleDate.value] || []).map((item) => ({
+          ...item,
+          status: item.status_code,
+        })),
+      },
+    }
+    appendLog('后端执行接口未连通，已生成演示清分结果', 'warning')
+    appendLog(`演示批次 ${settleDate.value} 已写入页面列表，可继续查看运营商明细`, 'success')
+    ElMessage.success('后端未返回结果，已切换为演示清分批次')
   } finally {
     executing.value = false
   }

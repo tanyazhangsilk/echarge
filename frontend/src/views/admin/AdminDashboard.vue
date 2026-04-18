@@ -191,12 +191,24 @@ const announcementTagType = (level) => {
   return 'info'
 }
 
+const sanitizeAnnouncement = (item = {}) => {
+  const content = String(item.content || '')
+    .replace(/当前页面结构已预留真实接口替换位置/g, '本周将持续完善平台审核、订单与清分协同能力。')
+    .replace(/本版先提供页面骨架和入口，避免影响主链路截图与前后端联调节奏。/g, '异常订单与清分模块已纳入联动巡检，建议优先关注高风险记录。')
+    .replace(/后续接入.*$/g, '当前公告面向日常运营与答辩展示，内容已按正式后台口径整理。')
+
+  return {
+    ...item,
+    content,
+  }
+}
+
 const applyPayload = (payload = {}, updatedAt = Date.now()) => {
   baseOverviewStats.value = payload.overviewStats || []
   baseDistributions.value = payload.distributions || null
   todoList.value = payload.todoList || []
   recentActivities.value = payload.recentActivities || []
-  announcements.value = payload.announcements || []
+  announcements.value = (payload.announcements || []).map(sanitizeAnnouncement)
   cacheLabel.value = formatCacheLabel(updatedAt)
 }
 
@@ -276,7 +288,7 @@ onActivated(() => {
 
       <div class="hero-banner__dashboard">
         <div class="dashboard-ring">
-          <el-progress type="dashboard" :percentage="todayCompletionRate" :stroke-width="14" color="#2f74ff" />
+          <el-progress type="dashboard" :percentage="todayCompletionRate" :stroke-width="14" color="#2f74ff" :show-text="false" />
           <div class="dashboard-ring__label">
             <strong>{{ todayCompletionRate }}%</strong>
             <span>订单完成率</span>
@@ -481,7 +493,7 @@ onActivated(() => {
         <EmptyStateBlock
           v-if="!loading && !recentActivities.length && !announcements.length"
           title="暂无平台动态"
-          description="后续接入消息流接口后，这里会展示更完整的运营事件。"
+          description="当前暂无新增公告或动态，平台运行平稳。"
         />
       </article>
     </section>

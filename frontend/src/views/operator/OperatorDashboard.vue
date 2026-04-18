@@ -136,7 +136,7 @@ onActivated(() => {
     >
       <template #actions>
         <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
-        <el-button>导出日报</el-button>
+        <el-button @click="loadData">刷新概览</el-button>
         <el-button type="primary">发起巡检</el-button>
       </template>
     </PageSectionHeader>
@@ -156,7 +156,7 @@ onActivated(() => {
 
       <div class="operator-hero__right">
         <div class="ring-wrap">
-          <el-progress type="dashboard" :percentage="Math.round(onlineRate)" :stroke-width="14" color="#22a06b" />
+          <el-progress type="dashboard" :percentage="Math.round(onlineRate)" :stroke-width="14" color="#22a06b" :show-text="false" />
           <div class="ring-wrap__label">
             <strong>{{ onlineRate.toFixed(1) }}%</strong>
             <span>设备在线率</span>
@@ -225,7 +225,7 @@ onActivated(() => {
         <div class="panel-heading">
           <div>
             <h3 class="panel-heading__title">设备告警</h3>
-            <p class="panel-heading__desc">用于定位高优先级设备问题，支持后续接入工单系统。</p>
+            <p class="panel-heading__desc">用于定位高优先级设备问题，方便运维班组快速处理。</p>
           </div>
         </div>
         <div class="alarm-list" v-if="alarms.length">
@@ -241,14 +241,14 @@ onActivated(() => {
           </div>
         </div>
 
-        <EmptyStateBlock v-else title="暂无设备告警" description="设备状态稳定时，这里会保持空状态。" />
+        <EmptyStateBlock v-else title="暂无设备告警" description="当前设备运行平稳，无需额外处置。" />
       </article>
 
       <article class="page-panel surface-card table-shell">
         <div class="panel-heading">
           <div>
             <h3 class="panel-heading__title">实时充电订单</h3>
-            <p class="panel-heading__desc">展示当前正在充电的订单，支持后续切换 WebSocket 数据源。</p>
+            <p class="panel-heading__desc">展示当前正在充电的订单，便于站点实时巡检与客服响应。</p>
           </div>
         </div>
         <el-table v-loading="loading" :data="realtimeOrders" size="small" v-if="realtimeOrders.length">
@@ -279,7 +279,7 @@ onActivated(() => {
         <EmptyStateBlock
           v-else-if="!loading"
           title="当前暂无实时订单"
-          description="后续接入实时订单接口后，可在此展示充电中订单。"
+          description="当前时段暂无进行中的充电订单。"
         />
       </article>
     </section>

@@ -228,50 +228,102 @@ onMounted(loadData)
       />
     </section>
 
-    <section class="split-layout operator-audit-top">
-      <article class="page-panel surface-card">
+    <section class="page-panel surface-card">
+      <div class="panel-heading">
+        <div>
+          <h3 class="panel-heading__title">筛选与检索</h3>
+          <p class="panel-heading__desc">支持按运营商、联系人、审核状态和提交时间范围进行筛选。</p>
+        </div>
+      </div>
+
+      <div class="filter-panel">
+        <div class="filter-grid operator-audit-filter-grid">
+          <el-input v-model="filters.keyword" clearable placeholder="运营商名称 / 企业全称 / 申请编号" />
+          <el-input v-model="filters.contactName" clearable placeholder="联系人 / 电话 / 邮箱" />
+          <el-select v-model="filters.status" clearable placeholder="申请状态">
+            <el-option label="待审核" value="pending" />
+            <el-option label="已通过" value="approved" />
+            <el-option label="已驳回" value="rejected" />
+          </el-select>
+          <el-date-picker
+            v-model="filters.submittedRange"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="提交开始日期"
+            end-placeholder="提交结束日期"
+            value-format="YYYY-MM-DD"
+            unlink-panels
+          />
+        </div>
+
+        <div class="toolbar-row toolbar-row--actions">
+          <div class="toolbar-summary">
+            <span>当前匹配记录</span>
+            <strong>{{ filteredRecords.length }}</strong>
+            <span>条</span>
+          </div>
+          <div class="toolbar-group">
+            <el-button @click="resetFilters">重置</el-button>
+            <el-button type="primary" @click="handleSearch">查询</el-button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="audit-content-grid">
+      <article class="page-panel surface-card table-shell">
         <div class="panel-heading">
           <div>
-            <h3 class="panel-heading__title">筛选与检索</h3>
-            <p class="panel-heading__desc">支持按运营商、联系人、审核状态和提交时间范围进行筛选。</p>
+            <h3 class="panel-heading__title">申请列表</h3>
+            <p class="panel-heading__desc">集中展示运营商申请基础信息、审核状态与最近处理记录。</p>
           </div>
         </div>
 
-        <div class="filter-panel">
-          <div class="filter-grid operator-audit-filter-grid">
-            <el-input v-model="filters.keyword" clearable placeholder="运营商名称 / 企业全称 / 申请编号" />
-            <el-input v-model="filters.contactName" clearable placeholder="联系人 / 电话 / 邮箱" />
-            <el-select v-model="filters.status" clearable placeholder="申请状态">
-              <el-option label="待审核" value="pending" />
-              <el-option label="已通过" value="approved" />
-              <el-option label="已驳回" value="rejected" />
-            </el-select>
-            <el-date-picker
-              v-model="filters.submittedRange"
-              type="daterange"
-              range-separator="至"
-              start-placeholder="提交开始日期"
-              end-placeholder="提交结束日期"
-              value-format="YYYY-MM-DD"
-              unlink-panels
-            />
-          </div>
+        <el-table v-loading="loading" :data="filteredRecords" height="100%">
+          <el-table-column prop="applicationNo" label="申请编号" min-width="176" />
+          <el-table-column prop="operatorName" label="运营商名称" min-width="220" show-overflow-tooltip />
+          <el-table-column prop="contactName" label="联系人" width="100" />
+          <el-table-column prop="phone" label="联系电话" width="138" />
+          <el-table-column prop="region" label="所在地区" min-width="138" />
+          <el-table-column prop="submittedAt" label="申请时间" width="168" />
+          <el-table-column label="审核状态" width="110" align="center">
+            <template #default="{ row }">
+              <el-tag :type="getAuditStatusTagType(row.status)" effect="light" round>
+                {{ formatOperatorAuditStatus(row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="lastProcessedBy" label="最近处理人" width="150" show-overflow-tooltip />
+          <el-table-column prop="lastProcessedAt" label="最近处理时间" width="168" />
+          <el-table-column label="操作" width="210" fixed="right">
+            <template #default="{ row }">
+              <div class="table-actions">
+                <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
+                <el-button link :type="row.status === 'pending' ? 'success' : 'info'" @click="openReviewDialog(row)">
+                  {{ row.status === 'pending' ? '审核' : '重新审核' }}
+                </el-button>
+                <el-dropdown trigger="click">
+                  <el-button link type="info">更多</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item @click="openDetail(row)">查看资质材料</el-dropdown-item>
+                      <el-dropdown-item @click="openReviewDialog(row)">填写审核意见</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
 
-          <div class="toolbar-row toolbar-row--actions">
-            <div class="toolbar-summary">
-              <span>当前匹配记录</span>
-              <strong>{{ filteredRecords.length }}</strong>
-              <span>条</span>
-            </div>
-            <div class="toolbar-group">
-              <el-button @click="resetFilters">重置</el-button>
-              <el-button type="primary" @click="handleSearch">查询</el-button>
-            </div>
-          </div>
-        </div>
+        <EmptyStateBlock
+          v-if="!loading && filteredRecords.length === 0"
+          title="暂无匹配的运营商申请"
+          description="可尝试调整筛选条件，或等待新的入驻申请数据接入。"
+        />
       </article>
 
-      <article class="page-panel surface-card">
+      <article class="page-panel surface-card audit-aside">
         <div class="panel-heading">
           <div>
             <h3 class="panel-heading__title">审核流程状态</h3>
@@ -338,62 +390,10 @@ onMounted(loadData)
           <EmptyStateBlock
             v-else
             title="当前无待审核申请"
-            description="当运营商申请均已处理后，这里会展示空状态占位。"
+            description="当前审核队列已清空，可继续关注新提交记录。"
           />
         </div>
       </article>
-    </section>
-
-    <section class="page-panel surface-card table-shell">
-      <div class="panel-heading">
-        <div>
-          <h3 class="panel-heading__title">申请列表</h3>
-          <p class="panel-heading__desc">集中展示运营商申请基础信息、审核状态与最近处理记录。</p>
-        </div>
-      </div>
-
-      <el-table v-loading="loading" :data="filteredRecords" height="100%">
-        <el-table-column prop="applicationNo" label="申请编号" min-width="176" />
-        <el-table-column prop="operatorName" label="运营商名称" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="contactName" label="联系人" width="100" />
-        <el-table-column prop="phone" label="联系电话" width="138" />
-        <el-table-column prop="region" label="所在地区" min-width="138" />
-        <el-table-column prop="submittedAt" label="申请时间" width="168" />
-        <el-table-column label="审核状态" width="110" align="center">
-          <template #default="{ row }">
-            <el-tag :type="getAuditStatusTagType(row.status)" effect="light" round>
-              {{ formatOperatorAuditStatus(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="lastProcessedBy" label="最近处理人" width="150" show-overflow-tooltip />
-        <el-table-column prop="lastProcessedAt" label="最近处理时间" width="168" />
-        <el-table-column label="操作" width="210" fixed="right">
-          <template #default="{ row }">
-            <div class="table-actions">
-              <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
-              <el-button link :type="row.status === 'pending' ? 'success' : 'info'" @click="openReviewDialog(row)">
-                {{ row.status === 'pending' ? '审核' : '重新审核' }}
-              </el-button>
-              <el-dropdown trigger="click">
-                <el-button link type="info">更多</el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item @click="openDetail(row)">查看资质材料</el-dropdown-item>
-                    <el-dropdown-item @click="openReviewDialog(row)">填写审核意见</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <EmptyStateBlock
-        v-if="!loading && filteredRecords.length === 0"
-        title="暂无匹配的运营商申请"
-        description="可尝试调整筛选条件，或等待新的入驻申请数据接入。"
-      />
     </section>
 
     <OperatorAuditDetailDrawer v-model="drawerVisible" :record="currentRecord" @review="openReviewDialog" />
@@ -414,6 +414,18 @@ onMounted(loadData)
 
 .operator-audit-top {
   align-items: start;
+}
+
+.audit-content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 18px;
+  align-items: start;
+}
+
+.audit-aside {
+  position: sticky;
+  top: 0;
 }
 
 .operator-audit-filter-grid {
@@ -574,6 +586,10 @@ onMounted(loadData)
 }
 
 @media (max-width: 1280px) {
+  .audit-content-grid {
+    grid-template-columns: 1fr;
+  }
+
   .operator-audit-filter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

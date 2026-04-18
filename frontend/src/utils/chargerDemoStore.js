@@ -1,5 +1,12 @@
 const STORAGE_KEY = 'echarge-demo-chargers'
 
+const statusTextMap = {
+  0: '空闲',
+  1: '充电中',
+  2: '故障',
+  3: '停用',
+}
+
 const readStore = () => {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
@@ -25,13 +32,6 @@ const formatNow = () =>
     hour12: false,
   })
 
-const statusTextMap = {
-  0: '空闲',
-  1: '充电中',
-  2: '故障',
-  3: '停用',
-}
-
 const createChargerRecord = (station, payload, sequence = 0) => {
   const stationCode = String(station?.id || 'ST').replace(/\D/g, '').padStart(3, '0')
   const snCode =
@@ -53,9 +53,38 @@ const createChargerRecord = (station, payload, sequence = 0) => {
   }
 }
 
+const buildSeedChargers = (station, count = 6) => {
+  const stationName = station?.station_name || '演示电站'
+  const basePower = Number(station?.total_power_kw || 0)
+  const averagePower = count ? Math.max(7, Math.round((basePower || count * 120) / count)) : 120
+
+  return Array.from({ length: count }).map((_, index) => {
+    const status = index === 0 ? 1 : index === count - 1 ? 2 : 0
+    return {
+      id: `seed-${station?.id || 'demo'}-${index + 1}`,
+      station_id: station?.id,
+      station_name: stationName,
+      sn_code: `ST${String(station?.id || 0).padStart(3, '0')}${index % 2 === 0 ? 'DC' : 'AC'}${String(index + 1).padStart(3, '0')}`,
+      charger_name: `${stationName.slice(0, 10)}-${String(index + 1).padStart(2, '0')}号桩`,
+      type: index % 2 === 0 ? 'DC' : 'AC',
+      power_kw: index % 2 === 0 ? Math.max(60, averagePower) : Math.min(averagePower, 40),
+      status,
+      status_text: statusTextMap[status],
+      updated_at: formatNow(),
+      is_seed_demo: true,
+    }
+  })
+}
+
 export const getLocalChargers = (stationId) => {
   const store = readStore()
   return store[toStationKey(stationId)] || []
+}
+
+export const getFallbackChargersForStation = (station, remoteRows = []) => {
+  const localRows = getLocalChargers(station?.id)
+  const seedRows = buildSeedChargers(station, Math.max(4, Number(station?.planned_charger_count || 6)))
+  return mergeChargersWithLocal(station?.id, [...remoteRows, ...seedRows, ...localRows])
 }
 
 export const mergeChargersWithLocal = (stationId, remoteRows = []) => {
@@ -103,6 +132,14 @@ export const batchAddLocalChargers = (station, payload) => {
   store[key] = [...created, ...current]
   writeStore(store)
   return created
+}
+
+export const regenerateLocalChargers = (station, payload = {}) => {
+  const store = readStore()
+  const key = toStationKey(station?.id)
+  store[key] = buildSeedChargers(station, Math.max(4, Number(payload.count || station?.planned_charger_count || 6)))
+  writeStore(store)
+  return store[key]
 }
 
 export const updateLocalChargerStatus = (stationId, chargerId, status) => {
