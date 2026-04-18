@@ -11,8 +11,8 @@ import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import http from '../../api/http'
 import { ROLES } from '../../config/permissions'
 import { mockInvoiceRows } from '../../mock/backoffice'
-import { readLocalState, writeLocalState } from '../../utils/localState'
-import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
+import { readLocalListState, writeLocalListState } from '../../utils/localState'
+import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 
 const STORAGE_KEY = 'echarge-finance-invoices'
 const CACHE_TTL = 60 * 1000
@@ -21,7 +21,7 @@ const route = useRoute()
 const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
 
 const updateCacheLabel = (timestamp = Date.now()) => {
-  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(timestamp)}`
+  cacheLabel.value = formatCacheLabel(timestamp)
 }
 const toNonEmptyRows = (items, fallback = []) => {
   if (Array.isArray(items) && items.length) return items
@@ -30,11 +30,11 @@ const toNonEmptyRows = (items, fallback = []) => {
 }
 
 const loading = ref(false)
-const rows = ref(toNonEmptyRows(readLocalState(STORAGE_KEY, []), mockInvoiceRows))
+const rows = ref(readLocalListState(STORAGE_KEY, mockInvoiceRows))
 const keyword = ref('')
 const activeStatus = ref('all')
 const cacheLabel = ref('')
-const tableReady = ref(false)
+const tableReady = ref(rows.value.length > 0)
 
 const currentPage = ref(1)
 const pageSize = ref(10)
@@ -101,11 +101,13 @@ const refreshSummary = () => {
     .reduce((sum, item) => sum + Number(item.amount || 0), 0)
 }
 
+refreshSummary()
+
 const applyRows = (items = [], { updatedAt = Date.now(), persist = true } = {}) => {
   const nextRows = toNonEmptyRows(items, rows.value)
   rows.value = nextRows
   if (persist && nextRows.length) {
-    writeLocalState(STORAGE_KEY, nextRows)
+    writeLocalListState(STORAGE_KEY, nextRows)
   }
   refreshSummary()
   currentPage.value = 1
@@ -133,10 +135,9 @@ const fetchInvoices = async ({ background = false } = {}) => {
       setRequestCache(cacheKey, nextRows)
     }
   } catch (error) {
-    const localRows = readLocalState(STORAGE_KEY, [])
+    const localRows = readLocalListState(STORAGE_KEY, mockInvoiceRows)
     const fallbackRows = toNonEmptyRows(localRows, rows.value)
     applyRows(fallbackRows, { updatedAt: Date.now(), persist: fallbackRows.length > 0 })
-    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -190,8 +191,10 @@ const submitProcess = async (action) => {
         }
       : item,
   )
-  writeLocalState(STORAGE_KEY, rows.value)
+  writeLocalListState(STORAGE_KEY, rows.value)
+  setRequestCache(cacheKey, rows.value)
   refreshSummary()
+  updateCacheLabel(Date.now())
   processDialogVisible.value = false
   ElMessage.success(remoteSuccess ? (action === 'approve' ? '发票已处理为已开票' : '发票申请已驳回') : '发票状态已更新')
 }
@@ -200,8 +203,12 @@ watch(activeStatus, () => {
   currentPage.value = 1
 })
 
-onMounted(fetchInvoices)
-onActivated(() => fetchInvoices({ background: true }))
+onMounted(() => fetchInvoices({ background: true }))
+onActivated(() => {
+  if (shouldRefreshRequestCache(cacheKey, CACHE_TTL)) {
+    fetchInvoices({ background: true })
+  }
+})
 </script>
 
 <template>

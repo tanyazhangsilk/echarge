@@ -1,23 +1,111 @@
 import http from './http'
+import {
+  mockCoupons,
+  mockCustomerOverview,
+  mockDiscounts,
+  mockFleets,
+  mockOperatorProfile,
+  mockOperatorSettingContacts,
+  mockTags,
+} from '../mock/backoffice'
+
+const clone = (value) => JSON.parse(JSON.stringify(value))
+const resolveMock = (data, extra = {}) => Promise.resolve({ data: { data: clone(data), ...clone(extra) } })
+
+let fleetState = clone(mockFleets)
+let tagState = clone(mockTags)
+let discountState = clone(mockDiscounts)
+let couponState = clone(mockCoupons)
+let operatorProfileState = clone(mockOperatorProfile)
+let operatorContactsState = clone(mockOperatorSettingContacts)
+const customerOverviewState = clone(mockCustomerOverview)
+
+const getCustomerOverviewPayload = () => ({
+  summary: {
+    fleet_count: fleetState.length,
+    whitelist_count: fleetState.filter((item) => item.is_whitelist).length,
+    member_count: customerOverviewState.members.length,
+  },
+  members: customerOverviewState.members,
+})
 
 export const fetchBillingTemplates = () => http.get('/operator/billing/templates')
 export const createBillingTemplate = (payload) => http.post('/operator/billing/templates', payload)
 export const updateBillingTemplate = (id, payload) => http.put(`/operator/billing/templates/${id}`, payload)
 
-export const fetchCustomerOverview = () => http.get('/operator/customers/overview')
-export const fetchFleets = () => http.get('/operator/customers/fleets')
-export const createFleet = (payload) => http.post('/operator/customers/fleets', payload)
-export const fetchTags = () => http.get('/operator/customers/tags')
-export const createTag = (payload) => http.post('/operator/customers/tags', payload)
+export const fetchCustomerOverview = () => resolveMock(getCustomerOverviewPayload())
+export const fetchFleets = () => resolveMock(fleetState)
+export const createFleet = (payload) => {
+  fleetState.unshift({
+    id: Date.now(),
+    name: payload?.name?.trim() || '未命名车队',
+    member_count: 0,
+    is_whitelist: Boolean(payload?.is_whitelist),
+    created_at: new Date().toLocaleString('zh-CN', { hour12: false }),
+  })
+  return Promise.resolve({ data: { message: 'ok' } })
+}
+export const fetchTags = () => resolveMock(tagState)
+export const createTag = (payload) => {
+  tagState.unshift({
+    id: Date.now(),
+    name: payload?.name?.trim() || '新标签',
+    color: payload?.color || '#409EFF',
+    description: payload?.description || '',
+    user_count: 0,
+  })
+  return Promise.resolve({ data: { message: 'ok' } })
+}
 
-export const fetchDiscounts = () => http.get('/operator/marketing/discounts')
-export const createDiscount = (payload) => http.post('/operator/marketing/discounts', payload)
-export const fetchCoupons = () => http.get('/operator/marketing/coupons')
-export const createCoupon = (payload) => http.post('/operator/marketing/coupons', payload)
-export const dispatchCoupon = (id, payload) => http.post(`/operator/marketing/coupons/${id}/dispatch`, payload)
+export const fetchDiscounts = () => resolveMock(discountState)
+export const createDiscount = (payload) => {
+  discountState.unshift({
+    id: Date.now(),
+    name: payload?.name?.trim() || '新活动',
+    campaign_type: payload?.campaign_type || '满减',
+    discount_value: String(payload?.discount_value ?? 0),
+    threshold: payload?.threshold ? `满${payload.threshold} 可用` : '不限门槛',
+    audience: payload?.audience || '运营用户',
+    redeem_count: 0,
+    conversion_rate: '0%',
+    status: payload?.status || '待审核',
+  })
+  return Promise.resolve({ data: { message: 'ok' } })
+}
+export const fetchCoupons = () => resolveMock(couponState)
+export const createCoupon = (payload) => {
+  couponState.unshift({
+    id: Date.now(),
+    name: payload?.name?.trim() || '新优惠券',
+    discount_value: `${payload?.discount_value ?? 0} 元`,
+    inventory: Number(payload?.inventory || 0),
+    dispatched: 0,
+    used: 0,
+    status: payload?.status || '待投放',
+  })
+  return Promise.resolve({ data: { message: 'ok' } })
+}
+export const dispatchCoupon = (id, payload) => {
+  const target = couponState.find((item) => Number(item.id) === Number(id))
+  if (target) {
+    target.dispatched = Number(target.dispatched || 0) + Number(payload?.dispatch_count || 0)
+    target.status = '投放中'
+  }
+  return Promise.resolve({ data: { message: 'ok' } })
+}
 
-export const fetchOperatorProfile = () => http.get('/operator/settings/profile')
-export const updateOperatorProfile = (payload) => http.put('/operator/settings/profile', payload)
+export const fetchOperatorProfile = () =>
+  resolveMock({
+    ...operatorProfileState,
+    contact_matrix: operatorContactsState,
+  })
+export const updateOperatorProfile = (payload) => {
+  operatorProfileState = {
+    ...operatorProfileState,
+    ...payload,
+  }
+  return Promise.resolve({ data: { message: 'ok' } })
+}
 
 export const fetchOperatorStations = (params = {}) => http.get('/operator/stations', { params })
 export const fetchOperatorStationOptions = (params = {}) => http.get('/operator/stations/options', { params })

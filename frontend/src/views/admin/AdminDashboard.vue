@@ -1,5 +1,5 @@
 ﻿<script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
@@ -22,6 +22,7 @@ import TrendAreaChart from '../../components/console/TrendAreaChart.vue'
 import { fetchAdminDashboard } from '../../api/console'
 import { ROLES } from '../../config/permissions'
 import { useOrderStore } from '../../stores/order'
+import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 
 const router = useRouter()
 const orderStore = useOrderStore()
@@ -32,8 +33,11 @@ const baseDistributions = ref(null)
 const todoList = ref([])
 const recentActivities = ref([])
 const announcements = ref([])
+const cacheLabel = ref('')
+const CACHE_TTL = 12 * 1000
 
 const adminScope = { role: ROLES.ADMIN }
+const cacheKey = buildRequestCacheKey('/console/admin/dashboard', { scope: 'admin-dashboard' })
 
 const orderStats = computed(() => orderStore.getOrderStats(adminScope))
 const orderTrendSource = computed(() => orderStore.getOrderTrend(adminScope, 7))
@@ -187,18 +191,37 @@ const announcementTagType = (level) => {
   return 'info'
 }
 
-const loadData = async () => {
-  loading.value = true
+const applyPayload = (payload = {}, updatedAt = Date.now()) => {
+  baseOverviewStats.value = payload.overviewStats || []
+  baseDistributions.value = payload.distributions || null
+  todoList.value = payload.todoList || []
+  recentActivities.value = payload.recentActivities || []
+  announcements.value = payload.announcements || []
+  cacheLabel.value = formatCacheLabel(updatedAt)
+}
+
+const loadData = async ({ background = false } = {}) => {
+  const cached = getRequestCache(cacheKey, { ttl: CACHE_TTL, allowStale: true })
+  if (cached) {
+    applyPayload(cached.value, cached.updatedAt)
+  }
+
+  loading.value = !cached || !background
   try {
     const { data } = await fetchAdminDashboard()
-    baseOverviewStats.value = data.overviewStats || []
-    baseDistributions.value = data.distributions || null
-    todoList.value = data.todoList || []
-    recentActivities.value = data.recentActivities || []
-    announcements.value = data.announcements || []
+    const payload = {
+      overviewStats: data.overviewStats || [],
+      distributions: data.distributions || null,
+      todoList: data.todoList || [],
+      recentActivities: data.recentActivities || [],
+      announcements: data.announcements || [],
+    }
+    applyPayload(payload, Date.now())
+    setRequestCache(cacheKey, payload)
   } catch (error) {
-    console.error(error)
-    ElMessage.error('平台工作台加载失败，请检查 mock 数据或接口配置')
+    if (!baseOverviewStats.value.length) {
+      ElMessage.error('平台工作台暂未加载成功')
+    }
   } finally {
     loading.value = false
   }
@@ -212,7 +235,12 @@ const goToOrderDetail = (row) => {
   router.push(`/admin/orders/detail/${row.id}`)
 }
 
-onMounted(loadData)
+onMounted(() => loadData({ background: true }))
+onActivated(() => {
+  if (shouldRefreshRequestCache(cacheKey, CACHE_TTL)) {
+    loadData({ background: true })
+  }
+})
 </script>
 
 <template>
@@ -226,6 +254,7 @@ onMounted(loadData)
       <template #actions>
         <div class="hero-meta">
           <span class="hero-meta__date">{{ currentDateText }}</span>
+          <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
           <el-button @click="loadData">刷新数据</el-button>
           <el-button type="primary" @click="router.push('/admin/finance')">进入清分中心</el-button>
         </div>

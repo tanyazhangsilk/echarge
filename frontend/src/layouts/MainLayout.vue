@@ -22,6 +22,9 @@ const windowWidth = ref(window.innerWidth)
 const theme = ref(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
 
 const keepAliveNames = [
+  'AdminOrders',
+  'AdminOrderAbnormal',
+  'AdminFinanceInvoices',
   'OperatorStations',
   'OperatorStationsChargers',
   'OperatorOrdersHistory',

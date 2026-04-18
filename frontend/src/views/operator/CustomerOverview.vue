@@ -69,7 +69,7 @@ const loadData = async ({ background = false } = {}) => {
       applyPayload(mockCustomerOverview, false, Date.now())
       cacheLabel.value = '当前内容可用'
     }
-    errorMessage.value = '网络波动，已展示最近可用结果。'
+    errorMessage.value = '当前列表已保持最近更新内容。'
   } finally {
     loading.value = false
   }

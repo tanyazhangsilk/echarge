@@ -1,5 +1,5 @@
 ﻿<script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Monitor, Bell, TrendCharts, Lightning } from '@element-plus/icons-vue'
 
@@ -9,16 +9,20 @@ import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import { ROLES, getStoredOperatorId } from '../../config/permissions'
 import { fetchOperatorDashboard } from '../../api/console'
 import { useOrderStore } from '../../stores/order'
+import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 
 const orderStore = useOrderStore()
 const loading = ref(false)
 const profile = ref(null)
 const stationHealth = ref([])
 const alarms = ref([])
+const cacheLabel = ref('')
+const CACHE_TTL = 12 * 1000
 const scope = {
   role: ROLES.OPERATOR,
   operatorId: getStoredOperatorId(),
 }
+const cacheKey = buildRequestCacheKey('/console/operator/dashboard', { scope: 'operator-dashboard' })
 
 const orderStats = computed(() => orderStore.getOrderStats(scope))
 const cards = computed(() => [
@@ -82,22 +86,44 @@ const healthyStationCount = computed(() => {
   return Number(item?.count || 0)
 })
 
-const loadData = async () => {
-  loading.value = true
+const applyPayload = (payload = {}, updatedAt = Date.now()) => {
+  profile.value = payload.profile || null
+  stationHealth.value = payload.stationHealth || []
+  alarms.value = payload.alarms || []
+  cacheLabel.value = formatCacheLabel(updatedAt)
+}
+
+const loadData = async ({ background = false } = {}) => {
+  const cached = getRequestCache(cacheKey, { ttl: CACHE_TTL, allowStale: true })
+  if (cached) {
+    applyPayload(cached.value, cached.updatedAt)
+  }
+
+  loading.value = !cached || !background
   try {
     const { data } = await fetchOperatorDashboard()
-    profile.value = data.profile || null
-    stationHealth.value = data.stationHealth || []
-    alarms.value = data.alarms || []
+    const payload = {
+      profile: data.profile || null,
+      stationHealth: data.stationHealth || [],
+      alarms: data.alarms || [],
+    }
+    applyPayload(payload, Date.now())
+    setRequestCache(cacheKey, payload)
   } catch (error) {
-    console.error(error)
-    ElMessage.error('运营商工作台加载失败')
+    if (!profile.value) {
+      ElMessage.error('运营商工作台暂未加载成功')
+    }
   } finally {
     loading.value = false
   }
 }
 
-onMounted(loadData)
+onMounted(() => loadData({ background: true }))
+onActivated(() => {
+  if (shouldRefreshRequestCache(cacheKey, CACHE_TTL)) {
+    loadData({ background: true })
+  }
+})
 </script>
 
 <template>
@@ -109,6 +135,7 @@ onMounted(loadData)
       chip="运营商视角"
     >
       <template #actions>
+        <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
         <el-button>导出日报</el-button>
         <el-button type="primary">发起巡检</el-button>
       </template>

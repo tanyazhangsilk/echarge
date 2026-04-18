@@ -8,7 +8,7 @@ import MetricCard from '../../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../../components/console/EmptyStateBlock.vue'
 import TableSkeletonBlock from '../../../components/console/TableSkeletonBlock.vue'
 import { fetchStationAudits, processStationAudit } from '../../../api/admin'
-import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../../utils/requestCache'
+import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../../utils/requestCache'
 import { getFallbackStationAudits } from '../../../utils/stationFallbacks'
 
 const CACHE_TTL = 45 * 1000
@@ -137,7 +137,7 @@ const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) =
     ...(payload.summary || {}),
   })
   tableReady.value = true
-  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(updatedAt)}`
+  cacheLabel.value = formatCacheLabel(updatedAt)
 }
 
 const loadStations = async ({ background = false, force = false } = {}) => {
@@ -157,7 +157,6 @@ const loadStations = async ({ background = false, force = false } = {}) => {
     if (!stations.value.length) {
       applyPayload(fallback, false, Date.now())
     }
-    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -205,8 +204,12 @@ watch(
   },
 )
 
-onMounted(loadStations)
-onActivated(() => loadStations({ background: true }))
+onMounted(() => loadStations({ background: true }))
+onActivated(() => {
+  if (shouldRefreshRequestCache(listCacheKey.value, CACHE_TTL)) {
+    loadStations({ background: true })
+  }
+})
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer)
 })

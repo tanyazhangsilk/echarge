@@ -97,3 +97,13 @@ export const formatCacheUpdatedAt = (timestamp) => {
     hour12: false,
   })
 }
+
+export const formatCacheLabel = (timestamp, prefix = '最近更新于') => {
+  const formatted = formatCacheUpdatedAt(timestamp)
+  return formatted ? `${prefix} ${formatted}` : ''
+}
+
+export const shouldRefreshRequestCache = (key, ttl = DEFAULT_REQUEST_CACHE_TTL) => {
+  const cached = getRequestCache(key, { ttl, allowStale: true })
+  return !cached || !cached.isFresh
+}

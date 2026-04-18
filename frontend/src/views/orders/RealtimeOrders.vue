@@ -16,7 +16,7 @@ import {
   markOperatorOrderAbnormal,
   startDemoCharging,
 } from '../../api/operator'
-import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
+import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 import {
   demoStartUsers,
   finishLocalDemoOrder,
@@ -103,7 +103,7 @@ const applyPayload = (payload = {}, updatedAt = Date.now()) => {
   pagination.pageSize = Number(payload.page_size || pagination.pageSize)
   Object.assign(summary, payload.summary || {})
   tableReady.value = true
-  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(updatedAt)}`
+  cacheLabel.value = formatCacheLabel(updatedAt)
 }
 
 const loadOrders = async ({ background = false } = {}) => {
@@ -122,8 +122,10 @@ const loadOrders = async ({ background = false } = {}) => {
     if (!orders.value.length) {
       const demoPayload = getDemoOrderListPayload('realtime')
       applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, Date.now())
+      if (!demoPayload?.items?.length) {
+        ElMessage.error('实时订单暂未加载成功')
+      }
     }
-    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -141,7 +143,7 @@ const applyStartOptions = (payload = {}, updatedAt = Date.now()) => {
   startChargers.value = (payload.chargers || []).filter((item) => ![2, 3].includes(Number(item.status)))
   startForm.charger_id = startChargers.value[0]?.id || null
   if (!cacheLabel.value) {
-    cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(updatedAt)}`
+    cacheLabel.value = formatCacheLabel(updatedAt)
   }
 }
 
@@ -295,10 +297,17 @@ watch(
 )
 
 onMounted(async () => {
-  await loadOrders()
+  await loadOrders({ background: true })
   loadStartOptions({ background: true })
 })
-onActivated(() => loadOrders({ background: true }))
+onActivated(() => {
+  if (shouldRefreshRequestCache(listCacheKey.value, CACHE_TTL)) {
+    loadOrders({ background: true })
+  }
+  if (shouldRefreshRequestCache(startCacheKey.value, CACHE_TTL)) {
+    loadStartOptions({ background: true })
+  }
+})
 </script>
 
 <template>

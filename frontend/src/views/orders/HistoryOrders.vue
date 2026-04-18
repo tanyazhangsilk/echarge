@@ -11,7 +11,7 @@ import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
 import { fetchAdminOrders, fetchAdminStationOptions } from '../../api/admin'
 import { fetchOperatorHistoryOrders, fetchOperatorStationOptions } from '../../api/operator'
 import { ROLES } from '../../config/permissions'
-import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
+import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 import { getDemoOrderListPayload } from '../../utils/demoOrderAdapter'
 import { getFallbackStationOptions } from '../../utils/stationFallbacks'
 
@@ -103,7 +103,7 @@ const applyPayload = (payload = {}, updatedAt = Date.now()) => {
   pagination.pageSize = Number(payload.page_size || pagination.pageSize)
   Object.assign(summary, payload.summary || {})
   tableReady.value = true
-  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(updatedAt)}`
+  cacheLabel.value = formatCacheLabel(updatedAt)
 }
 
 const loadOrders = async ({ background = false } = {}) => {
@@ -123,7 +123,6 @@ const loadOrders = async ({ background = false } = {}) => {
       const demoPayload = getDemoOrderListPayload('history')
       applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, Date.now())
     }
-    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -162,8 +161,12 @@ watch(
   },
 )
 
-onMounted(loadOrders)
-onActivated(() => loadOrders({ background: true }))
+onMounted(() => loadOrders({ background: true }))
+onActivated(() => {
+  if (shouldRefreshRequestCache(listCacheKey.value, CACHE_TTL)) {
+    loadOrders({ background: true })
+  }
+})
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer)
 })

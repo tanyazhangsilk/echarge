@@ -52,13 +52,25 @@ const routes = [
         path: 'orders',
         name: 'AdminOrders',
         component: () => import('../views/orders/HistoryOrders.vue'),
-        meta: { role: ROLES.ADMIN, title: '全局订单管理', section: '订单监管', description: '查看平台订单、状态流转与交易信息' },
+        meta: {
+          role: ROLES.ADMIN,
+          title: '全局订单管理',
+          section: '订单监管',
+          description: '查看平台订单、状态流转与交易信息',
+          keepAlive: true,
+        },
       },
       {
         path: 'orders/abnormal',
         name: 'AdminOrderAbnormal',
         component: () => import('../views/orders/AbnormalOrders.vue'),
-        meta: { role: ROLES.ADMIN, title: '异常订单管理', section: '订单监管', description: '查看异常订单与处理结果' },
+        meta: {
+          role: ROLES.ADMIN,
+          title: '异常订单管理',
+          section: '订单监管',
+          description: '查看异常订单与处理结果',
+          keepAlive: true,
+        },
       },
       { path: 'orders/anomalies', redirect: '/admin/orders/abnormal' },
       {
@@ -77,7 +89,13 @@ const routes = [
         path: 'finance/invoices',
         name: 'AdminFinanceInvoices',
         component: () => import('../views/finance/InvoiceManagement.vue'),
-        meta: { role: ROLES.ADMIN, title: '发票管理', section: '资金清分', description: '查看发票记录与处理状态' },
+        meta: {
+          role: ROLES.ADMIN,
+          title: '发票管理',
+          section: '资金清分',
+          description: '查看发票记录与处理状态',
+          keepAlive: true,
+        },
       },
       {
         path: 'users',

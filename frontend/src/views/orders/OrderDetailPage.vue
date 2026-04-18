@@ -11,39 +11,96 @@ import { fetchAdminOrderDetail } from '../../api/admin'
 import { fetchOperatorOrderDetail } from '../../api/operator'
 import { ROLES } from '../../config/permissions'
 import { getDemoOrderDetail } from '../../utils/demoOrderAdapter'
+import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache } from '../../utils/requestCache'
 
 const route = useRoute()
 const router = useRouter()
 
 const loading = ref(false)
 const order = ref(null)
+const cacheLabel = ref('')
+
+const CACHE_TTL = 45 * 1000
 
 const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
-const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
+const cacheKey = computed(() =>
+  buildRequestCacheKey(isAdmin.value ? `/admin/orders/${route.params.id}` : `/operator/orders/${route.params.id}`, {
+    scope: 'order-detail',
+    orderId: route.params.id,
+  }),
+)
+
+const formatMoney = (value) => `￥${Number(value || 0).toFixed(2)}`
 const feeDetail = computed(() => order.value?.fee_detail || {})
 const statusFlow = computed(() => order.value?.status_flow || [])
 
 const summaryCards = computed(() => {
   if (!order.value) return []
   return [
-    { label: '订单状态', value: order.value.status_text, trend: '当前订单处理状态', trendLabel: '随状态流转同步更新', tone: order.value.abnormal_reason ? 'danger' : order.value.end_time ? 'success' : 'warning', icon: Document },
-    { label: '订单来源', value: order.value.source_type_text, trend: '业务入口来源', trendLabel: order.value.source_type || '业务入口', tone: 'primary', icon: Clock },
-    { label: '总费用', value: Number(order.value.total_amount || 0).toFixed(2), prefix: '¥', trend: '电费与服务费合计', trendLabel: '以结算明细为准', tone: 'warning', icon: Money },
-    { label: '异常标记', value: order.value.abnormal_reason ? '已标记' : '正常', trend: order.value.abnormal_reason || '当前无异常记录', trendLabel: '异常订单会同步展示原因', tone: order.value.abnormal_reason ? 'danger' : 'info', icon: WarningFilled },
+    {
+      label: '订单状态',
+      value: order.value.status_text,
+      trend: '当前订单处理状态',
+      trendLabel: '与状态流转同步更新',
+      tone: order.value.abnormal_reason ? 'danger' : order.value.end_time ? 'success' : 'warning',
+      icon: Document,
+    },
+    {
+      label: '订单来源',
+      value: order.value.source_type_text,
+      trend: '业务入口来源',
+      trendLabel: order.value.source_type || '业务入口',
+      tone: 'primary',
+      icon: Clock,
+    },
+    {
+      label: '总费用',
+      value: Number(order.value.total_amount || 0).toFixed(2),
+      prefix: '￥',
+      trend: '电费与服务费合计',
+      trendLabel: '以结算明细为准',
+      tone: 'warning',
+      icon: Money,
+    },
+    {
+      label: '异常标记',
+      value: order.value.abnormal_reason ? '已标记' : '正常',
+      trend: order.value.abnormal_reason || '当前无异常记录',
+      trendLabel: '异常订单会同步展示原因',
+      tone: order.value.abnormal_reason ? 'danger' : 'info',
+      icon: WarningFilled,
+    },
   ]
 })
 
-const loadOrder = async () => {
-  loading.value = true
+const applyOrder = (payload, updatedAt = Date.now()) => {
+  order.value = payload || null
+  cacheLabel.value = formatCacheLabel(updatedAt)
+}
+
+const loadOrder = async ({ background = false } = {}) => {
+  const cached = getRequestCache(cacheKey.value, { ttl: CACHE_TTL, allowStale: true })
+  if (cached) {
+    applyOrder(cached.value, cached.updatedAt)
+  }
+
+  loading.value = !cached || !background
   try {
     const response = isAdmin.value ? await fetchAdminOrderDetail(route.params.id) : await fetchOperatorOrderDetail(route.params.id)
-    order.value = response.data.data || null
+    const payload = response?.data?.data || null
+    applyOrder(payload, Date.now())
+    if (payload) {
+      setRequestCache(cacheKey.value, payload)
+    }
   } catch (error) {
-    order.value = getDemoOrderDetail(route.params.id)
-    if (!order.value) {
-      ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '订单详情加载失败')
+    const fallback = order.value || getDemoOrderDetail(route.params.id)
+    if (fallback) {
+      applyOrder(fallback, Date.now())
+      if (!cached) {
+        setRequestCache(cacheKey.value, fallback)
+      }
     } else {
-      ElMessage.warning('订单详情暂未拉取成功，已恢复可用内容。')
+      ElMessage.error(error?.response?.data?.message || error?.response?.data?.detail || '订单详情加载失败')
     }
   } finally {
     loading.value = false
@@ -58,13 +115,19 @@ const goBack = () => {
   router.push(isAdmin.value ? '/admin/orders' : '/operator/orders/history')
 }
 
-onMounted(loadOrder)
+onMounted(() => loadOrder({ background: true }))
 </script>
 
 <template>
   <div class="page-shell detail-page">
-    <PageSectionHeader eyebrow="订单中心" title="订单详情" description="查看订单来源、费用明细、站点信息与状态流转记录。" :chip="isAdmin ? '平台订单' : '订单中心'">
+    <PageSectionHeader
+      eyebrow="订单中心"
+      title="订单详情"
+      description="查看订单来源、费用明细、站点信息与状态流转记录。"
+      :chip="isAdmin ? '平台订单' : '订单中心'"
+    >
       <template #actions>
+        <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
         <el-button @click="goBack">返回列表</el-button>
       </template>
     </PageSectionHeader>

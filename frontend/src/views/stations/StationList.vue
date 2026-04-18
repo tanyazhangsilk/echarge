@@ -16,7 +16,7 @@ import {
   fetchStationChargers,
   updateStationVisibility,
 } from '../../api/operator'
-import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
+import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 import { saveStationApplicationDraft } from '../../utils/stationApplicationDrafts'
 import { mergeChargersWithLocal } from '../../utils/chargerDemoStore'
 import { getFallbackStationRows } from '../../utils/stationFallbacks'
@@ -122,7 +122,7 @@ const visibilityTagType = (visibility) => (visibility === 'public' ? 'success' :
 const chargerStatusType = (status) => (Number(status) === 1 ? 'warning' : Number(status) === 2 ? 'danger' : Number(status) === 3 ? 'info' : 'success')
 
 const updateCacheLabel = (timestamp = Date.now()) => {
-  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(timestamp)}`
+  cacheLabel.value = formatCacheLabel(timestamp)
 }
 
 const resetApplyForm = () => {
@@ -194,7 +194,6 @@ const loadStations = async ({ background = false, force = false } = {}) => {
     if (!stations.value.length) {
       applyPayload(fallback, Date.now())
     }
-    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -380,8 +379,12 @@ watch(
   },
 )
 
-onMounted(loadStations)
-onActivated(() => loadStations({ background: true }))
+onMounted(() => loadStations({ background: true }))
+onActivated(() => {
+  if (shouldRefreshRequestCache(queryCacheKey.value, CACHE_TTL)) {
+    loadStations({ background: true })
+  }
+})
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer)
 })

@@ -15,7 +15,7 @@ import {
   fetchStationChargers,
   updateStationCharger,
 } from '../../api/operator'
-import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
+import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 import { addLocalCharger, batchAddLocalChargers, mergeChargersWithLocal, updateLocalChargerStatus } from '../../utils/chargerDemoStore'
 import { getFallbackStationOptions } from '../../utils/stationFallbacks'
 
@@ -103,7 +103,7 @@ const statusOptions = [
 const statusTagType = (status) => (Number(status) === 1 ? 'warning' : Number(status) === 2 ? 'danger' : Number(status) === 3 ? 'info' : 'success')
 
 const updateCacheLabel = (timestamp = Date.now()) => {
-  cacheLabel.value = `最近更新于 ${formatCacheUpdatedAt(timestamp)}`
+  cacheLabel.value = formatCacheLabel(timestamp)
 }
 
 const resetAddForm = () => {
@@ -174,7 +174,6 @@ const loadChargers = async ({ background = false } = {}) => {
     setRequestCache(chargerCacheKey.value, rows)
   } catch (error) {
     applyChargers(cached?.value || [], Date.now())
-    ElMessage.warning('网络波动，已展示最近可用结果')
   } finally {
     loading.value = false
   }
@@ -271,13 +270,17 @@ watch(selectedStationId, (value, oldValue) => {
 })
 
 onMounted(async () => {
-  await loadStations()
-  await loadChargers()
+  await loadStations({ background: true })
+  await loadChargers({ background: true })
 })
 
 onActivated(() => {
-  loadStations({ background: true })
-  loadChargers({ background: true })
+  if (shouldRefreshRequestCache(stationCacheKey.value, CACHE_TTL)) {
+    loadStations({ background: true })
+  }
+  if (selectedStationId.value && shouldRefreshRequestCache(chargerCacheKey.value, CACHE_TTL)) {
+    loadChargers({ background: true })
+  }
 })
 </script>
 
