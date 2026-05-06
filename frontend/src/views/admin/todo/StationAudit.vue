@@ -7,7 +7,8 @@ import PageSectionHeader from '../../../components/console/PageSectionHeader.vue
 import MetricCard from '../../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../../components/console/EmptyStateBlock.vue'
 import TableSkeletonBlock from '../../../components/console/TableSkeletonBlock.vue'
-import { fetchStationAudits, processStationAudit } from '../../../api/admin'
+import { fetchStationAudits } from '../../../api/admin'
+import { approveDemoStation, rejectDemoStation } from '../../../api/demo'
 import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../../utils/requestCache'
 import { getFallbackStationAudits } from '../../../utils/stationFallbacks'
 
@@ -177,14 +178,16 @@ const handleAudit = async (action) => {
 
   auditSubmitting.value = true
   try {
-    const { data } = await processStationAudit(currentStation.value.id, { action, remark: auditForm.remark.trim() })
+    const request = action === 'approve' ? approveDemoStation : rejectDemoStation
+    const { data } = await request(currentStation.value.id, { audit_remark: auditForm.remark.trim() })
     ElMessage.success(data?.message || '瀹℃牳澶勭悊鎴愬姛')
   } catch (error) {
     const nextStatus = action === 'approve' ? 0 : 4
     currentStation.value.status = nextStatus
     currentStation.value.status_text = nextStatus === 0 ? '已审核通过' : '已驳回'
-    currentStation.value.audit_remark =
-      auditForm.remark.trim() || (nextStatus === 0 ? '审核通过，可继续配置电桩和模板。' : '请补充材料后重新提交。')
+    currentStation.value.audit_remark = auditForm.remark.trim() || (nextStatus === 0 ? '审核通过，可继续配置电桩和模板。' : '请补充材料后重新提交。')
+    currentStation.value.visibility = nextStatus === 0 ? 'public' : 'private'
+    currentStation.value.visibility_text = nextStatus === 0 ? '公开站点' : '未公开'
     ElMessage.success('瀹℃牳缁撴灉宸叉洿鏂板埌褰撳墠椤甸潰')
   } finally {
     auditSubmitting.value = false
@@ -451,4 +454,5 @@ onBeforeUnmount(() => {
   }
 }
 </style>
+
 

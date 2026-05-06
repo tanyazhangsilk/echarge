@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed, onActivated, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -8,15 +8,19 @@ import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
+import { finishDemoOrder, markDemoOrderAbnormal, startDemoOrder } from '../../api/demo'
 import {
   fetchOperatorOrderStartOptions,
   fetchOperatorRealtimeOrders,
   fetchStationChargers,
-  finishOperatorOrder,
-  markOperatorOrderAbnormal,
-  startDemoCharging,
 } from '../../api/operator'
-import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
+import {
+  buildRequestCacheKey,
+  formatCacheLabel,
+  getRequestCache,
+  setRequestCache,
+  shouldRefreshRequestCache,
+} from '../../utils/requestCache'
 import {
   demoStartUsers,
   finishLocalDemoOrder,
@@ -46,24 +50,34 @@ const startStations = ref(getFallbackStationOptions())
 const startChargers = ref([])
 
 const pagination = reactive({ page: 1, pageSize: 10 })
-const summary = reactive({ total_count: 0, total_charge_amount: 0, total_ele_fee: 0, total_service_fee: 0 })
-const startForm = reactive({ user_id: null, station_id: null, charger_id: null, source_type: 'manual_demo' })
+const summary = reactive({
+  total_count: 0,
+  total_charge_amount: 0,
+  total_ele_fee: 0,
+  total_service_fee: 0,
+})
+const startForm = reactive({
+  user_id: null,
+  station_id: null,
+  charger_id: null,
+  source_type: 'manual_demo',
+})
 
 const queryParams = computed(() => ({ page: pagination.page, page_size: pagination.pageSize }))
 const listCacheKey = computed(() => buildRequestCacheKey('/operator/orders/realtime', queryParams.value))
 const startCacheKey = computed(() => buildRequestCacheKey('/operator/orders/start-options', { scope: 'start-options' }))
 const manualStations = computed(() => startStations.value.filter((item) => Number(item.status) === 0 || item.is_local_draft))
-const sourceTypeLabel = computed(() => (startMode.value === 'manual_demo' ? '模拟开始充电' : '扫码充电'))
+const sourceTypeLabel = computed(() => (startMode.value === 'manual_demo' ? '演示创建订单' : '扫码充电'))
 
-const formatMoney = (value) => `￥${Number(value || 0).toFixed(2)}`
+const formatMoney = (value) => `¥${Number(value || 0).toFixed(2)}`
 
 const stats = computed(() => [
   {
     label: '实时订单',
     value: summary.total_count,
     suffix: ' 单',
-    trend: '当前仍在充电中的订单',
-    trendLabel: '支持结束与异常处理',
+    trend: '当前处于充电中的订单数',
+    trendLabel: '支持结束和异常处理',
     tone: 'primary',
     icon: Lightning,
   },
@@ -71,25 +85,25 @@ const stats = computed(() => [
     label: '实时电量',
     value: Number(summary.total_charge_amount || 0).toFixed(2),
     suffix: ' kWh',
-    trend: '在充订单累计电量',
-    trendLabel: '用于跟踪当前负载',
+    trend: '实时订单累计电量',
+    trendLabel: '用于演示当前负载',
     tone: 'success',
     icon: DataAnalysis,
   },
   {
     label: '实时电费',
     value: Number(summary.total_ele_fee || 0).toFixed(2),
-    prefix: '￥',
-    trend: '实时电费汇总',
-    trendLabel: '按在充订单即时估算',
+    prefix: '¥',
+    trend: '实时订单累计电费',
+    trendLabel: '按当前计费结果汇总',
     tone: 'warning',
     icon: Money,
   },
   {
     label: '实时服务费',
     value: Number(summary.total_service_fee || 0).toFixed(2),
-    prefix: '￥',
-    trend: '实时服务费汇总',
+    prefix: '¥',
+    trend: '实时订单累计服务费',
     trendLabel: '与电费共同构成总额',
     tone: 'info',
     icon: Tickets,
@@ -123,7 +137,7 @@ const loadOrders = async ({ background = false } = {}) => {
       const demoPayload = getDemoOrderListPayload('realtime')
       applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, Date.now())
       if (!demoPayload?.items?.length) {
-        ElMessage.error('实时订单暂未加载成功')
+        ElMessage.error('实时订单加载失败')
       }
     }
   } finally {
@@ -140,7 +154,7 @@ const applyStartOptions = (payload = {}, updatedAt = Date.now()) => {
     startStations.value.find((item) => Number(item.status) === 0)?.id ||
     startStations.value[0]?.id ||
     null
-  startChargers.value = (payload.chargers || []).filter((item) => ![2, 3].includes(Number(item.status)))
+  startChargers.value = (payload.chargers || []).filter((item) => Number(item.status) === 0)
   startForm.charger_id = startChargers.value[0]?.id || null
   if (!cacheLabel.value) {
     cacheLabel.value = formatCacheLabel(updatedAt)
@@ -153,12 +167,13 @@ const loadChargersByStation = async (stationId) => {
     startForm.charger_id = null
     return
   }
+
   try {
     const { data } = await fetchStationChargers(stationId)
-    startChargers.value = mergeChargersWithLocal(stationId, data?.data || []).filter((item) => ![2, 3].includes(Number(item.status)))
+    startChargers.value = mergeChargersWithLocal(stationId, data?.data || []).filter((item) => Number(item.status) === 0)
     startForm.charger_id = startChargers.value[0]?.id || null
   } catch (error) {
-    startChargers.value = mergeChargersWithLocal(stationId, []).filter((item) => ![2, 3].includes(Number(item.status)))
+    startChargers.value = mergeChargersWithLocal(stationId, []).filter((item) => Number(item.status) === 0)
     startForm.charger_id = startChargers.value[0]?.id || null
   }
 }
@@ -168,7 +183,7 @@ const loadStartOptions = async ({ background = false } = {}) => {
   if (cached) {
     applyStartOptions(cached.value, cached.updatedAt)
     if (!startForm.charger_id) {
-      loadChargersByStation(startForm.station_id)
+      await loadChargersByStation(startForm.station_id)
     }
   }
 
@@ -202,24 +217,24 @@ const openStartDialog = (mode) => {
 }
 
 const submitStartOrder = async () => {
-  const user = startUsers.value.find((item) => item.id === startForm.user_id)
+  const user = startUsers.value.find((item) => String(item.id) === String(startForm.user_id))
   const station = startStations.value.find((item) => String(item.id) === String(startForm.station_id))
   const charger = startChargers.value.find((item) => String(item.id) === String(startForm.charger_id))
 
   if (!station || !charger) {
-    ElMessage.warning('请选择电站与电桩')
+    ElMessage.warning('请选择已审核电站和空闲电桩')
     return
   }
 
   startLoading.value = true
   try {
-    const { data } = await startDemoCharging({
+    const { data } = await startDemoOrder({
       user_id: startForm.user_id,
       station_id: startForm.station_id,
       charger_id: startForm.charger_id,
       source_type: startForm.source_type,
     })
-    ElMessage.success(data?.message || '实时订单已创建')
+    ElMessage.success(data?.message || '演示订单创建成功')
   } catch (error) {
     startLocalDemoOrder({
       station,
@@ -227,7 +242,7 @@ const submitStartOrder = async () => {
       user: user || demoStartUsers[0],
       sourceType: startForm.source_type,
     })
-    ElMessage.success('实时订单已创建')
+    ElMessage.success('已切换到本地演示订单')
   } finally {
     startLoading.value = false
     startDialogVisible.value = false
@@ -237,15 +252,15 @@ const submitStartOrder = async () => {
 
 const handleFinish = async (row) => {
   try {
-    await ElMessageBox.confirm(`确认结束订单 ${row.order_no} 吗？`, '结束充电', { type: 'warning' })
+    await ElMessageBox.confirm(`确认结束订单 ${row.order_no} 吗？`, '结束订单', { type: 'warning' })
   } catch {
     return
   }
 
   try {
     busyOrderId.value = row.id
-    await finishOperatorOrder(row.id)
-    ElMessage.success('订单已完成')
+    await finishDemoOrder(row.id)
+    ElMessage.success('订单已结束并完成扣费')
   } catch (error) {
     finishLocalDemoOrder(row.id)
     ElMessage.success('订单已转入历史订单')
@@ -259,7 +274,7 @@ const handleMarkAbnormal = async (row) => {
   let reason = ''
   try {
     const result = await ElMessageBox.prompt('请输入异常原因', '标记异常', {
-      inputPlaceholder: '例如：设备通信中断、枪头异常、会话未正常结束',
+      inputPlaceholder: '例如：设备连接中断',
       inputValidator: (value) => (value && value.trim() ? true : '异常原因不能为空'),
     })
     reason = result.value.trim()
@@ -269,8 +284,8 @@ const handleMarkAbnormal = async (row) => {
 
   try {
     busyOrderId.value = row.id
-    await markOperatorOrderAbnormal(row.id, reason)
-    ElMessage.success('订单已转入异常订单')
+    await markDemoOrderAbnormal(row.id, { reason })
+    ElMessage.success('订单已标记为异常')
   } catch (error) {
     markLocalDemoOrderAbnormal(row.id, reason || '会话异常结束')
     ElMessage.success('订单已转入异常订单')
@@ -282,9 +297,9 @@ const handleMarkAbnormal = async (row) => {
 
 watch(
   () => startForm.station_id,
-  (value, oldValue) => {
+  async (value, oldValue) => {
     if (value && value !== oldValue) {
-      loadChargersByStation(value)
+      await loadChargersByStation(value)
     }
   },
 )
@@ -298,8 +313,9 @@ watch(
 
 onMounted(async () => {
   await loadOrders({ background: true })
-  loadStartOptions({ background: true })
+  await loadStartOptions({ background: true })
 })
+
 onActivated(() => {
   if (shouldRefreshRequestCache(listCacheKey.value, CACHE_TTL)) {
     loadOrders({ background: true })
@@ -312,10 +328,15 @@ onActivated(() => {
 
 <template>
   <div class="page-shell realtime-page">
-    <PageSectionHeader eyebrow="订单中心" title="实时订单" description="监控当前充电中的订单，并支持模拟开始与扫码充电入口。" chip="实时监控">
+    <PageSectionHeader
+      eyebrow="订单中心"
+      title="实时订单"
+      description="查看当前充电中的订单，并支持演示发起、结束和异常处理。"
+      chip="实时监控"
+    >
       <template #actions>
         <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
-        <el-button type="primary" :icon="Plus" @click="openStartDialog('manual_demo')">模拟开始充电</el-button>
+        <el-button type="primary" :icon="Plus" @click="openStartDialog('manual_demo')">演示创建订单</el-button>
         <el-button type="primary" plain :icon="Tickets" @click="openStartDialog('qr_code')">扫码充电</el-button>
         <el-button :icon="RefreshRight" :loading="loading" @click="loadOrders()">刷新列表</el-button>
       </template>
@@ -357,7 +378,7 @@ onActivated(() => {
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="router.push(`/operator/orders/detail/${row.id}`)">查看详情</el-button>
-            <el-button link type="success" :loading="busyOrderId === row.id" @click="handleFinish(row)">结束充电</el-button>
+            <el-button link type="success" :loading="busyOrderId === row.id" @click="handleFinish(row)">结束订单</el-button>
             <el-button link type="danger" :loading="busyOrderId === row.id" @click="handleMarkAbnormal(row)">标记异常</el-button>
           </template>
         </el-table-column>
@@ -384,7 +405,7 @@ onActivated(() => {
           </el-select>
         </el-form-item>
         <el-form-item label="订单来源">
-          <el-tag type="primary">{{ startMode === 'manual_demo' ? '模拟发起' : '扫码充电' }}</el-tag>
+          <el-tag type="primary">{{ startMode === 'manual_demo' ? '演示发起' : '扫码充电' }}</el-tag>
         </el-form-item>
       </el-form>
       <template #footer>

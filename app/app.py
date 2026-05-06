@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 from pathlib import Path
 
 # Ensure project root on sys.path for consistent imports
@@ -8,8 +8,9 @@ sys.path.insert(0, str(PROJECT_ROOT.parent))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.routes import api_router
+from app.api.v1.demo_routes import demo_api_router
 from app.api.v1.extra_routes import extra_api_router
+from app.api.v1.routes import api_router
 from app.core.config import settings
 
 app = FastAPI(title=settings.PROJECT_NAME, version="0.1.0")
@@ -31,3 +32,4 @@ app.add_middleware(
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 app.include_router(extra_api_router, prefix=settings.API_V1_PREFIX)
+app.include_router(demo_api_router, prefix=settings.API_V1_PREFIX)

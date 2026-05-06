@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed, onActivated, onMounted, ref } from 'vue'
 import { Document, Money, Reading, RefreshRight, Tickets, Wallet } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -7,7 +7,7 @@ import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
-import http from '../../api/http'
+import { fetchDemoSettlements } from '../../api/demo'
 import { mockSettlementRows } from '../../mock/backoffice'
 import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
 
@@ -17,12 +17,11 @@ const loading = ref(false)
 const tableReady = ref(false)
 const rows = ref([])
 const cacheLabel = ref('')
-
 const currentPage = ref(1)
 const pageSize = ref(20)
 
-const formatMoney = (value) => Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const cacheKey = buildRequestCacheKey('/finance/settlements', { scope: 'settlement-page' })
+const formatMoney = (value) => Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 const pagedRows = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
@@ -38,11 +37,51 @@ const summary = computed(() => ({
 }))
 
 const statCards = computed(() => [
-  { label: '周期内订单总额', value: formatMoney(summary.value.totalAmount), prefix: '¥', trend: '经营流水总览', trendLabel: '按清分周期聚合', tone: 'primary', icon: Wallet },
-  { label: '平台服务费', value: formatMoney(summary.value.platformFee), prefix: '¥', trend: '平台抽成部分', trendLabel: '随订单规模波动', tone: 'warning', icon: Tickets },
-  { label: '应结算金额', value: formatMoney(summary.value.settleAmount), prefix: '¥', trend: '本周期理论应收', trendLabel: '扣除平台费后', tone: 'success', icon: Money },
-  { label: '已打款金额', value: formatMoney(summary.value.paidAmount), prefix: '¥', trend: '到账已确认', trendLabel: '状态为已打款', tone: 'info', icon: Document },
-  { label: '待打款金额', value: formatMoney(summary.value.pendingAmount), prefix: '¥', trend: '需跟进批次', trendLabel: '含待补资料场景', tone: 'danger', icon: Reading },
+  {
+    label: '订单总额',
+    value: formatMoney(summary.value.totalAmount),
+    prefix: '¥',
+    trend: '当前清分记录覆盖的订单金额',
+    trendLabel: '按清分日期汇总',
+    tone: 'primary',
+    icon: Wallet,
+  },
+  {
+    label: '平台服务费',
+    value: formatMoney(summary.value.platformFee),
+    prefix: '¥',
+    trend: '平台抽成汇总',
+    trendLabel: '用于毕业设计演示',
+    tone: 'warning',
+    icon: Tickets,
+  },
+  {
+    label: '应结算金额',
+    value: formatMoney(summary.value.settleAmount),
+    prefix: '¥',
+    trend: '运营商理论应收',
+    trendLabel: '扣除平台服务费后',
+    tone: 'success',
+    icon: Money,
+  },
+  {
+    label: '已结算金额',
+    value: formatMoney(summary.value.paidAmount),
+    prefix: '¥',
+    trend: '状态为已清分的金额',
+    trendLabel: '可用于收益对账',
+    tone: 'info',
+    icon: Document,
+  },
+  {
+    label: '待处理金额',
+    value: formatMoney(summary.value.pendingAmount),
+    prefix: '¥',
+    trend: '未完成打款或被挂起',
+    trendLabel: '便于演示补资料场景',
+    tone: 'danger',
+    icon: Reading,
+  },
 ])
 
 const payoutStatusType = (status) => (Number(status) === 1 ? 'success' : Number(status) === 2 ? 'danger' : 'warning')
@@ -58,7 +97,7 @@ const fetchRows = async ({ background = false } = {}) => {
 
   loading.value = !cached || !background
   try {
-    const resp = await http.get('/finance/settlements')
+    const resp = await fetchDemoSettlements()
     const payload = resp?.data || {}
     const list = Array.isArray(payload.data) && payload.data.length ? payload.data : mockSettlementRows
     rows.value = list
@@ -68,7 +107,7 @@ const fetchRows = async ({ background = false } = {}) => {
   } catch (error) {
     if (!rows.value.length) {
       rows.value = mockSettlementRows
-      cacheLabel.value = '当前内容可用'
+      cacheLabel.value = '当前展示本地演示数据'
       tableReady.value = true
     }
   } finally {
@@ -78,7 +117,16 @@ const fetchRows = async ({ background = false } = {}) => {
 
 const refreshData = async () => {
   await fetchRows()
-  ElMessage.success('对账数据已刷新')
+  ElMessage.success('收益对账数据已刷新')
+}
+
+const handlePageChange = (page) => {
+  currentPage.value = page
+}
+
+const handleSizeChange = (size) => {
+  currentPage.value = 1
+  pageSize.value = size
 }
 
 onMounted(fetchRows)
@@ -87,7 +135,12 @@ onActivated(() => fetchRows({ background: true }))
 
 <template>
   <div class="page-shell settlement-page">
-    <PageSectionHeader eyebrow="财务管理" title="运营商收益对账" description="展示当前运营商清分记录，用于核对服务费、应结算金额与打款状态。" chip="收益对账">
+    <PageSectionHeader
+      eyebrow="财务管理"
+      title="运营商收益对账"
+      description="展示当前运营商清分记录，用于核对订单金额、平台服务费和结算状态。"
+      chip="收益对账"
+    >
       <template #actions>
         <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
         <el-button :icon="RefreshRight" @click="refreshData">刷新对账数据</el-button>
@@ -101,8 +154,8 @@ onActivated(() => fetchRows({ background: true }))
     <section class="page-panel surface-card table-shell">
       <div class="panel-heading">
         <div>
-          <h3 class="panel-heading__title">清分批次</h3>
-          <p class="panel-heading__desc">按日展示订单规模、平台服务费与打款状态。</p>
+          <h3 class="panel-heading__title">清分记录</h3>
+          <p class="panel-heading__desc">按清分日期展示订单规模、平台服务费与结算状态。</p>
         </div>
       </div>
 
@@ -123,16 +176,20 @@ onActivated(() => fetchRows({ background: true }))
         </el-table-column>
         <el-table-column label="结算资格" width="120" align="center">
           <template #default="{ row }">
-            <el-tag :type="qualificationType(row)">{{ row.can_payout === true ? '资格通过' : row.can_payout === false ? '待补资料' : '未判定' }}</el-tag>
+            <el-tag :type="qualificationType(row)">
+              {{ row.can_payout === true ? '资格通过' : row.can_payout === false ? '待补资料' : '待判定' }}
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="打款状态" width="130" align="center">
-          <template #default="{ row }"><el-tag :type="payoutStatusType(row.status)">{{ row.status_text }}</el-tag></template>
+        <el-table-column label="状态" width="130" align="center">
+          <template #default="{ row }">
+            <el-tag :type="payoutStatusType(row.status)">{{ row.status_text }}</el-tag>
+          </template>
         </el-table-column>
         <el-table-column prop="hold_reason" label="备注" min-width="180" />
       </el-table>
 
-      <EmptyStateBlock v-else-if="!loading" title="暂无对账数据" description="当前没有可展示的清分批次。" />
+      <EmptyStateBlock v-else-if="!loading" title="暂无对账数据" description="当前没有可展示的清分记录。" />
 
       <div class="pager">
         <el-pagination
@@ -141,8 +198,8 @@ onActivated(() => fetchRows({ background: true }))
           :page-sizes="[10, 20, 40]"
           :total="rows.length"
           layout="total, sizes, prev, pager, next, jumper"
-          @current-change="(page) => { currentPage = page }"
-          @size-change="(size) => { currentPage = 1; pageSize = size }"
+          @current-change="handlePageChange"
+          @size-change="handleSizeChange"
         />
       </div>
     </section>
