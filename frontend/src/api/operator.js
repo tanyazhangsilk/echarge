@@ -32,6 +32,8 @@ const getCustomerOverviewPayload = () => ({
 export const fetchBillingTemplates = () => http.get('/operator/billing/templates')
 export const createBillingTemplate = (payload) => http.post('/operator/billing/templates', payload)
 export const updateBillingTemplate = (id, payload) => http.put(`/operator/billing/templates/${id}`, payload)
+export const updateBillingTemplateStatus = (id, status) => http.patch(`/operator/billing/templates/${id}/status`, { status })
+export const deleteBillingTemplate = (id) => http.delete(`/operator/billing/templates/${id}`)
 
 export const fetchCustomerOverview = () => resolveMock(getCustomerOverviewPayload())
 export const fetchFleets = () => resolveMock(fleetState)

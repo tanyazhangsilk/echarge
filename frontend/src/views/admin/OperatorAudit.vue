@@ -8,7 +8,7 @@ import MetricCard from '../../components/console/MetricCard.vue'
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import OperatorAuditDetailDrawer from '../../components/admin/OperatorAuditDetailDrawer.vue'
 import OperatorAuditDialog from '../../components/admin/OperatorAuditDialog.vue'
-import { fetchOperatorAuditPage } from '../../api/console'
+import { fetchOperatorAudits, processOperatorAudit, processOperatorBankCard } from '../../api/admin'
 import {
   createAuditSummary,
   formatOperatorAuditStatus,
@@ -119,11 +119,14 @@ const pipelineProgress = computed(() => {
 const loadData = async () => {
   loading.value = true
   try {
-    const { data } = await fetchOperatorAuditPage()
-    records.value = data.records || []
+    const { data } = await fetchOperatorAudits()
+    if (data?.code !== 200 && data?.code !== 0) {
+      throw new Error(data?.message || '运营商审核页面加载失败')
+    }
+    records.value = data?.data?.records || data?.records || []
   } catch (error) {
     console.error(error)
-    ElMessage.error('运营商审核页面加载失败，请检查 mock 数据或接口配置')
+    ElMessage.error(error?.message || '运营商审核页面加载失败')
   } finally {
     loading.value = false
   }
@@ -148,6 +151,19 @@ const openDetail = (record: OperatorAuditRecord) => {
 const openReviewDialog = (record: OperatorAuditRecord) => {
   reviewTarget.value = record
   dialogVisible.value = true
+}
+
+const handleBankCardReview = async (record: OperatorAuditRecord, action: 'approve' | 'reject') => {
+  try {
+    const { data } = await processOperatorBankCard(Number((record as any).operator_id || record.id), { action })
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '绑卡审核处理失败')
+    }
+    ElMessage.success(data?.message || '绑卡审核已处理')
+    await loadData()
+  } catch (error) {
+    ElMessage.error((error as Error)?.message || '绑卡审核处理失败')
+  }
 }
 
 const syncCurrentRecord = (targetId: string) => {
@@ -184,18 +200,31 @@ const updateRecordReview = (target: OperatorAuditRecord, status: ReviewStatus, c
   target.lastProcessedAt = reviewedAt
 }
 
-const handleReviewSubmit = (payload: { status: ReviewStatus; comment: string }) => {
+const handleReviewSubmit = async (payload: { status: ReviewStatus; comment: string }) => {
   const target = reviewTarget.value
   if (!target) return
 
-  const record = records.value.find((item) => item.id === target.id)
-  if (!record) return
-
-  updateRecordReview(record, payload.status, payload.comment)
-  syncCurrentRecord(record.id)
-  dialogVisible.value = false
-
-  ElMessage.success(`${record.operatorName} 已${payload.status === 'approved' ? '审核通过' : '驳回'}，状态与审核记录已更新`)
+  try {
+    const { data } = await processOperatorAudit(Number(target.operator_id || target.id), {
+      action: payload.status === 'approved' ? 'approve' : 'reject',
+      remark: payload.comment,
+    })
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '运营商审核处理失败')
+    }
+    const record = records.value.find((item) => item.id === target.id)
+    if (record) {
+      Object.assign(record, data?.data || {})
+      updateRecordReview(record, payload.status, payload.comment)
+      syncCurrentRecord(record.id)
+    }
+    dialogVisible.value = false
+    ElMessage.success(`${target.operatorName} 已${payload.status === 'approved' ? '审核通过' : '驳回'}`)
+  } catch (error) {
+    ElMessage.error(error?.message || '运营商审核处理失败')
+  } finally {
+    await loadData()
+  }
 }
 
 onMounted(loadData)
@@ -293,6 +322,13 @@ onMounted(loadData)
               </el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="绑卡状态" width="110" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.bankCardStatus === 'approved' ? 'success' : row.bankCardStatus === 'pending' ? 'warning' : row.bankCardStatus === 'rejected' ? 'danger' : 'info'">
+                {{ row.bankCardStatusText || '未绑定' }}
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="lastProcessedBy" label="最近处理人" width="150" show-overflow-tooltip />
           <el-table-column prop="lastProcessedAt" label="最近处理时间" width="168" />
           <el-table-column label="操作" width="210" fixed="right">
@@ -308,6 +344,8 @@ onMounted(loadData)
                     <el-dropdown-menu>
                       <el-dropdown-item @click="openDetail(row)">查看资质材料</el-dropdown-item>
                       <el-dropdown-item @click="openReviewDialog(row)">填写审核意见</el-dropdown-item>
+                      <el-dropdown-item v-if="row.bankCardStatus === 'pending'" @click="handleBankCardReview(row, 'approve')">通过绑卡</el-dropdown-item>
+                      <el-dropdown-item v-if="row.bankCardStatus === 'pending'" @click="handleBankCardReview(row, 'reject')">驳回绑卡</el-dropdown-item>
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>

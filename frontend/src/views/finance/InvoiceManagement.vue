@@ -41,6 +41,8 @@ const processDialogVisible = ref(false)
 const currentInvoice = ref(null)
 const processRemark = ref('')
 const uploadedFile = ref('')
+const applySubmitting = ref(false)
+const processSubmitting = ref(false)
 
 const summary = reactive({
   pending_count: 0,
@@ -176,6 +178,7 @@ const submitApplyInvoice = async () => {
     ElMessage.warning('请先选择已完成订单')
     return
   }
+  applySubmitting.value = true
   try {
     const response = await http.post('/finance/invoices/apply', {
       user_id: selectedInvoiceOrder.value.user_id,
@@ -193,6 +196,8 @@ const submitApplyInvoice = async () => {
     await fetchInvoices()
   } catch (error) {
     ElMessage.error(error?.message || '发票申请提交失败')
+  } finally {
+    applySubmitting.value = false
   }
 }
 
@@ -213,6 +218,7 @@ const submitProcess = async (action) => {
     return
   }
 
+  processSubmitting.value = true
   try {
     await ElMessageBox.confirm(
       action === 'approve' ? '确认开具发票并发送通知？' : '确认驳回该申请并发送通知？',
@@ -237,6 +243,8 @@ const submitProcess = async (action) => {
     await fetchInvoices()
   } catch (error) {
     ElMessage.error(error?.message || '发票处理失败')
+  } finally {
+    processSubmitting.value = false
   }
 }
 
@@ -355,8 +363,8 @@ refreshSummary()
       </el-form>
       <template #footer>
         <el-button @click="processDialogVisible = false">取消</el-button>
-        <el-button plain type="danger" @click="submitProcess('reject')">驳回</el-button>
-        <el-button type="primary" @click="submitProcess('approve')">确认开票</el-button>
+        <el-button plain type="danger" :loading="processSubmitting" @click="submitProcess('reject')">驳回</el-button>
+        <el-button type="primary" :loading="processSubmitting" @click="submitProcess('approve')">确认开票</el-button>
       </template>
     </el-dialog>
 
@@ -384,7 +392,7 @@ refreshSummary()
       </el-form>
       <template #footer>
         <el-button @click="applyDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitApplyInvoice">提交申请</el-button>
+        <el-button type="primary" :loading="applySubmitting" @click="submitApplyInvoice">提交申请</el-button>
       </template>
     </el-dialog>
   </div>

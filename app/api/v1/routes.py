@@ -1,4 +1,5 @@
 ﻿import logging
+import json
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -8,7 +9,7 @@ import random
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload, noload
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from app.db.database import get_db
 from app.models.models import (
@@ -54,6 +55,7 @@ from app.services.station_service import (
     dump_site_photos,
     get_operator_station_options,
     get_operator_station_page,
+    parse_price_template_rules,
     serialize_charger,
     serialize_station,
     serialize_station_row,
@@ -244,6 +246,8 @@ class StationChargerBatchCreatePayload(BaseModel):
     count: int
     type: str
     power_kw: float
+    prefix: str | None = None
+    start_no: int | None = None
 
 
 class StationChargerUpdatePayload(BaseModel):
@@ -256,6 +260,16 @@ class DemoStartOrderPayload(BaseModel):
     station_id: int | None = None
     charger_id: int | None = None
     source_type: str = "manual_demo"
+
+
+class OperatorAuditProcessPayload(BaseModel):
+    action: str
+    remark: str = ""
+
+
+class BankCardAuditPayload(BaseModel):
+    action: str
+    remark: str = ""
 
 
 class RoleContext(BaseModel):
@@ -375,6 +389,285 @@ def get_or_create_demo_user(db: Session) -> User:
     return user
 
 
+def ensure_demo_users(db: Session) -> list[User]:
+    seeds = [
+        ("13800138000", "林川", "LDC6132A1P2600001"),
+        ("13800138001", "周岚", "LDC6132A1P2600002"),
+        ("13800138002", "陈宇", "LDC6132A1P2600003"),
+        ("13800138003", "许恬", "LDC6132A1P2600004"),
+        ("13800138004", "王启明", "LDC6132A1P2600005"),
+    ]
+    created = False
+    for phone, nickname, vin in seeds:
+        user = db.query(User).options(noload("*")).filter(User.phone == phone).first()
+        if user:
+            if not user.nickname:
+                user.nickname = nickname
+            if not user.vin_code:
+                user.vin_code = vin
+            continue
+        db.add(
+            User(
+                phone=phone,
+                nickname=nickname,
+                password_hash="demo-password",
+                vin_code=vin,
+                status=0,
+                role="user",
+            )
+        )
+        created = True
+    if created:
+        db.commit()
+    return db.query(User).options(noload("*")).filter(User.phone.in_([item[0] for item in seeds])).order_by(User.id.asc()).all()
+
+
+def ensure_demo_operator(db: Session) -> Operator:
+    operator = get_current_operator(db)
+    if operator:
+        return operator
+    operator = Operator(
+        name="星云快充运营服务有限公司",
+        org_type="enterprise",
+        license_url="营业执照与法人证件已提交",
+        bank_account="待绑定",
+        is_verified=False,
+    )
+    db.add(operator)
+    db.commit()
+    db.refresh(operator)
+    return operator
+
+
+def ensure_demo_runtime_data(db: Session) -> None:
+    operator = ensure_demo_operator(db)
+    seed_phones = [
+        "13800138000",
+        "13800138001",
+        "13800138002",
+        "13800138003",
+        "13800138004",
+    ]
+    ready_user_count = (
+        db.query(func.count(User.id))
+        .filter(User.phone.in_(seed_phones))
+        .scalar()
+        or 0
+    )
+    ready_station_count = (
+        db.query(func.count(Station.id))
+        .filter(Station.operator_id == operator.id, Station.is_deleted.is_(False))
+        .scalar()
+        or 0
+    )
+    ready_order_count = (
+        db.query(func.count(Order.id))
+        .filter(Order.operator_id == operator.id)
+        .scalar()
+        or 0
+    )
+    ready_card_count = (
+        db.query(func.count(OperatorBankCard.id))
+        .filter(OperatorBankCard.operator_id == operator.id)
+        .scalar()
+        or 0
+    )
+    ready_settlement_count = (
+        db.query(func.count(OperatorSettlementRecord.id))
+        .filter(OperatorSettlementRecord.operator_id == operator.id)
+        .scalar()
+        or 0
+    )
+    if (
+        ready_user_count >= 5
+        and ready_station_count >= 3
+        and ready_order_count >= 10
+        and ready_card_count >= 1
+        and ready_settlement_count >= 2
+    ):
+        return
+
+    users = ensure_demo_users(db)
+    templates = ensure_operator_price_templates(db, operator)
+    ensure_operator_demo_assets(db, operator)
+
+    status_seeds = [
+        ("星云高新园快充站", 3, "待管理员核验场地与供电资料"),
+        ("星云湾区中心快充站", 0, "审核通过，可继续运营配置"),
+        ("星云城际补能示范站", 4, "场地方授权材料不完整"),
+    ]
+    for index, (name, status, remark) in enumerate(status_seeds, start=1):
+        station = (
+            db.query(Station)
+            .options(noload("*"))
+            .filter(Station.operator_id == operator.id, Station.name == name, Station.is_deleted.is_(False))
+            .first()
+        )
+        if not station:
+            station = Station(
+                operator_id=operator.id,
+                template_id=templates[0].id if status == 0 and templates else None,
+                name=name,
+                province="广东省",
+                city="深圳市",
+                district=["南山区", "福田区", "龙岗区"][index - 1],
+                address=f"示范路{index}号",
+                longitude=Decimal(f"113.9{index}1234"),
+                latitude=Decimal(f"22.5{index}1234"),
+                contact_name=["李经理", "赵运营", "孙主管"][index - 1],
+                contact_phone=f"1380000100{index}",
+                operation_hours="00:00-24:00",
+                parking_fee_desc="停车场按场地方规则收费",
+                station_remark="公共充电站运营申请",
+                planned_charger_count=4,
+                total_power_kw=Decimal("480.00"),
+                qualification_remark="主体资质、场地授权与供电容量材料已提交",
+                audit_remark=remark,
+                status=status,
+                visibility="public" if status == 0 else "private",
+            )
+            db.add(station)
+            db.flush()
+        elif station.status not in {0, 3, 4}:
+            station.status = status
+            station.audit_remark = station.audit_remark or remark
+        charger_count = db.query(func.count(Charger.id)).filter(Charger.station_id == station.id, Charger.is_deleted.is_(False)).scalar() or 0
+        if charger_count == 0:
+            for charger_index in range(1, 5):
+                db.add(
+                    Charger(
+                        station_id=station.id,
+                        sn_code=f"DEMO{station.id:03d}{charger_index:03d}",
+                        name=f"{station.name[:8]}-{charger_index:02d}号桩",
+                        type="DC" if charger_index % 2 else "AC",
+                        power_kw=Decimal("120.00") if charger_index % 2 else Decimal("7.00"),
+                        status=0,
+                    )
+                )
+    db.commit()
+
+    charger_rows = (
+        db.query(
+            Charger.id.label("charger_id"),
+            Station.id.label("station_id"),
+        )
+        .select_from(Charger)
+        .join(Station, Charger.station_id == Station.id)
+        .filter(Station.operator_id == operator.id, Station.status == 0, Station.is_deleted.is_(False), Charger.is_deleted.is_(False))
+        .order_by(Charger.id.asc())
+        .all()
+    )
+    if users and charger_rows:
+        existing_counts = {
+            status: db.query(func.count(Order.id)).filter(Order.operator_id == operator.id, Order.status == status).scalar() or 0
+            for status in (0, 1, 2)
+        }
+        now = datetime.now()
+        for status, minimum in [(0, 2), (1, 5), (2, 3)]:
+            for index in range(max(0, minimum - int(existing_counts.get(status, 0)))):
+                user = users[(index + status) % len(users)]
+                charger_row = charger_rows[(index + status) % len(charger_rows)]
+                start = now - timedelta(hours=3 + index, days=0 if status == 0 else index + 1)
+                end = None if status == 0 else start + timedelta(minutes=35 + index * 8)
+                kwh = Decimal(str(18 + index * 3 + status))
+                ele_fee = (kwh * Decimal("1.18")).quantize(Decimal("0.01"))
+                service_fee = (kwh * Decimal("0.72")).quantize(Decimal("0.01"))
+                order = Order(
+                    order_no=generate_demo_order_no(db),
+                    user_id=user.id,
+                    operator_id=operator.id,
+                    station_id=charger_row.station_id,
+                    charger_id=charger_row.charger_id,
+                    vin=user.vin_code,
+                    start_time=start,
+                    end_time=end,
+                    charge_duration=None if status == 0 else int((end - start).total_seconds() / 60),
+                    total_kwh=kwh,
+                    ele_fee=ele_fee,
+                    service_fee=service_fee,
+                    total_fee=ele_fee + service_fee,
+                    source_type="manual_demo",
+                    pay_status=0 if status == 0 else 1,
+                    status=status,
+                    abnormal_reason="设备连接中断，订单转入异常处理" if status == 2 else None,
+                    settle_status=0 if status != 1 else index % 2,
+                )
+                db.add(order)
+                if status == 0:
+                    db.query(Charger).filter(Charger.id == charger_row.charger_id).update(
+                        {Charger.status: 1},
+                        synchronize_session=False,
+                    )
+        db.commit()
+
+    cards = (
+        db.query(OperatorBankCard)
+        .options(noload("*"))
+        .filter(OperatorBankCard.operator_id == operator.id)
+        .all()
+    )
+    if not cards:
+        db.add(
+            OperatorBankCard(
+                operator_id=operator.id,
+                account_name=operator.name,
+                bank_name="招商银行深圳科技园支行",
+                bank_account="6225888888880001",
+                is_default=True,
+                bind_status=1,
+            )
+        )
+        db.commit()
+
+    completed_order_id = (
+        db.query(Order.id)
+        .filter(Order.operator_id == operator.id, Order.status == 1)
+        .order_by(Order.id.desc())
+        .first()
+    )
+    invoice_exists = db.query(Invoice.id).filter(Invoice.operator_id == operator.id).first()
+    if completed_order_id and not invoice_exists:
+        db.add(
+            Invoice(
+                user_id=users[0].id if users else None,
+                operator_id=operator.id,
+                order_id=completed_order_id[0],
+                invoice_title="个人",
+                amount=Decimal("88.60"),
+                email="user@example.com",
+                status=0,
+                remark="用户提交开票申请",
+            )
+        )
+        db.commit()
+
+    for offset in (1, 2):
+        settle_day = date.today() - timedelta(days=offset)
+        exists = db.query(OperatorSettlementRecord.id).filter(
+            OperatorSettlementRecord.operator_id == operator.id,
+            OperatorSettlementRecord.settle_date == settle_day,
+        ).first()
+        if exists:
+            continue
+        total_amount = Decimal("1280.50") + Decimal(str(offset * 320))
+        platform_rate = Decimal("0.1000")
+        platform_fee = (total_amount * platform_rate).quantize(Decimal("0.01"))
+        db.add(
+            OperatorSettlementRecord(
+                settle_date=settle_day,
+                operator_id=operator.id,
+                order_count=12 + offset * 3,
+                total_amount=total_amount,
+                platform_rate=platform_rate,
+                platform_fee=platform_fee,
+                settle_amount=total_amount - platform_fee,
+                status=0 if offset == 1 else 1,
+                hold_reason=None,
+            )
+        )
+    db.commit()
+
+
 def generate_demo_order_no(db: Session) -> str:
     while True:
         order_no = f"EC{datetime.now():%Y%m%d%H%M%S}{random.randint(1000, 9999)}"
@@ -396,7 +689,7 @@ def get_station_for_operator(
 ) -> Station | None:
     query = (
         db.query(Station)
-        .options(joinedload(Station.price_template), noload(Station.operator))
+        .options(noload("*"), joinedload(Station.price_template))
         .filter(Station.id == station_id, Station.operator_id == operator_id, Station.is_deleted.is_(False))
     )
     if with_chargers:
@@ -529,6 +822,38 @@ def serialize_operator_settlement_row(row: Any) -> dict:
         "created_at": row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else "",
         "updated_at": row.updated_at.strftime("%Y-%m-%d %H:%M:%S") if row.updated_at else "",
     }
+
+
+def build_template_periods(template: PriceTemplate) -> list[dict[str, Any]]:
+    rules = parse_price_template_rules(template)
+    service_price = float(rules["service_price"])
+    return [
+        {"id": 1, "type": "valley", "type_text": "谷段", "time_range": "00:00-07:00", "ele_fee": float(rules["valley_price"]), "service_fee": service_price},
+        {"id": 2, "type": "flat", "type_text": "平段", "time_range": "07:00-10:00", "ele_fee": float(rules["flat_price"]), "service_fee": service_price},
+        {"id": 3, "type": "peak", "type_text": "峰段", "time_range": "10:00-15:00", "ele_fee": float(rules["peak_price"]), "service_fee": service_price},
+        {"id": 4, "type": "flat", "type_text": "平段", "time_range": "15:00-18:00", "ele_fee": float(rules["flat_price"]), "service_fee": service_price},
+        {"id": 5, "type": "peak", "type_text": "峰段", "time_range": "18:00-21:00", "ele_fee": float(rules["peak_price"]), "service_fee": service_price},
+        {"id": 6, "type": "valley", "type_text": "谷段", "time_range": "21:00-24:00", "ele_fee": float(rules["valley_price"]), "service_fee": service_price},
+    ]
+
+
+def serialize_template_with_bindings(db: Session, template: PriceTemplate) -> dict[str, Any]:
+    data = serialize_price_template(template)
+    bound_rows = (
+        db.query(Station.id.label("id"), Station.name.label("station_name"))
+        .filter(Station.template_id == template.id, Station.is_deleted.is_(False))
+        .order_by(Station.id.asc())
+        .all()
+    )
+    data["bound_station_count"] = len(bound_rows)
+    data["stations"] = len(bound_rows)
+    data["bound_stations"] = [{"id": row.id, "station_name": row.station_name} for row in bound_rows]
+    data["bound_station_names"] = "、".join(row.station_name for row in bound_rows[:3])
+    if len(bound_rows) > 3:
+        data["bound_station_names"] += f"等 {len(bound_rows)} 座"
+    data["periods"] = build_template_periods(template)
+    data["description"] = "Time-of-use pricing and service fee rules for operator stations"
+    return data
 
 
 def serialize_invoice_record(invoice: Invoice, can_process: bool) -> dict:
@@ -877,6 +1202,7 @@ async def get_settlements(
     context: RoleContext = Depends(get_role_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     operator_id = resolve_operator_id(db, context) if context.role == "operator" else None
     query = (
         db.query(
@@ -1098,6 +1424,7 @@ async def get_admin_orders(
     _context: RoleContext = Depends(require_admin_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     return {
         "code": 200,
         "data": get_order_page(
@@ -1126,6 +1453,7 @@ async def get_admin_abnormal_orders(
     _context: RoleContext = Depends(require_admin_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     return {
         "code": 200,
         "data": get_order_page(
@@ -1149,10 +1477,121 @@ async def get_admin_order_detail(
     _context: RoleContext = Depends(require_admin_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     order_data = get_order_detail_data(db, order_id)
     if not order_data:
         return {"code": 404, "message": "订单不存在"}
     return {"code": 200, "data": order_data}
+
+
+def serialize_operator_audit_record(db: Session, operator: Operator) -> dict[str, Any]:
+    cards = (
+        db.query(OperatorBankCard)
+        .filter(OperatorBankCard.operator_id == operator.id)
+        .order_by(OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
+        .all()
+    )
+    bank_status, bank_status_text = resolve_bank_card_audit_status(cards)
+    status = operator_audit_store.get(operator.id, {}).get("status") or ("approved" if operator.is_verified else "pending")
+    reviewed_at = operator_audit_store.get(operator.id, {}).get("reviewed_at", "")
+    remark = operator_audit_store.get(operator.id, {}).get("remark", "")
+    return {
+        "id": str(operator.id),
+        "operator_id": operator.id,
+        "applicationNo": f"OPA{operator.created_at:%Y%m%d}{operator.id:04d}" if operator.created_at else f"OPA{operator.id:04d}",
+        "operatorName": operator.name,
+        "companyName": operator.name,
+        "type": operator.org_type,
+        "contactName": operator_audit_store.get(operator.id, {}).get("contact_name", "运营联系人"),
+        "phone": operator_audit_store.get(operator.id, {}).get("contact_phone", f"1380000{operator.id:04d}"),
+        "email": operator_audit_store.get(operator.id, {}).get("contact_email", f"bd{operator.id}@echarge.com"),
+        "region": "广东省 / 深圳市",
+        "address": "深圳市南山区科技园示范路",
+        "creditCode": f"91440300MA{operator.id:06d}X",
+        "licenseUrl": operator.license_url or "营业执照/法人证件资料已提交",
+        "bankCardStatus": bank_status,
+        "bankCardStatusText": bank_status_text,
+        "bankCards": [serialize_bank_card(card) for card in cards],
+        "stationCount": db.query(func.count(Station.id)).filter(Station.operator_id == operator.id, Station.is_deleted.is_(False)).scalar() or 0,
+        "chargerCount": db.query(func.count(Charger.id)).join(Station, Charger.station_id == Station.id).filter(Station.operator_id == operator.id, Charger.is_deleted.is_(False)).scalar() or 0,
+        "status": status,
+        "submittedAt": operator.created_at.strftime("%Y-%m-%d %H:%M:%S") if operator.created_at else "",
+        "reviewedBy": "平台管理员" if reviewed_at else "",
+        "reviewedAt": reviewed_at,
+        "reviewComment": remark,
+        "lastProcessedBy": "平台管理员" if reviewed_at else "系统受理",
+        "lastProcessedAt": reviewed_at or (operator.created_at.strftime("%Y-%m-%d %H:%M:%S") if operator.created_at else ""),
+        "attachments": [
+            {"id": f"license-{operator.id}", "label": "营业执照", "fileName": "营业执照.pdf", "status": "ready", "updatedAt": operator.created_at.strftime("%Y-%m-%d %H:%M:%S") if operator.created_at else "", "previewText": "查看材料"},
+            {"id": f"id-{operator.id}", "label": "法人证件", "fileName": "法人证件.pdf", "status": "ready", "updatedAt": operator.created_at.strftime("%Y-%m-%d %H:%M:%S") if operator.created_at else "", "previewText": "查看材料"},
+        ],
+        "auditTimeline": [
+            {"id": f"submit-{operator.id}", "title": "提交入驻申请", "time": operator.created_at.strftime("%Y-%m-%d %H:%M:%S") if operator.created_at else "", "operator": operator.name, "status": "pending", "comment": "运营商提交主体、联系人、证件与注册地址信息。"},
+            {"id": f"review-{operator.id}", "title": "审核处理", "time": reviewed_at, "operator": "平台管理员", "status": status, "comment": remark or "等待平台审核。"},
+        ],
+    }
+
+
+@api_router.get("/admin/operators/audits", tags=["admin"])
+async def get_operator_audits_api(
+    _context: RoleContext = Depends(require_admin_context),
+    db: Session = Depends(get_db),
+):
+    ensure_demo_runtime_data(db)
+    seed_runtime_data(db)
+    operators = db.query(Operator).order_by(Operator.created_at.desc(), Operator.id.desc()).all()
+    records = [serialize_operator_audit_record(db, item) for item in operators]
+    return {"code": 200, "message": "success", "data": {"records": records}, "records": records}
+
+
+@api_router.post("/admin/operators/{operator_id}/process", tags=["admin"])
+async def process_operator_audit_api(
+    operator_id: int,
+    payload: OperatorAuditProcessPayload,
+    _context: RoleContext = Depends(require_admin_context),
+    db: Session = Depends(get_db),
+):
+    operator = db.query(Operator).filter(Operator.id == operator_id).first()
+    if not operator:
+        return {"code": 404, "message": "运营商不存在"}
+    action = (payload.action or "").strip().lower()
+    if action not in {"approve", "approved", "reject", "rejected"}:
+        return {"code": 400, "message": "action 仅支持 approve/reject"}
+    approved = action in {"approve", "approved"}
+    operator.is_verified = approved
+    operator_audit_store[operator.id] = {
+        **operator_audit_store.get(operator.id, {}),
+        "status": "approved" if approved else "rejected",
+        "remark": payload.remark.strip() or ("审核通过" if approved else "资料不完整，已驳回"),
+        "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    db.commit()
+    db.refresh(operator)
+    return {"code": 200, "message": "运营商审核已处理", "data": serialize_operator_audit_record(db, operator)}
+
+
+@api_router.post("/admin/operators/{operator_id}/bank-card/process", tags=["admin"])
+async def process_operator_bank_card_api(
+    operator_id: int,
+    payload: BankCardAuditPayload,
+    _context: RoleContext = Depends(require_admin_context),
+    db: Session = Depends(get_db),
+):
+    action = (payload.action or "").strip().lower()
+    if action not in {"approve", "approved", "reject", "rejected"}:
+        return {"code": 400, "message": "action 仅支持 approve/reject"}
+    card = (
+        db.query(OperatorBankCard)
+        .filter(OperatorBankCard.operator_id == operator_id)
+        .order_by(OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
+        .first()
+    )
+    if not card:
+        return {"code": 404, "message": "当前运营商暂无绑卡记录"}
+    card.bind_status = 1 if action in {"approve", "approved"} else 2
+    db.commit()
+    db.refresh(card)
+    return {"code": 200, "message": "绑卡审核已处理", "data": serialize_bank_card(card)}
 
 
 @api_router.get("/operator/stations", tags=["operator"])
@@ -1168,6 +1607,7 @@ async def get_operator_stations(
     operator = get_operator_by_context(db, context)
     if not operator:
         return {"code": 404, "message": "当前运营商未找到，请先入驻"}
+    ensure_demo_runtime_data(db)
     ensure_operator_demo_assets(db, operator)
     operator_id = operator.id
 
@@ -1194,6 +1634,7 @@ async def get_operator_station_option_list(
     operator = get_operator_by_context(db, context)
     if not operator:
         return {"code": 404, "message": "当前运营商未找到，请先入驻"}
+    ensure_demo_runtime_data(db)
     ensure_operator_demo_assets(db, operator)
     operator_id = operator.id
     return {
@@ -1313,7 +1754,7 @@ async def create_operator_station_charger(
     db: Session = Depends(get_db),
 ):
     operator_id = resolve_operator_id(db, context)
-    station = get_station_for_operator(db, station_id=station_id, operator_id=operator_id, with_chargers=True)
+    station = get_station_for_operator(db, station_id=station_id, operator_id=operator_id, with_chargers=False)
     if not station:
         return {"code": 404, "message": "电站不存在或无权限访问"}
 
@@ -1340,12 +1781,27 @@ async def create_operator_station_charger(
         db,
         station=station,
         sn_code=sn_code,
-        charger_name=(payload.charger_name or "").strip() or f"{station.name[:10]}-{len(station.chargers) + 1:02d}号桩",
+        charger_name=(payload.charger_name or "").strip() or f"{station.name[:10]}-新桩",
         charger_type=charger_type,
         power_kw=Decimal(str(payload.power_kw)),
         status=status,
     )
-    return {"code": 200, "message": "电桩新增成功", "data": serialize_charger(charger)}
+    return {
+        "code": 200,
+        "message": "电桩新增成功",
+        "data": {
+            "id": charger.id,
+            "sn_code": charger.sn_code,
+            "charger_name": charger.name,
+            "type": charger.type,
+            "power_kw": float(charger.power_kw or 0),
+            "status": charger.status,
+            "status_text": charger_status_text(charger.status),
+            "station_id": station.id,
+            "station_name": station.name,
+            "updated_at": charger.updated_at.strftime("%Y-%m-%d %H:%M:%S") if charger.updated_at else "",
+        },
+    }
 
 
 @api_router.post("/operator/stations/{station_id}/chargers/batch-create", tags=["operator"])
@@ -1356,7 +1812,7 @@ async def batch_create_operator_station_chargers(
     db: Session = Depends(get_db),
 ):
     operator_id = resolve_operator_id(db, context)
-    station = get_station_for_operator(db, station_id=station_id, operator_id=operator_id, with_chargers=True)
+    station = get_station_for_operator(db, station_id=station_id, operator_id=operator_id, with_chargers=False)
     if not station:
         return {"code": 404, "message": "电站不存在或无权限访问"}
 
@@ -1378,11 +1834,27 @@ async def batch_create_operator_station_chargers(
         count=count,
         charger_type=charger_type,
         power_kw=Decimal(str(payload.power_kw)),
+        prefix=payload.prefix,
+        start_no=payload.start_no,
     )
     return {
         "code": 200,
         "message": f"已批量生成 {len(created)} 个电桩",
-        "data": [serialize_charger(charger) for charger in created],
+        "data": [
+            {
+                "id": charger.id,
+                "sn_code": charger.sn_code,
+                "charger_name": charger.name,
+                "type": charger.type,
+                "power_kw": float(charger.power_kw or 0),
+                "status": charger.status,
+                "status_text": charger_status_text(charger.status),
+                "station_id": station.id,
+                "station_name": station.name,
+                "updated_at": charger.updated_at.strftime("%Y-%m-%d %H:%M:%S") if charger.updated_at else "",
+            }
+            for charger in created
+        ],
     }
 
 
@@ -1395,24 +1867,60 @@ async def update_operator_station_charger(
     db: Session = Depends(get_db),
 ):
     operator_id = resolve_operator_id(db, context)
-    station = get_station_for_operator(db, station_id=station_id, operator_id=operator_id, with_chargers=True)
+    station = get_station_for_operator(db, station_id=station_id, operator_id=operator_id, with_chargers=False)
     if not station:
         return {"code": 404, "message": "电站不存在或无权限访问"}
 
-    charger = next((item for item in station.chargers if item.id == charger_id), None)
+    charger = (
+        db.query(
+            Charger.id.label("id"),
+            Charger.sn_code.label("sn_code"),
+            Charger.name.label("charger_name"),
+            Charger.type.label("type"),
+            Charger.power_kw.label("power_kw"),
+            Charger.status.label("status"),
+        )
+        .filter(
+            Charger.id == charger_id,
+            Charger.station_id == station_id,
+            Charger.is_deleted.is_(False),
+        )
+        .first()
+    )
     if not charger:
         return {"code": 404, "message": "电桩不存在"}
 
     if payload.status is not None and int(payload.status) not in {0, 1, 2, 3}:
         return {"code": 400, "message": "电桩状态不合法"}
 
+    next_name = charger.charger_name
     if payload.charger_name is not None:
-        charger.name = payload.charger_name.strip() or charger.name
-    if payload.status is not None:
-        charger.status = int(payload.status)
+        next_name = payload.charger_name.strip() or charger.charger_name
+    next_status = int(payload.status) if payload.status is not None else int(charger.status)
+    db.query(Charger).filter(Charger.id == charger_id).update(
+        {
+            Charger.name: next_name,
+            Charger.status: next_status,
+        },
+        synchronize_session=False,
+    )
     db.commit()
-    db.refresh(charger)
-    return {"code": 200, "message": "电桩配置已更新", "data": serialize_charger(charger)}
+    return {
+        "code": 200,
+        "message": "电桩配置已更新",
+        "data": {
+            "id": charger.id,
+            "sn_code": charger.sn_code,
+            "charger_name": next_name,
+            "type": charger.type,
+            "power_kw": float(charger.power_kw or 0),
+            "status": next_status,
+            "status_text": charger_status_text(next_status),
+            "station_id": station.id,
+            "station_name": station.name,
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        },
+    }
 
 
 @api_router.post("/operator/stations/{station_id}/visibility", tags=["operator"])
@@ -1506,6 +2014,7 @@ async def get_operator_pricing_templates(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     operator_id = resolve_operator_id(db, context)
 
     templates = (
@@ -1519,7 +2028,118 @@ async def get_operator_pricing_templates(
         operator = get_operator_by_context(db, context)
         if operator:
             templates = ensure_operator_price_templates(db, operator)
-    return {"code": 200, "data": [serialize_price_template(item) for item in templates]}
+    return {"code": 200, "data": [serialize_template_with_bindings(db, item) for item in templates]}
+
+
+@api_router.get("/operator/billing/templates", tags=["operator"])
+async def get_operator_billing_templates_api(
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    ensure_demo_runtime_data(db)
+    operator_id = resolve_operator_id(db, context)
+    templates = (
+        db.query(PriceTemplate)
+        .options(noload("*"))
+        .filter(PriceTemplate.operator_id == operator_id, PriceTemplate.is_deleted.is_(False))
+        .order_by(PriceTemplate.updated_at.desc(), PriceTemplate.id.desc())
+        .all()
+    )
+    return {"code": 200, "message": "success", "data": [serialize_template_with_bindings(db, item) for item in templates]}
+
+
+@api_router.post("/operator/billing/templates", tags=["operator"])
+async def create_operator_billing_template_api(
+    payload: TemplatePayload,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator_id = resolve_operator_id(db, context)
+    rules = payload.model_dump()
+    template = PriceTemplate(
+        operator_id=operator_id,
+        name=payload.name.strip() or "未命名电价模板",
+        rules_json=json.dumps(rules, ensure_ascii=False),
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return {"code": 200, "message": "模板已保存", "data": serialize_template_with_bindings(db, template)}
+
+
+@api_router.put("/operator/billing/templates/{template_id}", tags=["operator"])
+async def update_operator_billing_template_api(
+    template_id: int,
+    payload: TemplatePayload,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator_id = resolve_operator_id(db, context)
+    template = (
+        db.query(PriceTemplate)
+        .filter(PriceTemplate.id == template_id, PriceTemplate.operator_id == operator_id, PriceTemplate.is_deleted.is_(False))
+        .first()
+    )
+    if not template:
+        return {"code": 404, "message": "电价模板不存在"}
+    template.name = payload.name.strip() or template.name
+    template.rules_json = json.dumps(payload.model_dump(), ensure_ascii=False)
+    db.commit()
+    db.refresh(template)
+    return {"code": 200, "message": "模板已更新", "data": serialize_template_with_bindings(db, template)}
+
+
+@api_router.patch("/operator/billing/templates/{template_id}/status", tags=["operator"])
+async def update_operator_billing_template_status_api(
+    template_id: int,
+    payload: dict,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator_id = resolve_operator_id(db, context)
+    template = (
+        db.query(PriceTemplate)
+        .filter(PriceTemplate.id == template_id, PriceTemplate.operator_id == operator_id, PriceTemplate.is_deleted.is_(False))
+        .first()
+    )
+    if not template:
+        return {"code": 404, "message": "电价模板不存在"}
+    rules = parse_price_template_rules(template)
+    status = str(payload.get("status") or "").strip()
+    if status not in {"active", "draft", "disabled"}:
+        return {"code": 400, "message": "模板状态不合法"}
+    rules["status"] = status
+    template.rules_json = json.dumps(rules, ensure_ascii=False)
+    db.commit()
+    db.refresh(template)
+    return {"code": 200, "message": "模板状态已更新", "data": serialize_template_with_bindings(db, template)}
+
+
+@api_router.delete("/operator/billing/templates/{template_id}", tags=["operator"])
+async def delete_operator_billing_template_api(
+    template_id: int,
+    context: RoleContext = Depends(require_operator_context),
+    db: Session = Depends(get_db),
+):
+    operator_id = resolve_operator_id(db, context)
+    template = (
+        db.query(PriceTemplate)
+        .filter(PriceTemplate.id == template_id, PriceTemplate.operator_id == operator_id, PriceTemplate.is_deleted.is_(False))
+        .first()
+    )
+    if not template:
+        return {"code": 404, "message": "电价模板不存在"}
+    bound_count = db.query(func.count(Station.id)).filter(Station.template_id == template.id, Station.is_deleted.is_(False)).scalar() or 0
+    if bound_count:
+        rules = parse_price_template_rules(template)
+        rules["status"] = "disabled"
+        template.rules_json = json.dumps(rules, ensure_ascii=False)
+        message = "模板已被电站使用，已改为停用"
+    else:
+        template.is_deleted = True
+        message = "模板已删除"
+    db.commit()
+    return {"code": 200, "message": message, "data": {"id": template_id, "bound_station_count": int(bound_count)}}
 
 
 @api_router.get("/operator/orders/start-options", tags=["orders", "operator"])
@@ -1532,8 +2152,9 @@ async def get_operator_order_start_options(
     if not operator:
         return {"code": 404, "message": "运营商不存在"}
 
+    ensure_demo_runtime_data(db)
     ensure_operator_demo_assets(db, operator)
-    demo_user = get_or_create_demo_user(db)
+    demo_users = ensure_demo_users(db)
     stations = get_operator_station_page(
         db,
         operator_id=operator.id,
@@ -1588,12 +2209,13 @@ async def get_operator_order_start_options(
         "data": {
             "users": [
                 {
-                    "id": demo_user.id,
-                    "nickname": demo_user.nickname or user_display_name(demo_user),
-                    "phone": demo_user.phone,
-                    "vin": demo_user.vin_code,
-                    "is_default": True,
+                    "id": user.id,
+                    "nickname": user.nickname or user_display_name(user),
+                    "phone": user.phone,
+                    "vin": user.vin_code,
+                    "is_default": index == 0,
                 }
+                for index, user in enumerate(demo_users)
             ],
             "stations": station_items,
             "chargers": [
@@ -1611,7 +2233,7 @@ async def get_operator_order_start_options(
                 }
                 for index, row in enumerate(charger_rows, start=1)
             ],
-            "default_user_id": demo_user.id,
+            "default_user_id": demo_users[0].id if demo_users else None,
             "default_station_id": selected_station_id,
         },
     }
@@ -1630,16 +2252,20 @@ async def operator_demo_start_order(
     if source_type not in {"manual_demo", "qr_code", "mini_program"}:
         return {"code": 400, "message": "订单来源不合法"}
 
-    ensure_operator_demo_assets(db, operator)
     base_station_query = (
-        db.query(Station)
-        .options(joinedload(Station.price_template), noload(Station.operator), noload(Station.chargers))
+        db.query(
+            Station.id.label("id"),
+            Station.status.label("status"),
+        )
         .filter(Station.operator_id == operator.id, Station.is_deleted.is_(False))
     )
     if payload.station_id:
         station = base_station_query.filter(Station.id == payload.station_id).first()
     else:
-        station = base_station_query.order_by(Station.status.asc(), Station.id.asc()).first()
+        station = base_station_query.order_by(
+            case((Station.status == 0, 0), else_=1),
+            Station.id.asc(),
+        ).first()
     if not station:
         return {"code": 400, "message": "当前运营商暂无可用电站"}
     if station.status != 0:
@@ -1714,8 +2340,6 @@ async def operator_demo_start_order(
         abnormal_reason=None,
         settle_status=0,
     )
-    order.charger = charger
-    order.station = station
     db.add(order)
     recalculate_order_amounts(order, minimum_charge_kwh=Decimal(str(random.randint(8, 36))))
     charger.status = 1
@@ -1745,6 +2369,7 @@ async def get_operator_history_orders(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     operator_id = resolve_operator_id(db, context)
     return {
         "code": 200,
@@ -1775,6 +2400,7 @@ async def get_operator_realtime_orders(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     operator_id = resolve_operator_id(db, context)
     return {
         "code": 200,
@@ -1806,6 +2432,7 @@ async def get_operator_abnormal_orders(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     operator_id = resolve_operator_id(db, context)
     return {
         "code": 200,
@@ -1831,6 +2458,7 @@ async def get_operator_order_detail(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     operator_id = resolve_operator_id(db, context)
     order_data = get_order_detail_data(db, order_id, operator_id=operator_id)
     if not order_data:
@@ -1910,6 +2538,7 @@ async def get_operator_bank_cards(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     operator_id = resolve_operator_id(db, context)
     operator = get_operator_basic_info(db, operator_id)
     if not operator:
@@ -2005,6 +2634,7 @@ async def get_operator_bank_card_audit_status(
     context: RoleContext = Depends(require_operator_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     operator_id = resolve_operator_id(db, context)
     operator = get_operator_basic_info(db, operator_id)
     if not operator:
@@ -2038,6 +2668,7 @@ async def get_invoices(
     context: RoleContext = Depends(get_role_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     operator_id = resolve_operator_id(db, context) if context.role == "operator" else None
     query = (
         db.query(
@@ -2099,6 +2730,7 @@ async def get_invoices(
 
 @api_router.post("/finance/invoices/apply", tags=["finance"])
 async def apply_invoice(payload: InvoiceApplySchema, db: Session = Depends(get_db)):
+    ensure_demo_runtime_data(db)
     operator = db.query(Operator).options(noload("*")).filter(Operator.id == payload.operator_id).first()
     if not operator:
         return {"code": 404, "message": "运营商不存在"}
@@ -2235,6 +2867,7 @@ async def process_invoice(
 
 @api_router.get("/admin/finance/settlements", tags=["admin"])
 async def admin_get_settlements(db: Session = Depends(get_db)):
+    ensure_demo_runtime_data(db)
     records = (
         db.query(
             OperatorSettlementRecord.id.label("id"),
@@ -2364,9 +2997,14 @@ async def admin_trigger_settle(payload: dict, db: Session = Depends(get_db)):
 
 @api_router.get("/admin/audit/stations", tags=["admin"])
 async def get_station_audits(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    keyword: str | None = None,
+    status: int | None = None,
     _context: RoleContext = Depends(require_admin_context),
     db: Session = Depends(get_db),
 ):
+    ensure_demo_runtime_data(db)
     charger_count_subquery = (
         db.query(
             Charger.station_id.label("station_id"),
@@ -2376,7 +3014,7 @@ async def get_station_audits(
         .group_by(Charger.station_id)
         .subquery()
     )
-    stations = (
+    query = (
         db.query(
             Station.id.label("id"),
             Station.operator_id.label("operator_id"),
@@ -2412,13 +3050,46 @@ async def get_station_audits(
         .outerjoin(PriceTemplate, Station.template_id == PriceTemplate.id)
         .outerjoin(charger_count_subquery, charger_count_subquery.c.station_id == Station.id)
         .filter(Station.is_deleted.is_(False))
-        .order_by(Station.created_at.desc(), Station.id.desc())
+    )
+    if status is not None:
+        query = query.filter(Station.status == status)
+    if keyword and keyword.strip():
+        kw = f"%{keyword.strip()}%"
+        query = query.filter(
+            or_(Station.name.like(kw), Operator.name.like(kw), Station.contact_name.like(kw), Station.address.like(kw))
+        )
+    total = query.order_by(None).count()
+    stations = (
+        query.order_by(Station.created_at.desc(), Station.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .all()
+    )
+    summary_row = (
+        db.query(
+            func.count(Station.id),
+            func.coalesce(func.sum(case((Station.status == 3, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Station.status == 0, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Station.status == 4, 1), else_=0)), 0),
+        )
+        .filter(Station.is_deleted.is_(False))
+        .one()
     )
 
     return {
         "code": 200,
-        "data": [serialize_station_row(station) for station in stations],
+        "data": {
+            "items": [serialize_station_row(station) for station in stations],
+            "total": int(total),
+            "page": page,
+            "page_size": page_size,
+            "summary": {
+                "total_count": int(summary_row[0] or 0),
+                "pending_count": int(summary_row[1] or 0),
+                "approved_count": int(summary_row[2] or 0),
+                "rejected_count": int(summary_row[3] or 0),
+            },
+        },
     }
 
 

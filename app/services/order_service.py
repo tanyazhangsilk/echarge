@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import case, func, or_
@@ -124,6 +125,30 @@ def _resolve_template_rates(order: Order) -> tuple[Decimal, Decimal]:
         except Exception:
             return DEFAULT_FLAT_PRICE, DEFAULT_SERVICE_PRICE
     return DEFAULT_FLAT_PRICE, DEFAULT_SERVICE_PRICE
+
+
+def _resolve_template_rates_from_rules_json(rules_json: str | None) -> tuple[Decimal, Decimal]:
+    if not rules_json:
+        return DEFAULT_FLAT_PRICE, DEFAULT_SERVICE_PRICE
+    try:
+        data = json.loads(rules_json)
+    except Exception:
+        return DEFAULT_FLAT_PRICE, DEFAULT_SERVICE_PRICE
+    return (
+        Decimal(str(data.get("flat_price", DEFAULT_FLAT_PRICE))),
+        Decimal(str(data.get("service_price", DEFAULT_SERVICE_PRICE))),
+    )
+
+
+def _infer_power_kw(charger_type: str | None, charger_power_kw: Decimal | None) -> Decimal:
+    if charger_power_kw is not None:
+        return Decimal(str(charger_power_kw))
+    normalized = (charger_type or "").upper()
+    if normalized == "AC":
+        return Decimal("7")
+    if normalized == "DC":
+        return Decimal("120")
+    return Decimal("60")
 
 
 def _build_fee_detail(order: Order) -> dict[str, Any]:
@@ -544,35 +569,80 @@ def get_order_detail_data(db: Session, order_id: int, operator_id: int | None = 
 
 
 def force_stop_order(db: Session, order_id: int, operator_id: int | None = None) -> Order | None:
-    query = db.query(Order).options(
-        joinedload(Order.user),
-        joinedload(Order.station).joinedload(Station.price_template),
-        joinedload(Order.charger),
+    query = (
+        db.query(
+            Order.id.label("id"),
+            Order.order_no.label("order_no"),
+            Order.user_id.label("user_id"),
+            Order.station_id.label("station_id"),
+            Order.charger_id.label("charger_id"),
+            Order.vin.label("vin"),
+            Order.start_time.label("start_time"),
+            Order.total_kwh.label("total_kwh"),
+            Order.status.label("status"),
+            User.vin_code.label("user_vin"),
+            Charger.station_id.label("charger_station_id"),
+            Charger.type.label("charger_type"),
+            Charger.power_kw.label("charger_power_kw"),
+            PriceTemplate.rules_json.label("template_rules_json"),
+        )
+        .select_from(Order)
+        .outerjoin(User, Order.user_id == User.id)
+        .outerjoin(Charger, Order.charger_id == Charger.id)
+        .outerjoin(Station, Order.station_id == Station.id)
+        .outerjoin(PriceTemplate, Station.template_id == PriceTemplate.id)
+        .filter(Order.id == order_id)
     )
-    query = query.filter(Order.id == order_id)
     if operator_id is not None:
         query = query.filter(Order.operator_id == operator_id)
 
-    order = query.first()
-    if not order or order.status != 0:
+    row = query.first()
+    if not row or row.status != 0:
         return None
 
     now = datetime.now()
-    order.end_time = now
-    recalculate_order_amounts(order, now=now)
-    order.status = 1
-    order.pay_status = 1
-    order.settle_status = 0
-    if order.station_id is None and order.charger and order.charger.station_id:
-        order.station_id = order.charger.station_id
-    if not order.vin and order.user and order.user.vin_code:
-        order.vin = order.user.vin_code
-    if order.charger:
-        order.charger.status = 0
-    create_wallet_consume_record(db, order.user_id, order.id, order.total_fee)
+    duration = max(int((now - row.start_time).total_seconds() / 60), 0) if row.start_time else 0
+    power_kw = min(_infer_power_kw(row.charger_type, row.charger_power_kw), Decimal("180"))
+    estimated_charge = Decimal(str(max(duration, 1))) / Decimal("60") * power_kw * Decimal("0.55")
+    charge_amount = max(Decimal(str(row.total_kwh or 0)), estimated_charge)
+    total_kwh = _quantize_decimal(charge_amount)
+    flat_price, service_price = _resolve_template_rates_from_rules_json(row.template_rules_json)
+    ele_fee = _quantize_decimal(total_kwh * flat_price)
+    service_fee = _quantize_decimal(total_kwh * service_price)
+    total_fee = _quantize_decimal(ele_fee + service_fee)
+    resolved_station_id = row.station_id or row.charger_station_id
+    resolved_vin = row.vin or row.user_vin
+
+    db.query(Order).filter(Order.id == row.id).update(
+        {
+            Order.end_time: now,
+            Order.charge_duration: duration,
+            Order.total_kwh: total_kwh,
+            Order.ele_fee: ele_fee,
+            Order.service_fee: service_fee,
+            Order.total_fee: total_fee,
+            Order.status: 1,
+            Order.pay_status: 1,
+            Order.settle_status: 0,
+            Order.station_id: resolved_station_id,
+            Order.vin: resolved_vin,
+        },
+        synchronize_session=False,
+    )
+    if row.charger_id:
+        db.query(Charger).filter(Charger.id == row.charger_id).update(
+            {Charger.status: 0},
+            synchronize_session=False,
+        )
+    create_wallet_consume_record(db, row.user_id, row.id, total_fee)
     db.commit()
-    db.refresh(order)
-    return order
+    return SimpleNamespace(
+        id=row.id,
+        order_no=row.order_no,
+        status=1,
+        pay_status=1,
+        settle_status=0,
+    )
 
 
 def finish_order(db: Session, order_id: int, operator_id: int | None = None) -> Order | None:
@@ -580,33 +650,78 @@ def finish_order(db: Session, order_id: int, operator_id: int | None = None) -> 
 
 
 def mark_order_abnormal(db: Session, order_id: int, abnormal_reason: str, operator_id: int | None = None) -> Order | None:
-    query = db.query(Order).options(
-        joinedload(Order.user),
-        joinedload(Order.station).joinedload(Station.price_template),
-        joinedload(Order.charger),
+    query = (
+        db.query(
+            Order.id.label("id"),
+            Order.order_no.label("order_no"),
+            Order.user_id.label("user_id"),
+            Order.station_id.label("station_id"),
+            Order.charger_id.label("charger_id"),
+            Order.vin.label("vin"),
+            Order.start_time.label("start_time"),
+            Order.total_kwh.label("total_kwh"),
+            Order.status.label("status"),
+            User.vin_code.label("user_vin"),
+            Charger.station_id.label("charger_station_id"),
+            Charger.type.label("charger_type"),
+            Charger.power_kw.label("charger_power_kw"),
+            PriceTemplate.rules_json.label("template_rules_json"),
+        )
+        .select_from(Order)
+        .outerjoin(User, Order.user_id == User.id)
+        .outerjoin(Charger, Order.charger_id == Charger.id)
+        .outerjoin(Station, Order.station_id == Station.id)
+        .outerjoin(PriceTemplate, Station.template_id == PriceTemplate.id)
+        .filter(Order.id == order_id)
     )
-    query = query.filter(Order.id == order_id)
     if operator_id is not None:
         query = query.filter(Order.operator_id == operator_id)
 
-    order = query.first()
-    if not order or order.status != 0:
+    row = query.first()
+    if not row or row.status != 0:
         return None
 
     now = datetime.now()
-    order.end_time = now
-    recalculate_order_amounts(order, now=now)
-    order.status = 2
-    order.abnormal_reason = abnormal_reason.strip() or "设备或会话异常，订单已转入异常列表"
-    if order.station_id is None and order.charger and order.charger.station_id:
-        order.station_id = order.charger.station_id
-    if not order.vin and order.user and order.user.vin_code:
-        order.vin = order.user.vin_code
-    if order.charger:
-        order.charger.status = 2
+    duration = max(int((now - row.start_time).total_seconds() / 60), 0) if row.start_time else 0
+    power_kw = min(_infer_power_kw(row.charger_type, row.charger_power_kw), Decimal("180"))
+    estimated_charge = Decimal(str(max(duration, 1))) / Decimal("60") * power_kw * Decimal("0.55")
+    charge_amount = max(Decimal(str(row.total_kwh or 0)), estimated_charge)
+    total_kwh = _quantize_decimal(charge_amount)
+    flat_price, service_price = _resolve_template_rates_from_rules_json(row.template_rules_json)
+    ele_fee = _quantize_decimal(total_kwh * flat_price)
+    service_fee = _quantize_decimal(total_kwh * service_price)
+    total_fee = _quantize_decimal(ele_fee + service_fee)
+    resolved_station_id = row.station_id or row.charger_station_id
+    resolved_vin = row.vin or row.user_vin
+    resolved_reason = abnormal_reason.strip() or "设备或会话异常，订单已转入异常列表"
+
+    db.query(Order).filter(Order.id == row.id).update(
+        {
+            Order.end_time: now,
+            Order.charge_duration: duration,
+            Order.total_kwh: total_kwh,
+            Order.ele_fee: ele_fee,
+            Order.service_fee: service_fee,
+            Order.total_fee: total_fee,
+            Order.status: 2,
+            Order.station_id: resolved_station_id,
+            Order.vin: resolved_vin,
+            Order.abnormal_reason: resolved_reason,
+        },
+        synchronize_session=False,
+    )
+    if row.charger_id:
+        db.query(Charger).filter(Charger.id == row.charger_id).update(
+            {Charger.status: 2},
+            synchronize_session=False,
+        )
     db.commit()
-    db.refresh(order)
-    return order
+    return SimpleNamespace(
+        id=row.id,
+        order_no=row.order_no,
+        status=2,
+        abnormal_reason=resolved_reason,
+    )
 
 
 def get_order_stats(db: Session, operator_id: int | None = None) -> dict[str, Any]:

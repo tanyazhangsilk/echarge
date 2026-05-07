@@ -400,6 +400,12 @@ def create_station_charger(
     power_kw: Decimal,
     status: int = 0,
 ) -> Charger:
+    existing_count = (
+        db.query(func.count(Charger.id))
+        .filter(Charger.station_id == station.id, Charger.is_deleted.is_(False))
+        .scalar()
+        or 0
+    )
     charger = Charger(
         station_id=station.id,
         sn_code=sn_code,
@@ -409,11 +415,18 @@ def create_station_charger(
         status=status,
     )
     db.add(charger)
-    station.planned_charger_count = max(int(station.planned_charger_count or 0), len(station.chargers or []) + 1)
+    next_planned_count = max(int(station.planned_charger_count or 0), int(existing_count) + 1)
     current_total = Decimal(str(station.total_power_kw or 0))
-    station.total_power_kw = current_total + Decimal(str(power_kw))
+    next_total_power = current_total + Decimal(str(power_kw))
+    db.flush()
+    db.query(Station).filter(Station.id == station.id).update(
+        {
+            Station.planned_charger_count: next_planned_count,
+            Station.total_power_kw: next_total_power,
+        },
+        synchronize_session=False,
+    )
     db.commit()
-    db.refresh(charger)
     return charger
 
 
@@ -424,13 +437,16 @@ def batch_create_station_chargers(
     count: int,
     charger_type: str,
     power_kw: Decimal,
+    prefix: str | None = None,
+    start_no: int | None = None,
 ) -> list[Charger]:
     created: list[Charger] = []
     existing_count = db.query(func.count(Charger.id)).filter(Charger.station_id == station.id).scalar() or 0
 
     for index in range(count):
-        sequence = existing_count + index + 1
-        sn_code = f"ST{station.id:03d}{charger_type.upper()}{sequence:03d}"
+        sequence = (int(start_no) if start_no else existing_count + 1) + index
+        sn_prefix = (prefix or f"ST{station.id:03d}{charger_type.upper()}").strip().upper()
+        sn_code = f"{sn_prefix}{sequence:03d}"
         charger = Charger(
             station_id=station.id,
             sn_code=sn_code,
@@ -442,11 +458,17 @@ def batch_create_station_chargers(
         db.add(charger)
         created.append(charger)
 
-    station.planned_charger_count = max(int(station.planned_charger_count or 0), existing_count + count)
-    station.total_power_kw = Decimal(str(station.total_power_kw or 0)) + Decimal(str(power_kw)) * Decimal(str(count))
+    next_planned_count = max(int(station.planned_charger_count or 0), existing_count + count)
+    next_total_power = Decimal(str(station.total_power_kw or 0)) + Decimal(str(power_kw)) * Decimal(str(count))
+    db.flush()
+    db.query(Station).filter(Station.id == station.id).update(
+        {
+            Station.planned_charger_count: next_planned_count,
+            Station.total_power_kw: next_total_power,
+        },
+        synchronize_session=False,
+    )
     db.commit()
-    for charger in created:
-        db.refresh(charger)
     return created
 
 
