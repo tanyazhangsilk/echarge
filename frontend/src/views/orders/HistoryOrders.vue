@@ -12,8 +12,6 @@ import { fetchAdminOrders, fetchAdminStationOptions } from '../../api/admin'
 import { fetchOperatorHistoryOrders, fetchOperatorStationOptions } from '../../api/operator'
 import { ROLES } from '../../config/permissions'
 import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
-import { getDemoOrderListPayload } from '../../utils/demoOrderAdapter'
-import { getFallbackStationOptions } from '../../utils/stationFallbacks'
 
 const route = useRoute()
 const router = useRouter()
@@ -115,13 +113,16 @@ const loadOrders = async ({ background = false } = {}) => {
   loading.value = !cached || !background
   try {
     const response = isAdmin.value ? await fetchAdminOrders(queryParams.value) : await fetchOperatorHistoryOrders(queryParams.value)
+    if (response?.data?.code !== 200) {
+      throw new Error(response?.data?.message || '订单列表加载失败')
+    }
     const payload = response.data?.data || {}
     applyPayload(payload, Date.now())
     setRequestCache(listCacheKey.value, payload)
   } catch (error) {
     if (!orders.value.length) {
-      const demoPayload = getDemoOrderListPayload('history')
-      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, Date.now())
+      applyPayload({ items: [], total: 0, page: 1, page_size: pagination.pageSize, summary: {} }, Date.now())
+      ElMessage.error(error?.message || '订单列表加载失败')
     }
   } finally {
     loading.value = false
@@ -133,11 +134,15 @@ const loadStationOptions = async () => {
   stationLoading.value = true
   try {
     const { data } = isAdmin.value ? await fetchAdminStationOptions() : await fetchOperatorStationOptions()
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '电站选项加载失败')
+    }
     stationOptions.value = (data?.data || []).map((item) => ({ label: item.station_name, value: item.id }))
     stationOptionsLoaded.value = true
   } catch (error) {
-    stationOptions.value = getFallbackStationOptions().map((item) => ({ label: item.station_name, value: item.id }))
+    stationOptions.value = []
     stationOptionsLoaded.value = true
+    ElMessage.error(error?.message || '电站选项加载失败')
   } finally {
     stationLoading.value = false
   }

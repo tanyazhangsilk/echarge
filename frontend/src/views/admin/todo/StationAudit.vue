@@ -7,10 +7,8 @@ import PageSectionHeader from '../../../components/console/PageSectionHeader.vue
 import MetricCard from '../../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../../components/console/EmptyStateBlock.vue'
 import TableSkeletonBlock from '../../../components/console/TableSkeletonBlock.vue'
-import { fetchStationAudits } from '../../../api/admin'
-import { approveDemoStation, rejectDemoStation } from '../../../api/demo'
-import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../../utils/requestCache'
-import { getFallbackStationAudits } from '../../../utils/stationFallbacks'
+import { fetchStationAudits, processStationAudit } from '../../../api/admin'
+import { buildRequestCacheKey, clearRequestCache, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../../utils/requestCache'
 
 const CACHE_TTL = 45 * 1000
 
@@ -82,37 +80,7 @@ const stats = computed(() => [
 
 const statusTagType = (status) => (Number(status) === 0 ? 'success' : Number(status) === 3 ? 'warning' : Number(status) === 4 ? 'danger' : 'info')
 
-const buildClientPayload = (rows = []) => {
-  const keyword = filters.keyword.trim().toLowerCase()
-  const status = filters.status === '' ? null : Number(filters.status)
-  const filtered = rows.filter((item) => {
-    const matchKeyword =
-      !keyword ||
-      [item.station_name, item.operator_name, item.full_address, item.contact_name, item.contact_phone]
-        .filter(Boolean)
-        .some((field) => String(field).toLowerCase().includes(keyword))
-    const matchStatus = status == null || Number(item.status) === status
-    return matchKeyword && matchStatus
-  })
-  const start = (pagination.page - 1) * pagination.pageSize
-  const items = filtered.slice(start, start + pagination.pageSize)
-
-  return {
-    items,
-    total: filtered.length,
-    page: pagination.page,
-    page_size: pagination.pageSize,
-    summary: {
-      total_count: filtered.length,
-      pending_count: filtered.filter((item) => Number(item.status) === 3).length,
-      approved_count: filtered.filter((item) => Number(item.status) === 0).length,
-      rejected_count: filtered.filter((item) => Number(item.status) === 4).length,
-    },
-  }
-}
-
 const normalizePayload = (raw) => {
-  if (Array.isArray(raw)) return buildClientPayload(raw)
   if (Array.isArray(raw?.items)) {
     return {
       items: raw.items,
@@ -122,7 +90,18 @@ const normalizePayload = (raw) => {
       summary: raw.summary || {},
     }
   }
-  return buildClientPayload(getFallbackStationAudits())
+  return {
+    items: [],
+    total: 0,
+    page: pagination.page,
+    page_size: pagination.pageSize,
+    summary: {
+      total_count: 0,
+      pending_count: 0,
+      approved_count: 0,
+      rejected_count: 0,
+    },
+  }
 }
 
 const applyPayload = (payload = {}, fromCache = false, updatedAt = Date.now()) => {
@@ -150,13 +129,16 @@ const loadStations = async ({ background = false, force = false } = {}) => {
   loading.value = !cached || !background || force
   try {
     const { data } = await fetchStationAudits(queryParams.value)
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '审核列表加载失败')
+    }
     const payload = normalizePayload(data?.data)
     applyPayload(payload, false, Date.now())
     setRequestCache(listCacheKey.value, payload)
   } catch (error) {
-    const fallback = buildClientPayload(getFallbackStationAudits())
     if (!stations.value.length) {
-      applyPayload(fallback, false, Date.now())
+      applyPayload(normalizePayload(null), false, Date.now())
+      ElMessage.error(error?.message || '审核列表加载失败')
     }
   } finally {
     loading.value = false
@@ -172,27 +154,31 @@ const openDrawer = (row) => {
 const handleAudit = async (action) => {
   if (!currentStation.value) return
   if (action === 'reject' && !auditForm.remark.trim()) {
-    ElMessage.warning('椹冲洖鏃惰濉啓鍘熷洜')
+    ElMessage.warning('驳回时请填写原因')
     return
   }
 
   auditSubmitting.value = true
   try {
-    const request = action === 'approve' ? approveDemoStation : rejectDemoStation
-    const { data } = await request(currentStation.value.id, { audit_remark: auditForm.remark.trim() })
-    ElMessage.success(data?.message || '瀹℃牳澶勭悊鎴愬姛')
+    const { data } = await processStationAudit(currentStation.value.id, {
+      action,
+      remark: auditForm.remark.trim(),
+    })
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '审核处理失败')
+    }
+    clearRequestCache('/operator/stations')
+    clearRequestCache('/admin/audit/stations')
+    ElMessage.success(data?.message || '审核处理成功')
   } catch (error) {
-    const nextStatus = action === 'approve' ? 0 : 4
-    currentStation.value.status = nextStatus
-    currentStation.value.status_text = nextStatus === 0 ? '已审核通过' : '已驳回'
-    currentStation.value.audit_remark = auditForm.remark.trim() || (nextStatus === 0 ? '审核通过，可继续配置电桩和模板。' : '请补充材料后重新提交。')
-    currentStation.value.visibility = nextStatus === 0 ? 'public' : 'private'
-    currentStation.value.visibility_text = nextStatus === 0 ? '公开站点' : '未公开'
-    ElMessage.success('瀹℃牳缁撴灉宸叉洿鏂板埌褰撳墠椤甸潰')
+    ElMessage.error(error?.message || '审核处理失败')
   } finally {
     auditSubmitting.value = false
     await loadStations({ background: true, force: true })
     currentStation.value = stations.value.find((item) => String(item.id) === String(currentStation.value?.id)) || currentStation.value
+    if (currentStation.value && Number(currentStation.value.status) !== 3) {
+      drawerVisible.value = false
+    }
   }
 }
 

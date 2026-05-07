@@ -7,8 +7,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.orm import Session, joinedload, noload
 
 from app.db.database import get_db
 from app.models.models import (
@@ -42,6 +42,12 @@ INVOICE_STATUS_TEXT = {
     1: "已开票",
     2: "已驳回",
 }
+
+DB_CONNECTION_ERROR_MESSAGE = (
+    "数据库连接失败，请确认 MySQL 已启动，并检查 .env 中 "
+    "MYSQL_HOST、MYSQL_PORT、MYSQL_USER、MYSQL_PASSWORD、MYSQL_DB 配置。"
+)
+DB_SCHEMA_ERROR_MESSAGE = "数据库表结构未同步，请先执行 python scripts/patch_demo_schema.py 后再重试。"
 
 
 class DemoOrderStartPayload(BaseModel):
@@ -121,6 +127,26 @@ def fail(message: str, code: int = 400, data: Any = None, **extra: Any) -> dict[
     return response
 
 
+def friendly_db_error_message(exc: Exception) -> str:
+    raw = str(exc)
+    lowered = raw.lower()
+    if isinstance(exc, (OperationalError, ProgrammingError)) and (
+        "unknown column" in lowered
+        or "doesn't exist" in lowered
+        or "unknown table" in lowered
+        or "no such column" in lowered
+    ):
+        return DB_SCHEMA_ERROR_MESSAGE
+    if isinstance(exc, OperationalError) and (
+        "can't connect" in lowered
+        or "connection refused" in lowered
+        or "lost connection" in lowered
+        or "access denied" in lowered
+    ):
+        return DB_CONNECTION_ERROR_MESSAGE
+    return f"数据库操作失败：{raw}"
+
+
 def _parse_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -148,7 +174,7 @@ def _commit(db: Session) -> None:
 
 
 def _first_operator(db: Session) -> Operator | None:
-    return db.query(Operator).order_by(Operator.id.asc()).first()
+    return db.query(Operator).options(noload("*")).order_by(Operator.id.asc()).first()
 
 
 def _resolve_operator(
@@ -159,7 +185,7 @@ def _resolve_operator(
 ) -> Operator | None:
     resolved_id = operator_id or _parse_int(header_operator_id)
     if resolved_id is not None:
-        operator = db.query(Operator).filter(Operator.id == resolved_id).first()
+        operator = db.query(Operator).options(noload("*")).filter(Operator.id == resolved_id).first()
         if operator:
             return operator
     return _first_operator(db)
@@ -259,19 +285,23 @@ def _serialize_invoice(invoice: Invoice) -> dict[str, Any]:
 
 @demo_api_router.get("/demo/flow/health")
 async def demo_flow_health(db: Session = Depends(get_db)) -> dict[str, Any]:
-    operator = _first_operator(db)
     bank_card_ready = False
-    if operator:
+    operator_row = (
+        db.query(Operator.id, Operator.is_verified)
+        .order_by(Operator.id.asc())
+        .first()
+    )
+    if operator_row:
         card = (
             db.query(OperatorBankCard.id)
             .filter(
-                OperatorBankCard.operator_id == operator.id,
+                OperatorBankCard.operator_id == operator_row.id,
                 OperatorBankCard.is_default.is_(True),
                 OperatorBankCard.bind_status == 1,
             )
             .first()
         )
-        bank_card_ready = bool(operator.is_verified and card)
+        bank_card_ready = bool(operator_row.is_verified and card)
 
     unsettled_order_count = (
         db.query(Order.id)
@@ -296,7 +326,7 @@ async def demo_start_order(payload: DemoOrderStartPayload, db: Session = Depends
     if not payload.charger_id and not (payload.sn_code or "").strip():
         return fail("charger_id 与 sn_code 至少传一个")
 
-    user = db.query(User).filter(User.id == payload.user_id).first()
+    user = db.query(User).options(noload("*")).filter(User.id == payload.user_id).first()
     if not user:
         return fail("用户不存在", code=404)
 
@@ -355,7 +385,16 @@ async def demo_start_order(payload: DemoOrderStartPayload, db: Session = Depends
         return fail(str(exc), code=500)
 
     saved_order = _load_order(db, order.id)
-    return ok(serialize_order(saved_order), message="演示订单创建成功")
+    return ok(
+        {
+            "id": saved_order.id,
+            "order_no": saved_order.order_no,
+            "status": saved_order.status,
+            "charger_id": saved_order.charger_id,
+            "station_id": saved_order.station_id,
+        },
+        message="演示订单创建成功",
+    )
 
 
 @demo_api_router.post("/demo/orders/{order_id}/finish")
@@ -383,8 +422,16 @@ async def demo_finish_order(order_id: int, db: Session = Depends(get_db)) -> dic
     except RuntimeError as exc:
         return fail(str(exc), code=500)
 
-    saved_order = _load_order(db, order.id)
-    return ok(serialize_order(saved_order), message="订单已结束并完成计费")
+    return ok(
+        {
+            "id": order.id,
+            "order_no": order.order_no,
+            "status": order.status,
+            "pay_status": order.pay_status,
+            "settle_status": order.settle_status,
+        },
+        message="订单已结束并完成计费",
+    )
 
 
 @demo_api_router.post("/demo/orders/{order_id}/abnormal")
@@ -413,8 +460,15 @@ async def demo_abnormal_order(
     except RuntimeError as exc:
         return fail(str(exc), code=500)
 
-    saved_order = _load_order(db, order.id)
-    return ok(serialize_order(saved_order), message="订单已标记为异常")
+    return ok(
+        {
+            "id": order.id,
+            "order_no": order.order_no,
+            "status": order.status,
+            "abnormal_reason": order.abnormal_reason,
+        },
+        message="订单已标记为异常",
+    )
 
 
 @demo_api_router.get("/demo/orders/{order_id}")
@@ -498,8 +552,7 @@ async def demo_approve_station(
     except RuntimeError as exc:
         return fail(str(exc), code=500)
 
-    saved_station = _load_station(db, station.id)
-    return ok(serialize_station(saved_station), message="电站审核通过")
+    return ok({"id": station.id, "status": station.status, "visibility": station.visibility}, message="电站审核通过")
 
 
 @demo_api_router.post("/demo/stations/{station_id}/reject")
@@ -521,8 +574,7 @@ async def demo_reject_station(
     except RuntimeError as exc:
         return fail(str(exc), code=500)
 
-    saved_station = _load_station(db, station.id)
-    return ok(serialize_station(saved_station), message="电站已驳回")
+    return ok({"id": station.id, "status": station.status, "visibility": station.visibility}, message="电站已驳回")
 
 
 @demo_api_router.post("/demo/stations/{station_id}/chargers")
@@ -601,8 +653,14 @@ async def demo_bind_station_template(
     except RuntimeError as exc:
         return fail(str(exc), code=500)
 
-    saved_station = _load_station(db, station.id)
-    return ok(serialize_station(saved_station), message="计费模板绑定成功")
+    return ok(
+        {
+            "id": station.id,
+            "template_id": station.template_id,
+            "price_template_name": template.name,
+        },
+        message="计费模板绑定成功",
+    )
 
 
 @demo_api_router.post("/demo/settlements/run")
@@ -613,7 +671,7 @@ async def demo_run_settlement(
     try:
         result = settle_t_plus_1_by_operator(payload.date, db=db)
     except Exception as exc:
-        return fail(f"清分执行失败：{exc}", code=500)
+        return fail(friendly_db_error_message(exc), code=500)
 
     operator_ids = [item.get("operator_id") for item in result.get("operator_results", []) if item.get("operator_id")]
     operator_map = (
@@ -631,6 +689,11 @@ async def demo_run_settlement(
             }
         )
 
+    message = (
+        "该日期暂无符合条件的已完成未清分订单。"
+        if int(result.get("processed_order_count", 0) or 0) == 0
+        else "T+1 清分执行完成"
+    )
     return ok(
         {
             "settle_date": result.get("settle_date"),
@@ -639,7 +702,7 @@ async def demo_run_settlement(
             "skipped_operator_count": result.get("skipped_operator_count", 0),
             "operator_results": operator_results,
         },
-        message="T+1 清分执行完成",
+        message=message,
     )
 
 
@@ -716,8 +779,7 @@ async def demo_apply_invoice(
     except RuntimeError as exc:
         return fail(str(exc), code=500)
 
-    saved_invoice = _load_invoice(db, invoice.id)
-    return ok(_serialize_invoice(saved_invoice), message=message)
+    return ok({"id": invoice.id, "status": invoice.status, "order_id": invoice.order_id}, message=message)
 
 
 @demo_api_router.post("/demo/invoices/{invoice_id}/process")
@@ -751,21 +813,20 @@ async def demo_process_invoice(
     except RuntimeError as exc:
         return fail(str(exc), code=500)
 
-    saved_invoice = _load_invoice(db, invoice.id)
     try:
         send_invoice_email(
-            to_email=saved_invoice.email,
-            invoice_no=saved_invoice.created_at.strftime("INV%Y%m%d") + str(saved_invoice.id).zfill(4),
+            to_email=invoice.email,
+            invoice_no=invoice.created_at.strftime("INV%Y%m%d") + str(invoice.id).zfill(4),
             status=notify_status,
-            operator_name=saved_invoice.operator.name if saved_invoice.operator else f"运营商#{saved_invoice.operator_id}",
-            amount=float(saved_invoice.amount or 0),
-            file_url=saved_invoice.file_url,
-            remark=saved_invoice.remark,
+            operator_name=invoice.operator.name if invoice.operator else f"运营商#{invoice.operator_id}",
+            amount=float(invoice.amount or 0),
+            file_url=invoice.file_url,
+            remark=invoice.remark,
         )
     except Exception:
         pass
 
-    return ok(_serialize_invoice(saved_invoice), message=message)
+    return ok({"id": invoice.id, "status": invoice.status, "file_url": invoice.file_url}, message=message)
 
 
 @demo_api_router.get("/demo/invoices")

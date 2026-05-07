@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload, load_only
 
 from app.models.models import Charger, Operator, Order, PriceTemplate, Station, User
 from app.services.station_service import get_charger_name, get_charger_power_kw, station_status_text
+from app.services.wallet_flow_service import create_wallet_consume_record
 
 
 ORDER_STATUS_LABELS = {
@@ -561,12 +562,14 @@ def force_stop_order(db: Session, order_id: int, operator_id: int | None = None)
     recalculate_order_amounts(order, now=now)
     order.status = 1
     order.pay_status = 1
+    order.settle_status = 0
     if order.station_id is None and order.charger and order.charger.station_id:
         order.station_id = order.charger.station_id
     if not order.vin and order.user and order.user.vin_code:
         order.vin = order.user.vin_code
     if order.charger:
         order.charger.status = 0
+    create_wallet_consume_record(db, order.user_id, order.id, order.total_fee)
     db.commit()
     db.refresh(order)
     return order

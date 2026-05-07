@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import case, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, noload
 
 from app.models.models import Charger, Operator, PriceTemplate, Station
 
@@ -140,6 +140,7 @@ def parse_price_template_rules(template: PriceTemplate | None) -> dict[str, Any]
 def ensure_operator_price_templates(db: Session, operator: Operator) -> list[PriceTemplate]:
     templates = (
         db.query(PriceTemplate)
+        .options(noload("*"))
         .filter(PriceTemplate.operator_id == operator.id, PriceTemplate.is_deleted.is_(False))
         .order_by(PriceTemplate.updated_at.desc(), PriceTemplate.id.desc())
         .all()
@@ -200,6 +201,7 @@ def ensure_operator_demo_assets(db: Session, operator: Operator) -> dict[str, An
     templates = ensure_operator_price_templates(db, operator)
     stations = (
         db.query(Station)
+        .options(noload("*"))
         .filter(Station.operator_id == operator.id, Station.is_deleted.is_(False))
         .order_by(Station.created_at.asc())
         .all()
@@ -240,8 +242,36 @@ def ensure_operator_demo_assets(db: Session, operator: Operator) -> dict[str, An
             for item in stations:
                 db.refresh(item)
 
-    for station in stations:
-        ensure_station_chargers(db, station)
+    station_ids = [station.id for station in stations]
+    if station_ids:
+        charger_count_map = {
+            row.station_id: int(row.charger_count or 0)
+            for row in (
+                db.query(
+                    Charger.station_id.label("station_id"),
+                    func.count(Charger.id).label("charger_count"),
+                )
+                .filter(Charger.station_id.in_(station_ids), Charger.is_deleted.is_(False))
+                .group_by(Charger.station_id)
+                .all()
+            )
+        }
+        created_missing = False
+        for station in stations:
+            if charger_count_map.get(station.id, 0) > 0:
+                continue
+            created_missing = True
+            for index in range(4):
+                db.add(
+                    Charger(
+                        station_id=station.id,
+                        sn_code=f"ST{station.id:03d}CH{index + 1:02d}",
+                        type="DC" if index % 2 == 0 else "AC",
+                        status=0,
+                    )
+                )
+        if created_missing:
+            db.commit()
 
     return {"stations": stations, "templates": templates}
 

@@ -16,11 +16,7 @@ import {
   fetchStationChargers,
   updateStationVisibility,
 } from '../../api/operator'
-import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
-import { saveStationApplicationDraft } from '../../utils/stationApplicationDrafts'
-import { mergeChargersWithLocal } from '../../utils/chargerDemoStore'
-import { getFallbackStationRows } from '../../utils/stationFallbacks'
-import { applyLocalTemplateToStations, mergePricingTemplates } from '../../utils/pricingTemplateStore'
+import { buildRequestCacheKey, clearRequestCache, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 
 const router = useRouter()
 const CACHE_TTL = 45 * 1000
@@ -186,13 +182,16 @@ const loadStations = async ({ background = false, force = false } = {}) => {
 
   try {
     const { data } = await fetchOperatorStations(queryParams.value)
-    const payload = data?.data || getFallbackStationRows(queryParams.value)
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '电站列表加载失败')
+    }
+    const payload = data?.data || {}
     applyPayload(payload, Date.now())
     setRequestCache(queryCacheKey.value, payload)
   } catch (error) {
-    const fallback = getFallbackStationRows(queryParams.value)
     if (!stations.value.length) {
-      applyPayload(fallback, Date.now())
+      applyPayload({ items: [], total: 0, page: pagination.page, page_size: pagination.pageSize, summary: {} }, Date.now())
+      ElMessage.error(error?.message || '电站列表加载失败')
     }
   } finally {
     loading.value = false
@@ -204,16 +203,22 @@ const loadTemplates = async () => {
   const templateCacheKey = buildRequestCacheKey('/operator/pricing/templates', { scope: 'station-templates' })
   const cached = getRequestCache(templateCacheKey, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
-    templates.value = mergePricingTemplates(cached.value)
+    templates.value = Array.isArray(cached.value) ? cached.value : []
   }
   templateLoading.value = true
   try {
     const { data } = await fetchOperatorPricingTemplates()
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '模板列表加载失败')
+    }
     const rows = data?.data || []
-    templates.value = mergePricingTemplates(rows)
+    templates.value = Array.isArray(rows) ? rows : []
     setRequestCache(templateCacheKey, rows)
   } catch (error) {
-    templates.value = mergePricingTemplates(cached?.value || [])
+    templates.value = Array.isArray(cached?.value) ? cached.value : []
+    if (!templates.value.length) {
+      ElMessage.error(error?.message || '模板列表加载失败')
+    }
   } finally {
     templateLoading.value = false
   }
@@ -224,15 +229,19 @@ const openChargerDrawer = async (station) => {
   chargerDrawerVisible.value = true
   const cacheKey = buildRequestCacheKey(`/operator/stations/${station.id}/chargers`, { scope: 'station-chargers', station_id: station.id })
   const cached = getRequestCache(cacheKey, { ttl: CACHE_TTL, allowStale: true })
-  chargers.value = mergeChargersWithLocal(station.id, cached?.value || [])
+  chargers.value = Array.isArray(cached?.value) ? cached.value : []
   chargerLoading.value = true
   try {
     const { data } = await fetchStationChargers(station.id)
-    const rows = data?.data || []
-    chargers.value = mergeChargersWithLocal(station.id, rows)
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '电桩列表加载失败')
+    }
+    const rows = Array.isArray(data?.data) ? data.data : []
+    chargers.value = rows
     setRequestCache(cacheKey, rows)
   } catch (error) {
-    chargers.value = mergeChargersWithLocal(station.id, cached?.value || [])
+    chargers.value = Array.isArray(cached?.value) ? cached.value : []
+    ElMessage.error(error?.message || '电桩列表加载失败')
   } finally {
     chargerLoading.value = false
   }
@@ -278,10 +287,13 @@ const submitBindTemplate = async () => {
   bindSubmitting.value = true
   try {
     const { data } = await bindStationTemplate(currentStation.value.id, bindForm.templateId)
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '模板绑定失败')
+    }
+    clearRequestCache('/operator/stations')
     ElMessage.success(data?.message || '模板绑定成功')
   } catch (error) {
-    applyLocalTemplateToStations(stations.value, currentStation.value.id, templates.value, bindForm.templateId)
-    ElMessage.success('模板已绑定到当前页面')
+    ElMessage.error(error?.message || '模板绑定失败')
   } finally {
     bindSubmitting.value = false
     templateDialogVisible.value = false
@@ -323,34 +335,14 @@ const submitStationApplication = async () => {
 
   try {
     const { data } = await applyOperatorStation(payload)
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '电站申请提交失败')
+    }
+    clearRequestCache('/operator/stations')
+    clearRequestCache('/admin/audit/stations')
     ElMessage.success(data?.message || '电站申请已提交')
   } catch (error) {
-    saveStationApplicationDraft(payload)
-    const draftId = `draft-${Date.now()}`
-    stations.value = [
-      {
-        id: draftId,
-        station_name: payload.station_name,
-        full_address: `${payload.province}${payload.city}${payload.district}${payload.address}`,
-        contact_name: payload.contact_name,
-        contact_phone: payload.contact_phone,
-        charger_count: payload.planned_charger_count,
-        planned_charger_count: payload.planned_charger_count,
-        status: 3,
-        status_text: '待审核',
-        visibility: 'private',
-        visibility_text: '未公开',
-        price_template_name: '',
-        price_template_id: null,
-        updated_at: new Date().toLocaleString('zh-CN', { hour12: false }),
-        is_local_draft: true,
-      },
-      ...stations.value,
-    ]
-    refreshSummary(stations.value)
-    total.value = stations.value.length
-    tableReady.value = true
-    ElMessage.success('电站申请已记录到当前页面')
+    ElMessage.error(error?.message || '电站申请提交失败')
   } finally {
     applySubmitting.value = false
     applyDialogVisible.value = false

@@ -6,14 +6,8 @@ import { DocumentChecked, Edit, Location, RefreshRight } from '@element-plus/ico
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
-import { fetchOperatorPricingTemplates } from '../../api/operator'
-import { getFallbackStationOptions } from '../../utils/stationFallbacks'
-import {
-  applyLocalTemplateToStations,
-  getLocalPricingTemplates,
-  mergePricingTemplates,
-  saveLocalPricingTemplate,
-} from '../../utils/pricingTemplateStore'
+import { bindStationTemplate, fetchOperatorPricingTemplates, fetchOperatorStationOptions } from '../../api/operator'
+import { saveLocalPricingTemplate } from '../../utils/pricingTemplateStore'
 import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
 
 const CACHE_TTL = 60 * 1000
@@ -22,6 +16,7 @@ const loading = ref(false)
 const pageReady = ref(false)
 const cacheLabel = ref('')
 const templates = ref([])
+const stationRows = ref([])
 const activeTemplateId = ref(null)
 const dialogVisible = ref(false)
 const selectedStations = ref([])
@@ -31,7 +26,7 @@ const form = reactive({
 })
 
 const cacheKey = buildRequestCacheKey('/operator/pricing/templates', { scope: 'pricing-settings' })
-const stationOptions = computed(() => getFallbackStationOptions().filter((item) => Number(item.status) === 0 || item.is_local_draft))
+const stationOptions = computed(() => stationRows.value.filter((item) => Number(item.status) === 0))
 const activeTemplate = computed(() => templates.value.find((item) => String(item.id) === String(activeTemplateId.value)) || null)
 
 const stats = computed(() => [
@@ -78,7 +73,7 @@ const getBlockColor = (type) => {
 }
 
 const applyTemplates = (items = [], fromCache = false) => {
-  templates.value = mergePricingTemplates(items)
+  templates.value = Array.isArray(items) ? items : []
   if (!activeTemplateId.value && templates.value.length) {
     activeTemplateId.value = templates.value[0].id
   }
@@ -99,17 +94,30 @@ const loadData = async ({ background = false } = {}) => {
   loading.value = !cached || !background
   try {
     const res = await fetchOperatorPricingTemplates()
-    const items = Array.isArray(res?.data?.data) ? res.data.data : getLocalPricingTemplates()
+    const items = Array.isArray(res?.data?.data) ? res.data.data : []
     applyTemplates(items)
     setRequestCache(cacheKey, items)
     cacheLabel.value = `最近刷新 ${formatCacheUpdatedAt(Date.now())}`
   } catch (error) {
     if (!templates.value.length) {
-      applyTemplates(getLocalPricingTemplates())
-      cacheLabel.value = '当前内容可用'
+      applyTemplates([])
+      cacheLabel.value = '暂无可用模板'
     }
   } finally {
     loading.value = false
+  }
+}
+
+const loadStationOptions = async () => {
+  try {
+    const { data } = await fetchOperatorStationOptions()
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '电站选项加载失败')
+    }
+    stationRows.value = Array.isArray(data?.data) ? data.data : []
+  } catch (error) {
+    stationRows.value = []
+    ElMessage.error(error?.message || '电站选项加载失败')
   }
 }
 
@@ -147,18 +155,34 @@ const handleSelectedStations = (rows) => {
   selectedStations.value = rows
 }
 
-const submitStationApply = () => {
+const submitStationApply = async () => {
   if (!activeTemplate.value || !selectedStations.value.length) {
     ElMessage.warning('请至少选择一个电站')
     return
   }
-  applyLocalTemplateToStations(activeTemplate.value.id, selectedStations.value.map((item) => item.id))
-  dialogVisible.value = false
-  ElMessage.success(`已将模板应用到 ${selectedStations.value.length} 个电站`)
+  try {
+    for (const station of selectedStations.value) {
+      const { data } = await bindStationTemplate(station.id, activeTemplate.value.id)
+      if (data?.code !== 200) {
+        throw new Error(data?.message || '模板应用失败')
+      }
+    }
+    dialogVisible.value = false
+    await loadStationOptions()
+    ElMessage.success(`已将模板应用到 ${selectedStations.value.length} 个电站`)
+  } catch (error) {
+    ElMessage.error(error?.message || '模板应用失败')
+  }
 }
 
-onMounted(loadData)
-onActivated(() => loadData({ background: true }))
+onMounted(async () => {
+  await loadData()
+  await loadStationOptions()
+})
+onActivated(() => {
+  loadData({ background: true })
+  loadStationOptions()
+})
 </script>
 
 <template>

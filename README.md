@@ -214,3 +214,48 @@ npm run dev
 - T+1 清分不做真实银行打款，仅生成运营商清分记录与挂起原因。
 - 发票处理不接真实税控或邮件平台，邮件通知默认走日志模拟。
 - 管理员 / 运营商身份通过前端角色上下文与演示数据切换，不接真实登录鉴权。
+
+---
+
+## 核心业务联调说明（答辩 MVP 修正版）
+
+### 推荐执行顺序
+
+```bash
+python scripts/patch_demo_schema.py
+python scripts/init_demo_data.py
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
+cd frontend
+npm run dev
+```
+
+`patch_demo_schema.py` 会在不清空业务数据、不删除表的前提下检查并补齐演示主链所需字段，兼容 MySQL 5.6。后续直接执行 `python scripts/init_demo_data.py` 也会自动先执行同等结构检查。
+
+### 演示链路
+
+1. 运营商进入“电站管理”，提交一个新电站申请。
+2. 管理员进入“电站审核”，审核通过后电站写入数据库为 `status=0`、`visibility=public`。
+3. 运营商刷新电站列表，给已审核电站新增电桩并绑定电价模板。
+4. 进入“实时订单”，点击“演示创建订单”，选择空闲电桩创建订单。
+5. 点击“结束订单”，订单进入历史订单，电桩恢复空闲，钱包消费流水写入数据库。
+6. 点击“标记异常”，订单进入异常订单，电桩变为故障。
+7. 管理员在“清分中心”选择订单结束日期执行清分，生成运营商清分记录并更新订单 `settle_status=1`。
+8. 运营商在“收益对账”查看同一条清分记录。
+9. 在“发票管理”申请发票，确认开具后状态写入数据库为已开票并刷新列表。
+
+### Schema 补丁覆盖范围
+
+- `trade_orders`: `pay_status`、`settle_status`、`charge_duration`
+- `trade_wallet_transactions`: `id`、`user_id`、`transaction_type`、`amount`、`balance_after`、`remark`、`related_order_id`、`created_at`
+- `trade_invoices`: `user_id`、`operator_id`、`order_id`、`invoice_title`、`amount`、`email`、`status`、`file_url`、`uploaded_at`、`remark`
+- `trade_operator_settlements`: `settle_date`、`operator_id`、`order_count`、`total_amount`、`platform_rate`、`platform_fee`、`settle_amount`、`status`、`hold_reason`
+
+### 字段验证
+
+```sql
+SHOW COLUMNS FROM trade_orders LIKE 'pay_status';
+SHOW COLUMNS FROM trade_orders LIKE 'settle_status';
+SHOW COLUMNS FROM trade_orders LIKE 'charge_duration';
+```
+
+如果清分提示数据库连接失败，请确认 MySQL 已启动，并检查 `.env` 中 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASSWORD`、`MYSQL_DB` 配置。

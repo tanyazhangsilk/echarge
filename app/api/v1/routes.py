@@ -7,8 +7,9 @@ import random
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, noload
 from sqlalchemy import func, or_
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from app.db.database import get_db
 from app.models.models import (
     Charger,
@@ -55,6 +56,7 @@ from app.services.station_service import (
     get_operator_station_page,
     serialize_charger,
     serialize_station,
+    serialize_station_row,
     station_status_text,
     visibility_text,
 )
@@ -64,6 +66,32 @@ from app.services.wallet_service import get_wallet_summary, get_wallet_transacti
 
 api_router = APIRouter()
 logger = logging.getLogger(__name__)
+
+DB_CONNECTION_ERROR_MESSAGE = (
+    "数据库连接失败，请确认 MySQL 已启动，并检查 .env 中 "
+    "MYSQL_HOST、MYSQL_PORT、MYSQL_USER、MYSQL_PASSWORD、MYSQL_DB 配置。"
+)
+DB_SCHEMA_ERROR_MESSAGE = "数据库表结构未同步，请先执行 python scripts/patch_demo_schema.py 后再重试。"
+
+
+def friendly_db_error_message(exc: Exception) -> str:
+    raw = str(exc)
+    lowered = raw.lower()
+    if isinstance(exc, (OperationalError, ProgrammingError)) and (
+        "unknown column" in lowered
+        or "doesn't exist" in lowered
+        or "unknown table" in lowered
+        or "no such column" in lowered
+    ):
+        return DB_SCHEMA_ERROR_MESSAGE
+    if isinstance(exc, OperationalError) and (
+        "can't connect" in lowered
+        or "connection refused" in lowered
+        or "lost connection" in lowered
+        or "access denied" in lowered
+    ):
+        return DB_CONNECTION_ERROR_MESSAGE
+    return f"数据库操作失败：{raw}"
 
 operator_audit_store: dict[int, dict[str, Any]] = {}
 marketing_audit_store: dict[int, dict[str, Any]] = {}
@@ -252,7 +280,7 @@ def _parse_operator_id(raw: Any) -> int | None:
 
 
 def get_current_operator(db: Session) -> Operator | None:
-    return db.query(Operator).order_by(Operator.id.asc()).first()
+    return db.query(Operator).options(noload("*")).order_by(Operator.id.asc()).first()
 
 
 def get_role_context(
@@ -291,7 +319,7 @@ def scoped_operator_id(context: RoleContext) -> int | None:
 
 def get_operator_by_context(db: Session, context: RoleContext) -> Operator | None:
     if context.operator_id is not None:
-        operator = db.query(Operator).filter(Operator.id == context.operator_id).first()
+        operator = db.query(Operator).options(noload("*")).filter(Operator.id == context.operator_id).first()
         if operator:
             return operator
     return get_current_operator(db)
@@ -329,7 +357,7 @@ def get_operator_basic_info(db: Session, operator_id: int) -> dict[str, Any] | N
 
 
 def get_or_create_demo_user(db: Session) -> User:
-    user = db.query(User).order_by(User.id.asc()).first()
+    user = db.query(User).options(noload("*")).order_by(User.id.asc()).first()
     if user:
         return user
 
@@ -368,7 +396,7 @@ def get_station_for_operator(
 ) -> Station | None:
     query = (
         db.query(Station)
-        .options(joinedload(Station.operator), joinedload(Station.price_template))
+        .options(joinedload(Station.price_template), noload(Station.operator))
         .filter(Station.id == station_id, Station.operator_id == operator_id, Station.is_deleted.is_(False))
     )
     if with_chargers:
@@ -483,6 +511,26 @@ def serialize_operator_settlement(record: OperatorSettlementRecord) -> dict:
     }
 
 
+def serialize_operator_settlement_row(row: Any) -> dict:
+    return {
+        "id": row.id,
+        "settle_date": str(row.settle_date),
+        "operator_id": row.operator_id,
+        "operator_name": row.operator_name or "",
+        "order_count": int(row.order_count or 0),
+        "total_amount": float(row.total_amount or 0),
+        "platform_rate": float(row.platform_rate or 0),
+        "platform_fee": float(row.platform_fee or 0),
+        "settle_amount": float(row.settle_amount or 0),
+        "status": row.status,
+        "status_text": SETTLEMENT_STATUS_TEXT.get(row.status, "未知"),
+        "can_payout": row.status == 0,
+        "hold_reason": row.hold_reason,
+        "created_at": row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else "",
+        "updated_at": row.updated_at.strftime("%Y-%m-%d %H:%M:%S") if row.updated_at else "",
+    }
+
+
 def serialize_invoice_record(invoice: Invoice, can_process: bool) -> dict:
     invoice_no = f"INV{invoice.created_at.strftime('%Y%m%d')}{str(invoice.id).zfill(4)}"
     return {
@@ -506,6 +554,111 @@ def serialize_invoice_record(invoice: Invoice, can_process: bool) -> dict:
         "updated_at": invoice.updated_at.strftime("%Y-%m-%d %H:%M:%S") if invoice.updated_at else "",
         "can_process": can_process,
     }
+
+
+def serialize_invoice_row(row: Any, *, can_process: bool) -> dict:
+    invoice_no = f"INV{row.created_at.strftime('%Y%m%d')}{str(row.id).zfill(4)}"
+    return {
+        "id": row.id,
+        "invoice_no": invoice_no,
+        "user_id": row.user_id,
+        "user_phone": row.user_phone or "",
+        "operator_id": row.operator_id,
+        "operator_name": row.operator_name or "",
+        "order_id": row.order_id,
+        "order_no": row.order_no,
+        "invoice_title": row.invoice_title,
+        "amount": float(row.amount or 0),
+        "email": row.email,
+        "status": row.status,
+        "status_text": INVOICE_STATUS_TEXT.get(row.status, "未知状态"),
+        "file_url": row.file_url,
+        "remark": row.remark,
+        "created_at": row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else "",
+        "uploaded_at": row.uploaded_at.strftime("%Y-%m-%d %H:%M:%S") if row.uploaded_at else None,
+        "updated_at": row.updated_at.strftime("%Y-%m-%d %H:%M:%S") if row.updated_at else "",
+        "can_process": can_process,
+    }
+
+
+def get_station_snapshot_data(db: Session, station_id: int) -> dict[str, Any] | None:
+    row = (
+        db.query(
+            Station.id.label("id"),
+            Station.operator_id.label("operator_id"),
+            Station.template_id.label("template_id"),
+            Station.name.label("station_name"),
+            Station.province.label("province"),
+            Station.city.label("city"),
+            Station.district.label("district"),
+            Station.address.label("address"),
+            Station.longitude.label("longitude"),
+            Station.latitude.label("latitude"),
+            Station.contact_name.label("contact_name"),
+            Station.contact_phone.label("contact_phone"),
+            Station.operation_hours.label("operation_hours"),
+            Station.parking_fee_desc.label("parking_fee_desc"),
+            Station.station_remark.label("station_remark"),
+            Station.planned_charger_count.label("planned_charger_count"),
+            Station.total_power_kw.label("total_power_kw"),
+            Station.cover_image.label("cover_image"),
+            Station.site_photos_json.label("site_photos_json"),
+            Station.qualification_remark.label("qualification_remark"),
+            Station.audit_remark.label("audit_remark"),
+            Station.status.label("status"),
+            Station.visibility.label("visibility"),
+            Station.created_at.label("created_at"),
+            Station.updated_at.label("updated_at"),
+            Operator.name.label("operator_name"),
+            PriceTemplate.name.label("price_template_name"),
+        )
+        .select_from(Station)
+        .join(Operator, Station.operator_id == Operator.id)
+        .outerjoin(PriceTemplate, Station.template_id == PriceTemplate.id)
+        .filter(Station.id == station_id, Station.is_deleted.is_(False))
+        .first()
+    )
+    if not row:
+        return None
+    charger_count = (
+        db.query(func.count(Charger.id))
+        .filter(Charger.station_id == station_id, Charger.is_deleted.is_(False))
+        .scalar()
+        or 0
+    )
+    row_dict = row._asdict() if hasattr(row, "_asdict") else dict(row)
+    row_dict["charger_count"] = int(charger_count)
+    return serialize_station_row(type("StationRow", (), row_dict)())
+
+
+def get_invoice_snapshot_data(db: Session, invoice_id: int, *, can_process: bool) -> dict[str, Any] | None:
+    row = (
+        db.query(
+            Invoice.id.label("id"),
+            Invoice.user_id.label("user_id"),
+            Invoice.operator_id.label("operator_id"),
+            Invoice.order_id.label("order_id"),
+            Invoice.invoice_title.label("invoice_title"),
+            Invoice.amount.label("amount"),
+            Invoice.email.label("email"),
+            Invoice.status.label("status"),
+            Invoice.file_url.label("file_url"),
+            Invoice.remark.label("remark"),
+            Invoice.created_at.label("created_at"),
+            Invoice.uploaded_at.label("uploaded_at"),
+            Invoice.updated_at.label("updated_at"),
+            User.phone.label("user_phone"),
+            Operator.name.label("operator_name"),
+            Order.order_no.label("order_no"),
+        )
+        .select_from(Invoice)
+        .outerjoin(User, Invoice.user_id == User.id)
+        .outerjoin(Operator, Invoice.operator_id == Operator.id)
+        .outerjoin(Order, Invoice.order_id == Order.id)
+        .filter(Invoice.id == invoice_id)
+        .first()
+    )
+    return serialize_invoice_row(row, can_process=can_process) if row else None
 
 
 def seed_runtime_data(db: Session) -> None:
@@ -717,7 +870,7 @@ async def manual_settle(payload: ManualSettleRequest, db: Session = Depends(get_
         }
     except Exception as e:
         logger.exception("manual_settle_failed", extra={"date": str(payload.date)})
-        return {"code": 1, "processed": 0, "message": str(e)}
+        return {"code": 500, "processed": 0, "message": friendly_db_error_message(e), "data": None}
 
 @api_router.get("/finance/settlements", tags=["finance"])
 async def get_settlements(
@@ -726,8 +879,23 @@ async def get_settlements(
 ):
     operator_id = resolve_operator_id(db, context) if context.role == "operator" else None
     query = (
-        db.query(OperatorSettlementRecord)
-        .options(joinedload(OperatorSettlementRecord.operator))
+        db.query(
+            OperatorSettlementRecord.id.label("id"),
+            OperatorSettlementRecord.settle_date.label("settle_date"),
+            OperatorSettlementRecord.operator_id.label("operator_id"),
+            OperatorSettlementRecord.order_count.label("order_count"),
+            OperatorSettlementRecord.total_amount.label("total_amount"),
+            OperatorSettlementRecord.platform_rate.label("platform_rate"),
+            OperatorSettlementRecord.platform_fee.label("platform_fee"),
+            OperatorSettlementRecord.settle_amount.label("settle_amount"),
+            OperatorSettlementRecord.status.label("status"),
+            OperatorSettlementRecord.hold_reason.label("hold_reason"),
+            OperatorSettlementRecord.created_at.label("created_at"),
+            OperatorSettlementRecord.updated_at.label("updated_at"),
+            Operator.name.label("operator_name"),
+        )
+        .select_from(OperatorSettlementRecord)
+        .outerjoin(Operator, OperatorSettlementRecord.operator_id == Operator.id)
         .order_by(OperatorSettlementRecord.settle_date.desc(), OperatorSettlementRecord.operator_id.asc())
     )
     if operator_id is not None:
@@ -735,7 +903,7 @@ async def get_settlements(
 
     records = query.all()
     if records:
-        data = [serialize_operator_settlement(r) for r in records]
+        data = [serialize_operator_settlement_row(r) for r in records]
         return {
             "code": 200,
             "data": data,
@@ -756,7 +924,7 @@ async def get_settlements(
             "platform_fee": float(r.platform_fee),
             "settle_amount": float(r.settle_amount),
             "status": r.status,
-            "status_text": SETTLEMENT_STATUS_TEXT.get(r.status, "鏈煡"),
+            "status_text": SETTLEMENT_STATUS_TEXT.get(r.status, "未知"),
             "operator_id": None,
             "operator_name": "全网汇总",
             "platform_rate": None,
@@ -793,7 +961,7 @@ async def trigger_settle(db: Session = Depends(get_db)):
         }
     except Exception as e:
         logger.exception("finance_settle_failed", extra={"date": str(target)})
-        return {"code": 500, "message": f"娓呭垎澶辫触: {str(e)}", "processed": 0}
+        return {"code": 500, "message": friendly_db_error_message(e), "processed": 0, "data": None}
 
 
 @api_router.get("/orders/all", tags=["orders"])
@@ -1095,15 +1263,46 @@ async def get_operator_station_chargers(
     operator_id = operator.id
 
     station = (
-        db.query(Station)
-        .options(joinedload(Station.chargers).joinedload(Charger.station))
+        db.query(Station.id.label("id"), Station.name.label("station_name"))
         .filter(Station.id == station_id, Station.operator_id == operator_id, Station.is_deleted.is_(False))
         .first()
     )
     if not station:
         return {"code": 404, "message": "电站不存在或无权限访问"}
 
-    return {"code": 200, "data": [serialize_charger(item) for item in station.chargers]}
+    chargers = (
+        db.query(
+            Charger.id.label("id"),
+            Charger.sn_code.label("sn_code"),
+            Charger.name.label("charger_name"),
+            Charger.type.label("type"),
+            Charger.power_kw.label("power_kw"),
+            Charger.status.label("status"),
+            Charger.updated_at.label("updated_at"),
+        )
+        .filter(Charger.station_id == station_id, Charger.is_deleted.is_(False))
+        .order_by(Charger.created_at.asc(), Charger.id.asc())
+        .all()
+    )
+
+    return {
+        "code": 200,
+        "data": [
+            {
+                "id": row.id,
+                "sn_code": row.sn_code,
+                "charger_name": row.charger_name or f"{station.station_name[:10]}-{index:02d}号桩",
+                "type": row.type,
+                "power_kw": float(row.power_kw or 0),
+                "status": row.status,
+                "status_text": charger_status_text(row.status),
+                "station_id": station.id,
+                "station_name": station.station_name,
+                "updated_at": row.updated_at.strftime("%Y-%m-%d %H:%M:%S") if row.updated_at else "",
+            }
+            for index, row in enumerate(chargers, start=1)
+        ],
+    }
 
 
 @api_router.post("/operator/stations/{station_id}/chargers", tags=["operator"])
@@ -1265,7 +1464,7 @@ async def bind_operator_station_template(
 
     station = (
         db.query(Station)
-        .options(joinedload(Station.price_template), joinedload(Station.operator), joinedload(Station.chargers))
+        .options(noload("*"))
         .filter(Station.id == station_id, Station.operator_id == operator_id, Station.is_deleted.is_(False))
         .first()
     )
@@ -1274,6 +1473,7 @@ async def bind_operator_station_template(
 
     template = (
         db.query(PriceTemplate)
+        .options(noload("*"))
         .filter(
             PriceTemplate.id == payload.template_id,
             PriceTemplate.operator_id == operator_id,
@@ -1287,10 +1487,18 @@ async def bind_operator_station_template(
         return {"code": 400, "message": "电站审核通过后才允许绑定模板"}
 
     station.template_id = template.id
-    station.price_template = template
     db.commit()
-    db.refresh(station)
-    return {"code": 200, "message": "模板绑定成功", "data": serialize_station(station)}
+    return {
+        "code": 200,
+        "message": "模板绑定成功",
+        "data": {
+            "id": station.id,
+            "price_template_id": template.id,
+            "price_template_name": template.name,
+            "status": station.status,
+            "visibility": station.visibility,
+        },
+    }
 
 
 @api_router.get("/operator/pricing/templates", tags=["operator"])
@@ -1302,6 +1510,7 @@ async def get_operator_pricing_templates(
 
     templates = (
         db.query(PriceTemplate)
+        .options(noload("*"))
         .filter(PriceTemplate.operator_id == operator_id, PriceTemplate.is_deleted.is_(False))
         .order_by(PriceTemplate.updated_at.desc(), PriceTemplate.id.desc())
         .all()
@@ -1325,16 +1534,54 @@ async def get_operator_order_start_options(
 
     ensure_operator_demo_assets(db, operator)
     demo_user = get_or_create_demo_user(db)
-    stations = (
-        db.query(Station)
-        .options(joinedload(Station.operator), joinedload(Station.price_template), joinedload(Station.chargers).joinedload(Charger.station))
-        .filter(Station.operator_id == operator.id, Station.is_deleted.is_(False))
-        .order_by(Station.updated_at.desc(), Station.id.desc())
-        .all()
+    stations = get_operator_station_page(
+        db,
+        operator_id=operator.id,
+        page=1,
+        page_size=100,
     )
-    selected_station = next((item for item in stations if station_id and item.id == station_id), None)
-    if selected_station is None and stations:
-        selected_station = stations[0]
+    station_items = stations["items"]
+    selected_station = next(
+        (item for item in station_items if station_id and item["id"] == station_id and item["status"] == 0),
+        None,
+    )
+    if selected_station is None and station_items:
+        selected_station = next(
+            (
+                item
+                for item in station_items
+                if item["status"] == 0 and int(item.get("charger_count") or 0) > 0
+            ),
+            next((item for item in station_items if item["status"] == 0), station_items[0]),
+        )
+
+    selected_station_id = selected_station["id"] if selected_station else None
+    charger_rows = []
+    if selected_station_id is not None and selected_station["status"] == 0:
+        charger_rows = (
+            db.query(
+                Charger.id.label("id"),
+                Charger.sn_code.label("sn_code"),
+                Charger.name.label("charger_name"),
+                Charger.type.label("type"),
+                Charger.power_kw.label("power_kw"),
+                Charger.status.label("status"),
+                Charger.updated_at.label("updated_at"),
+                Station.id.label("station_id"),
+                Station.name.label("station_name"),
+            )
+            .join(Station, Charger.station_id == Station.id)
+            .filter(
+                Station.operator_id == operator.id,
+                Station.id == selected_station_id,
+                Station.status == 0,
+                Station.is_deleted.is_(False),
+                Charger.is_deleted.is_(False),
+                Charger.status == 0,
+            )
+            .order_by(Charger.created_at.asc(), Charger.id.asc())
+            .all()
+        )
 
     return {
         "code": 200,
@@ -1348,10 +1595,24 @@ async def get_operator_order_start_options(
                     "is_default": True,
                 }
             ],
-            "stations": [serialize_station(station) for station in stations],
-            "chargers": [serialize_charger(charger) for charger in (selected_station.chargers if selected_station else [])],
+            "stations": station_items,
+            "chargers": [
+                {
+                    "id": row.id,
+                    "sn_code": row.sn_code,
+                    "charger_name": row.charger_name or f"{row.station_name[:10]}-{index:02d}号桩",
+                    "type": row.type,
+                    "power_kw": float(row.power_kw or 0),
+                    "status": row.status,
+                    "status_text": charger_status_text(row.status),
+                    "station_id": row.station_id,
+                    "station_name": row.station_name,
+                    "updated_at": row.updated_at.strftime("%Y-%m-%d %H:%M:%S") if row.updated_at else "",
+                }
+                for index, row in enumerate(charger_rows, start=1)
+            ],
             "default_user_id": demo_user.id,
-            "default_station_id": selected_station.id if selected_station else None,
+            "default_station_id": selected_station_id,
         },
     }
 
@@ -1372,7 +1633,7 @@ async def operator_demo_start_order(
     ensure_operator_demo_assets(db, operator)
     base_station_query = (
         db.query(Station)
-        .options(joinedload(Station.price_template), joinedload(Station.chargers).joinedload(Charger.station))
+        .options(joinedload(Station.price_template), noload(Station.operator), noload(Station.chargers))
         .filter(Station.operator_id == operator.id, Station.is_deleted.is_(False))
     )
     if payload.station_id:
@@ -1383,28 +1644,55 @@ async def operator_demo_start_order(
         return {"code": 400, "message": "当前运营商暂无可用电站"}
     if station.status != 0:
         return {"code": 400, "message": "请选择已审核通过的电站发起充电"}
-    active_charger_ids = {
-        item[0]
-        for item in db.query(Order.charger_id)
-        .filter(Order.operator_id == operator.id, Order.status == 0)
-        .all()
-    }
+
     if payload.charger_id:
-        charger = next((item for item in station.chargers if item.id == payload.charger_id), None)
-    else:
-        charger = next(
-            (item for item in station.chargers if item.id not in active_charger_ids and item.status not in {2, 3}),
-            None,
+        charger = (
+            db.query(Charger)
+            .options(noload("*"))
+            .filter(
+                Charger.id == payload.charger_id,
+                Charger.station_id == station.id,
+                Charger.is_deleted.is_(False),
+            )
+            .first()
         )
-    if not charger:
-        charger = next((item for item in station.chargers if item.status not in {2, 3}), None)
-    if not charger:
-        return {"code": 400, "message": "当前电站暂无可用充电桩"}
-    if charger.status in {2, 3}:
-        return {"code": 400, "message": "当前电桩不可用，请选择其他电桩"}
+        if not charger:
+            return {"code": 404, "message": "电桩不存在或不属于当前电站"}
+        if charger.status != 0:
+            return {"code": 400, "message": "当前电桩不是空闲状态，请选择其他电桩"}
+        active_order_exists = (
+            db.query(Order.id)
+            .filter(Order.charger_id == charger.id, Order.status == 0)
+            .first()
+        )
+        if active_order_exists:
+            return {"code": 400, "message": "当前电桩已有进行中的订单，请选择其他电桩"}
+    else:
+        charger_candidates = (
+            db.query(Charger)
+            .options(noload("*"))
+            .filter(
+                Charger.station_id == station.id,
+                Charger.is_deleted.is_(False),
+                Charger.status == 0,
+            )
+            .order_by(Charger.created_at.asc(), Charger.id.asc())
+            .all()
+        )
+        if not charger_candidates:
+            return {"code": 400, "message": "当前电站暂无可用空闲电桩"}
+        active_charger_ids = {
+            item[0]
+            for item in db.query(Order.charger_id)
+            .filter(Order.status == 0, Order.charger_id.in_([item.id for item in charger_candidates]))
+            .all()
+        }
+        charger = next((item for item in charger_candidates if item.id not in active_charger_ids), None)
+        if charger is None:
+            return {"code": 400, "message": "当前电站暂无可用空闲电桩"}
 
     user = (
-        db.query(User).filter(User.id == payload.user_id).first()
+        db.query(User).options(noload("*")).filter(User.id == payload.user_id).first()
         if payload.user_id
         else get_or_create_demo_user(db)
     )
@@ -1426,16 +1714,23 @@ async def operator_demo_start_order(
         abnormal_reason=None,
         settle_status=0,
     )
-    order.user = user
-    order.operator = operator
-    order.station = station
     order.charger = charger
+    order.station = station
     db.add(order)
     recalculate_order_amounts(order, minimum_charge_kwh=Decimal(str(random.randint(8, 36))))
     charger.status = 1
     db.commit()
-    db.refresh(order)
-    return {"code": 200, "message": "已创建实时订单", "data": serialize_order(order)}
+    return {
+        "code": 200,
+        "message": "已创建实时订单",
+        "data": {
+            "id": order.id,
+            "order_no": order.order_no,
+            "status": order.status,
+            "station_id": order.station_id,
+            "charger_id": order.charger_id,
+        },
+    }
 
 
 @api_router.get("/operator/orders/history", tags=["orders", "operator"])
@@ -1553,7 +1848,17 @@ async def operator_finish_order(
     order = finish_order(db, order_id, operator_id=operator_id)
     if not order:
         return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
-    return {"code": 200, "message": "订单已完成并转入历史订单", "data": serialize_order(order)}
+    return {
+        "code": 200,
+        "message": "订单已完成并转入历史订单",
+        "data": {
+            "id": order.id,
+            "order_no": order.order_no,
+            "status": order.status,
+            "pay_status": order.pay_status,
+            "settle_status": order.settle_status,
+        },
+    }
 
 
 @api_router.post("/operator/orders/{order_id}/force-stop", tags=["orders", "operator"])
@@ -1566,7 +1871,15 @@ async def operator_force_stop_order(
     order = force_stop_order(db, order_id, operator_id=operator_id)
     if not order:
         return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
-    return {"code": 200, "message": "订单已强制停止", "data": serialize_order(order)}
+    return {
+        "code": 200,
+        "message": "订单已强制停止",
+        "data": {
+            "id": order.id,
+            "order_no": order.order_no,
+            "status": order.status,
+        },
+    }
 
 
 @api_router.post("/operator/orders/{order_id}/mark-abnormal", tags=["orders", "operator"])
@@ -1580,7 +1893,16 @@ async def operator_mark_order_abnormal(
     order = mark_order_abnormal(db, order_id, payload.abnormal_reason, operator_id=operator_id)
     if not order:
         return {"code": 400, "message": "订单不存在、无权限或当前非充电中状态"}
-    return {"code": 200, "message": "订单已标记异常并转入异常订单", "data": serialize_order(order)}
+    return {
+        "code": 200,
+        "message": "订单已标记异常并转入异常订单",
+        "data": {
+            "id": order.id,
+            "order_no": order.order_no,
+            "status": order.status,
+            "abnormal_reason": order.abnormal_reason,
+        },
+    }
 
 
 @api_router.get("/finance/cards", tags=["finance"])
@@ -1718,8 +2040,28 @@ async def get_invoices(
 ):
     operator_id = resolve_operator_id(db, context) if context.role == "operator" else None
     query = (
-        db.query(Invoice)
-        .options(joinedload(Invoice.user), joinedload(Invoice.operator), joinedload(Invoice.related_order))
+        db.query(
+            Invoice.id.label("id"),
+            Invoice.user_id.label("user_id"),
+            Invoice.operator_id.label("operator_id"),
+            Invoice.order_id.label("order_id"),
+            Invoice.invoice_title.label("invoice_title"),
+            Invoice.amount.label("amount"),
+            Invoice.email.label("email"),
+            Invoice.status.label("status"),
+            Invoice.file_url.label("file_url"),
+            Invoice.remark.label("remark"),
+            Invoice.created_at.label("created_at"),
+            Invoice.uploaded_at.label("uploaded_at"),
+            Invoice.updated_at.label("updated_at"),
+            User.phone.label("user_phone"),
+            Operator.name.label("operator_name"),
+            Order.order_no.label("order_no"),
+        )
+        .select_from(Invoice)
+        .outerjoin(User, Invoice.user_id == User.id)
+        .outerjoin(Operator, Invoice.operator_id == Operator.id)
+        .outerjoin(Order, Invoice.order_id == Order.id)
         .order_by(Invoice.created_at.desc())
     )
 
@@ -1731,17 +2073,11 @@ async def get_invoices(
 
     if keyword and keyword.strip():
         kw = f"%{keyword.strip()}%"
-        query = query.join(User, Invoice.user_id == User.id).filter(
-            or_(
-                User.phone.like(kw),
-                Invoice.email.like(kw),
-                Invoice.invoice_title.like(kw),
-            )
-        )
+        query = query.filter(or_(User.phone.like(kw), Invoice.email.like(kw), Invoice.invoice_title.like(kw)))
 
     invoices = query.all()
     data = [
-        serialize_invoice_record(
+        serialize_invoice_row(
             inv,
             can_process=(context.role == "operator" and inv.operator_id == operator_id and inv.status == 0),
         )
@@ -1763,16 +2099,23 @@ async def get_invoices(
 
 @api_router.post("/finance/invoices/apply", tags=["finance"])
 async def apply_invoice(payload: InvoiceApplySchema, db: Session = Depends(get_db)):
-    operator = db.query(Operator).filter(Operator.id == payload.operator_id).first()
+    operator = db.query(Operator).options(noload("*")).filter(Operator.id == payload.operator_id).first()
     if not operator:
         return {"code": 404, "message": "运营商不存在"}
 
     if payload.order_id:
-        order = db.query(Order).filter(Order.id == payload.order_id).first()
+        order = (
+            db.query(Order)
+            .options(noload("*"))
+            .filter(Order.id == payload.order_id)
+            .first()
+        )
         if not order:
             return {"code": 404, "message": "订单不存在"}
         if order.operator_id != payload.operator_id:
             return {"code": 400, "message": "订单与运营商不匹配"}
+        if order.status != 1 or order.pay_status != 1:
+            return {"code": 400, "message": "仅已完成且已支付的订单可申请发票"}
 
     invoice = Invoice(
         user_id=payload.user_id,
@@ -1836,7 +2179,7 @@ async def process_invoice(
 
     invoice = (
         db.query(Invoice)
-        .options(joinedload(Invoice.operator), joinedload(Invoice.user))
+        .options(noload("*"))
         .filter(Invoice.id == invoice_id, Invoice.operator_id == context.operator_id)
         .first()
     )
@@ -1862,30 +2205,54 @@ async def process_invoice(
         notify_status = "已驳回"
 
     db.commit()
-    db.refresh(invoice)
 
-    send_invoice_email(
-        to_email=invoice.email,
-        invoice_no=f"INV{invoice.created_at.strftime('%Y%m%d')}{str(invoice.id).zfill(4)}",
-        status=notify_status,
-        operator_name=invoice.operator.name if invoice.operator else f"运营商#{invoice.operator_id}",
-        amount=float(invoice.amount or 0),
-        file_url=invoice.file_url,
-        remark=invoice.remark,
-    )
+    try:
+        send_invoice_email(
+            to_email=invoice.email,
+            invoice_no=f"INV{invoice.created_at.strftime('%Y%m%d')}{str(invoice.id).zfill(4)}",
+            status=notify_status,
+            operator_name=f"运营商#{invoice.operator_id}",
+            amount=float(invoice.amount or 0),
+            file_url=invoice.file_url,
+            remark=invoice.remark,
+        )
+    except Exception:
+        logger.info("invoice notification skipped", extra={"invoice_id": invoice.id})
 
     return {
         "code": 200,
         "message": f"发票申请处理成功（{notify_status}），已触发邮件通知",
-        "data": serialize_invoice_record(invoice, can_process=False),
+        "data": {
+            "id": invoice.id,
+            "status": invoice.status,
+            "status_text": notify_status,
+            "file_url": invoice.file_url,
+            "remark": invoice.remark,
+            "uploaded_at": invoice.uploaded_at.strftime("%Y-%m-%d %H:%M:%S") if invoice.uploaded_at else None,
+        },
     }
 
 
 @api_router.get("/admin/finance/settlements", tags=["admin"])
 async def admin_get_settlements(db: Session = Depends(get_db)):
     records = (
-        db.query(OperatorSettlementRecord)
-        .options(joinedload(OperatorSettlementRecord.operator))
+        db.query(
+            OperatorSettlementRecord.id.label("id"),
+            OperatorSettlementRecord.settle_date.label("settle_date"),
+            OperatorSettlementRecord.operator_id.label("operator_id"),
+            OperatorSettlementRecord.order_count.label("order_count"),
+            OperatorSettlementRecord.total_amount.label("total_amount"),
+            OperatorSettlementRecord.platform_rate.label("platform_rate"),
+            OperatorSettlementRecord.platform_fee.label("platform_fee"),
+            OperatorSettlementRecord.settle_amount.label("settle_amount"),
+            OperatorSettlementRecord.status.label("status"),
+            OperatorSettlementRecord.hold_reason.label("hold_reason"),
+            OperatorSettlementRecord.created_at.label("created_at"),
+            OperatorSettlementRecord.updated_at.label("updated_at"),
+            Operator.name.label("operator_name"),
+        )
+        .select_from(OperatorSettlementRecord)
+        .outerjoin(Operator, OperatorSettlementRecord.operator_id == Operator.id)
         .order_by(OperatorSettlementRecord.settle_date.desc(), OperatorSettlementRecord.operator_id.asc())
         .all()
     )
@@ -1913,7 +2280,7 @@ async def admin_get_settlements(db: Session = Depends(get_db)):
             "operator_records": [],
         }
 
-    operator_data = [serialize_operator_settlement(r) for r in records]
+    operator_data = [serialize_operator_settlement_row(r) for r in records]
     daily_map: dict[str, dict] = {}
     for item in operator_data:
         day_key = item["settle_date"]
@@ -1992,7 +2359,7 @@ async def admin_trigger_settle(payload: dict, db: Session = Depends(get_db)):
             "data": detail,
         }
     except Exception as e:
-        return {"code": 500, "message": f"清分引擎执行失败: {str(e)}"}
+        return {"code": 500, "message": friendly_db_error_message(e), "data": None}
 
 
 @api_router.get("/admin/audit/stations", tags=["admin"])
@@ -2000,16 +2367,58 @@ async def get_station_audits(
     _context: RoleContext = Depends(require_admin_context),
     db: Session = Depends(get_db),
 ):
+    charger_count_subquery = (
+        db.query(
+            Charger.station_id.label("station_id"),
+            func.count(Charger.id).label("charger_count"),
+        )
+        .filter(Charger.is_deleted.is_(False))
+        .group_by(Charger.station_id)
+        .subquery()
+    )
     stations = (
-        db.query(Station)
-        .options(joinedload(Station.operator), joinedload(Station.price_template), joinedload(Station.chargers))
-        .order_by(Station.created_at.desc())
+        db.query(
+            Station.id.label("id"),
+            Station.operator_id.label("operator_id"),
+            Station.template_id.label("template_id"),
+            Station.name.label("station_name"),
+            Station.province.label("province"),
+            Station.city.label("city"),
+            Station.district.label("district"),
+            Station.address.label("address"),
+            Station.longitude.label("longitude"),
+            Station.latitude.label("latitude"),
+            Station.contact_name.label("contact_name"),
+            Station.contact_phone.label("contact_phone"),
+            Station.operation_hours.label("operation_hours"),
+            Station.parking_fee_desc.label("parking_fee_desc"),
+            Station.station_remark.label("station_remark"),
+            Station.planned_charger_count.label("planned_charger_count"),
+            Station.total_power_kw.label("total_power_kw"),
+            Station.cover_image.label("cover_image"),
+            Station.site_photos_json.label("site_photos_json"),
+            Station.qualification_remark.label("qualification_remark"),
+            Station.audit_remark.label("audit_remark"),
+            Station.status.label("status"),
+            Station.visibility.label("visibility"),
+            Station.created_at.label("created_at"),
+            Station.updated_at.label("updated_at"),
+            func.coalesce(charger_count_subquery.c.charger_count, 0).label("charger_count"),
+            Operator.name.label("operator_name"),
+            PriceTemplate.name.label("price_template_name"),
+        )
+        .select_from(Station)
+        .join(Operator, Station.operator_id == Operator.id)
+        .outerjoin(PriceTemplate, Station.template_id == PriceTemplate.id)
+        .outerjoin(charger_count_subquery, charger_count_subquery.c.station_id == Station.id)
+        .filter(Station.is_deleted.is_(False))
+        .order_by(Station.created_at.desc(), Station.id.desc())
         .all()
     )
 
     return {
         "code": 200,
-        "data": [serialize_station(station) for station in stations],
+        "data": [serialize_station_row(station) for station in stations],
     }
 
 
@@ -2076,13 +2485,13 @@ async def process_station_audit(
     action = (payload.action or "").strip().lower()
     remark = (payload.remark or "").strip()
 
-    station = db.query(Station).filter(Station.id == station_id).first()
+    station = db.query(Station).options(noload("*")).filter(Station.id == station_id).first()
     if not station:
         return {"code": 404, "message": "站点不存在"}
 
     if action == "approve":
         station.status = 0
-        station.visibility = "private"
+        station.visibility = "public"
         station.audit_remark = remark or "审核通过，可继续配置电桩并绑定模板"
     elif action == "reject":
         if not remark:
@@ -2094,16 +2503,15 @@ async def process_station_audit(
         return {"code": 400, "message": "action 仅支持 approve/reject"}
 
     db.commit()
-    db.refresh(station)
     return {
         "code": 200,
-        "message": "站点审核处理成功",
+        "message": "电站审核处理成功",
         "data": {
             "id": station.id,
             "status": station.status,
             "status_text": station_status_text(station.status),
             "visibility": station.visibility,
             "visibility_text": visibility_text(station.visibility),
-            "remark": station.audit_remark or "",
+            "audit_remark": station.audit_remark,
         },
     }

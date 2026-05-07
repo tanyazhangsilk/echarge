@@ -7,8 +7,7 @@ import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
-import { fetchDemoSettlements } from '../../api/demo'
-import { mockSettlementRows } from '../../mock/backoffice'
+import http from '../../api/http'
 import { buildRequestCacheKey, formatCacheUpdatedAt, getRequestCache, setRequestCache } from '../../utils/requestCache'
 
 const CACHE_TTL = 60 * 1000
@@ -97,18 +96,22 @@ const fetchRows = async ({ background = false } = {}) => {
 
   loading.value = !cached || !background
   try {
-    const resp = await fetchDemoSettlements()
+    const resp = await http.get('/finance/settlements')
     const payload = resp?.data || {}
-    const list = Array.isArray(payload.data) && payload.data.length ? payload.data : mockSettlementRows
+    if (payload.code !== 200) {
+      throw new Error(payload.message || '收益对账数据加载失败')
+    }
+    const list = Array.isArray(payload.data) ? payload.data : []
     rows.value = list
     setRequestCache(cacheKey, list)
     cacheLabel.value = `最近刷新 ${formatCacheUpdatedAt(Date.now())}`
     tableReady.value = true
   } catch (error) {
     if (!rows.value.length) {
-      rows.value = mockSettlementRows
-      cacheLabel.value = '当前展示本地演示数据'
+      rows.value = []
+      cacheLabel.value = '暂无可用对账数据'
       tableReady.value = true
+      ElMessage.error(error?.message || '收益对账数据加载失败')
     }
   } finally {
     loading.value = false

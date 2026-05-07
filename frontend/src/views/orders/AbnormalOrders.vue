@@ -12,7 +12,6 @@ import { fetchAdminAbnormalOrders } from '../../api/admin'
 import { fetchOperatorAbnormalOrders } from '../../api/operator'
 import { ROLES } from '../../config/permissions'
 import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
-import { getDemoOrderListPayload } from '../../utils/demoOrderAdapter'
 
 const route = useRoute()
 const router = useRouter()
@@ -100,13 +99,16 @@ const loadOrders = async ({ background = false } = {}) => {
   loading.value = !cached || !background
   try {
     const response = isAdmin.value ? await fetchAdminAbnormalOrders(queryParams.value) : await fetchOperatorAbnormalOrders(queryParams.value)
+    if (response?.data?.code !== 200) {
+      throw new Error(response?.data?.message || '异常订单加载失败')
+    }
     const payload = response.data?.data || {}
     applyPayload(payload, Date.now())
     setRequestCache(listCacheKey.value, payload)
   } catch (error) {
     if (!orders.value.length) {
-      const demoPayload = getDemoOrderListPayload('abnormal')
-      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, Date.now())
+      applyPayload({ items: [], total: 0, page: 1, page_size: pagination.pageSize, summary: {} }, Date.now())
+      ElMessage.error(error?.message || '异常订单加载失败')
     }
   } finally {
     loading.value = false

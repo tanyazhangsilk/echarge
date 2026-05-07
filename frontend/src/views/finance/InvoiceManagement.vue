@@ -8,21 +8,18 @@ import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
-import { applyDemoInvoice, fetchDemoInvoices, processDemoInvoice } from '../../api/demo'
 import http from '../../api/http'
+import { fetchOperatorHistoryOrders } from '../../api/operator'
 import { ROLES } from '../../config/permissions'
-import { mockInvoiceRows } from '../../mock/backoffice'
-import { readLocalListState, writeLocalListState } from '../../utils/localState'
 import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 
-const STORAGE_KEY = 'echarge-finance-invoices'
 const CACHE_TTL = 60 * 1000
 
 const route = useRoute()
 const isAdmin = computed(() => route.meta?.role === ROLES.ADMIN)
 
 const loading = ref(false)
-const rows = ref(readLocalListState(STORAGE_KEY, mockInvoiceRows))
+const rows = ref([])
 const keyword = ref('')
 const activeStatus = ref('all')
 const cacheLabel = ref('')
@@ -52,14 +49,8 @@ const summary = reactive({
   issued_amount: 0,
 })
 
-const cacheKey = buildRequestCacheKey('/demo/invoices', { scope: 'invoice-management' })
+const cacheKey = buildRequestCacheKey('/finance/invoices', { scope: 'invoice-management' })
 const selectedInvoiceOrder = computed(() => invoiceOrderOptions.value.find((item) => Number(item.id) === Number(applyForm.order_id)) || null)
-
-const toNonEmptyRows = (items, fallback = []) => {
-  if (Array.isArray(items) && items.length) return items
-  if (Array.isArray(fallback) && fallback.length) return fallback
-  return [...mockInvoiceRows]
-}
 
 const updateCacheLabel = (timestamp = Date.now()) => {
   cacheLabel.value = formatCacheLabel(timestamp)
@@ -114,11 +105,8 @@ const refreshSummary = () => {
 }
 
 const applyRows = (items = [], { updatedAt = Date.now(), persist = true } = {}) => {
-  const nextRows = toNonEmptyRows(items, rows.value)
+  const nextRows = Array.isArray(items) ? items : []
   rows.value = nextRows
-  if (persist && nextRows.length) {
-    writeLocalListState(STORAGE_KEY, nextRows)
-  }
   refreshSummary()
   currentPage.value = 1
   tableReady.value = true
@@ -133,17 +121,18 @@ const fetchInvoices = async ({ background = false } = {}) => {
 
   loading.value = !cached || !background
   try {
-    const res = await fetchDemoInvoices()
-    const remoteItems = Array.isArray(res?.data?.data) ? res.data.data : []
-    const nextRows = toNonEmptyRows(remoteItems, rows.value)
-    applyRows(nextRows, { updatedAt: Date.now(), persist: nextRows.length > 0 })
-    if (nextRows.length) {
-      setRequestCache(cacheKey, nextRows)
+    const res = await http.get('/finance/invoices')
+    if (res?.data?.code !== 200) {
+      throw new Error(res?.data?.message || '发票数据加载失败')
     }
+    const remoteItems = Array.isArray(res?.data?.data) ? res.data.data : []
+    applyRows(remoteItems, { updatedAt: Date.now(), persist: false })
+    setRequestCache(cacheKey, remoteItems)
   } catch (error) {
-    const localRows = readLocalListState(STORAGE_KEY, mockInvoiceRows)
-    const fallbackRows = toNonEmptyRows(localRows, rows.value)
-    applyRows(fallbackRows, { updatedAt: Date.now(), persist: fallbackRows.length > 0 })
+    if (!rows.value.length) {
+      applyRows([], { updatedAt: Date.now(), persist: false })
+      ElMessage.error(error?.message || '发票数据加载失败')
+    }
   } finally {
     loading.value = false
   }
@@ -151,21 +140,24 @@ const fetchInvoices = async ({ background = false } = {}) => {
 
 const loadInvoiceOrderOptions = async () => {
   if (orderOptionsLoading.value) return
+  if (isAdmin.value) {
+    invoiceOrderOptions.value = []
+    return
+  }
   orderOptionsLoading.value = true
   try {
-    const response = await http.get('/orders/history', {
-      params: {
-        page: 1,
-        page_size: 50,
-      },
-    })
+    const response = await fetchOperatorHistoryOrders({ page: 1, page_size: 50 })
+    if (response?.data?.code !== 200) {
+      throw new Error(response?.data?.message || '订单选项加载失败')
+    }
     const items = Array.isArray(response?.data?.data?.items) ? response.data.data.items : []
-    invoiceOrderOptions.value = items
+    invoiceOrderOptions.value = items.filter((item) => Number(item.status) === 1)
     if (!applyForm.order_id && items.length) {
-      applyForm.order_id = items[0].id
+      applyForm.order_id = invoiceOrderOptions.value[0]?.id || null
     }
   } catch (error) {
     invoiceOrderOptions.value = []
+    ElMessage.error(error?.message || '订单选项加载失败')
   } finally {
     orderOptionsLoading.value = false
   }
@@ -185,17 +177,22 @@ const submitApplyInvoice = async () => {
     return
   }
   try {
-    const response = await applyDemoInvoice({
+    const response = await http.post('/finance/invoices/apply', {
       user_id: selectedInvoiceOrder.value.user_id,
+      operator_id: selectedInvoiceOrder.value.operator_id,
       order_id: selectedInvoiceOrder.value.id,
+      amount: selectedInvoiceOrder.value.total_amount,
       invoice_title: applyForm.invoice_title,
       email: applyForm.email,
     })
+    if (response?.data?.code !== 200) {
+      throw new Error(response?.data?.message || '发票申请提交失败')
+    }
     ElMessage.success(response?.data?.message || '发票申请已提交')
     applyDialogVisible.value = false
     await fetchInvoices()
   } catch (error) {
-    ElMessage.error('发票申请提交失败')
+    ElMessage.error(error?.message || '发票申请提交失败')
   }
 }
 
@@ -226,35 +223,21 @@ const submitProcess = async (action) => {
     return
   }
 
-  let remoteSuccess = false
   try {
-    await processDemoInvoice(currentInvoice.value.id, {
-      action: action === 'approve' ? 'issue' : action,
+    const response = await http.post(`/finance/invoices/${currentInvoice.value.id}/process`, {
+      action,
       file_url: uploadedFile.value,
       remark: processRemark.value,
     })
-    remoteSuccess = true
+    if (response?.data?.code !== 200) {
+      throw new Error(response?.data?.message || '发票处理失败')
+    }
+    processDialogVisible.value = false
+    ElMessage.success(action === 'approve' ? '发票已开具，通知已发送' : '发票申请已驳回，通知已发送')
+    await fetchInvoices()
   } catch (error) {
-    remoteSuccess = false
+    ElMessage.error(error?.message || '发票处理失败')
   }
-
-  rows.value = rows.value.map((item) =>
-    item.id === currentInvoice.value.id
-      ? {
-          ...item,
-          status: action === 'approve' ? 1 : 2,
-          status_text: action === 'approve' ? '已开票' : '已驳回',
-          file_url: uploadedFile.value,
-          remark: processRemark.value || (action === 'approve' ? '已完成开票' : '资料需补充'),
-        }
-      : item,
-  )
-  writeLocalListState(STORAGE_KEY, rows.value)
-  setRequestCache(cacheKey, rows.value)
-  refreshSummary()
-  updateCacheLabel(Date.now())
-  processDialogVisible.value = false
-  ElMessage.success(remoteSuccess ? (action === 'approve' ? '发票已处理为已开票' : '发票申请已驳回') : '发票状态已更新')
 }
 
 watch(activeStatus, () => {
@@ -281,7 +264,7 @@ refreshSummary()
     >
       <template #actions>
         <el-tag v-if="cacheLabel" type="info" effect="plain">{{ cacheLabel }}</el-tag>
-        <el-button type="primary" :icon="Plus" @click="openApplyDialog">演示申请发票</el-button>
+        <el-button v-if="!isAdmin" type="primary" :icon="Plus" @click="openApplyDialog">演示申请发票</el-button>
         <el-button :icon="RefreshRight" :loading="loading" @click="fetchInvoices()">刷新</el-button>
       </template>
     </PageSectionHeader>
@@ -387,6 +370,9 @@ refreshSummary()
               :label="`${item.order_no} / ${item.user_phone} / ¥${Number(item.total_amount || 0).toFixed(2)}`"
               :value="item.id"
             />
+            <template #empty>
+              <div class="text-muted">暂无可申请发票的已完成订单</div>
+            </template>
           </el-select>
         </el-form-item>
         <el-form-item label="发票抬头">

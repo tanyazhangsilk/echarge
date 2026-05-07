@@ -2,11 +2,8 @@ import axios from 'axios'
 import { getCurrentUserContext } from '../config/permissions'
 
 const http = axios.create({
-  // 开发环境：通过 Vite 代理转发到后端，避免浏览器 CORS 限制
-  // - 若设置了 VITE_API_BASE_URL，则直接使用（适合生产环境）
-  // - 否则默认使用相对路径 /api/v1，由 Vite 代理到 http://localhost:8000/api/v1
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
-  timeout: 8000,
+  timeout: 15000,
 })
 
 http.interceptors.request.use((config) => {
@@ -17,7 +14,35 @@ http.interceptors.request.use((config) => {
   return config
 })
 
-http.interceptors.response.use((response) => response, (error) => Promise.reject(error))
+http.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status
+    const backendMessage = error?.response?.data?.message
+    const isTimeout =
+      error?.code === 'ECONNABORTED' || String(error?.message || '').toLowerCase().includes('timeout')
+
+    if (backendMessage) {
+      error.message = backendMessage
+      return Promise.reject(error)
+    }
+
+    if (isTimeout) {
+      error.message = '请求超时，请确认后端服务已启动，且数据库连接与主链接口响应正常'
+      return Promise.reject(error)
+    }
+
+    if (status >= 500) {
+      error.message = '后端服务暂时不可用，请稍后重试'
+      return Promise.reject(error)
+    }
+
+    if (!error?.response) {
+      error.message = '无法连接后端服务，请确认后端已启动'
+    }
+
+    return Promise.reject(error)
+  },
+)
 
 export default http
-

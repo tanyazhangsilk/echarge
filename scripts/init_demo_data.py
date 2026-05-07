@@ -24,8 +24,11 @@ from app.models.models import (
     User,
     WalletTransaction,
 )
+from sqlalchemy.orm import noload
+
 from app.services.order_service import recalculate_order_amounts
 from app.services.wallet_flow_service import create_wallet_consume_record, create_wallet_recharge_record
+from scripts.patch_demo_schema import ensure_demo_schema
 
 
 ADMIN_ACCOUNT = "admin@echarge.com"
@@ -61,7 +64,7 @@ def upsert_user(
     role: str,
     vin_code: str | None = None,
 ) -> User:
-    user = db.query(User).filter(User.phone == phone).first()
+    user = db.query(User).options(noload("*")).filter(User.phone == phone).first()
     if not user:
         user = User(phone=phone, password_hash=password, nickname=nickname, role=role, status=0)
         db.add(user)
@@ -75,7 +78,7 @@ def upsert_user(
 
 
 def upsert_operator(db) -> Operator:
-    operator = db.query(Operator).filter(Operator.name == DEMO_OPERATOR_NAME).first()
+    operator = db.query(Operator).options(noload("*")).filter(Operator.name == DEMO_OPERATOR_NAME).first()
     if not operator:
         operator = Operator(name=DEMO_OPERATOR_NAME, org_type="enterprise")
         db.add(operator)
@@ -88,7 +91,7 @@ def upsert_operator(db) -> Operator:
 
 
 def upsert_bank_card(db, operator: Operator) -> OperatorBankCard:
-    cards = db.query(OperatorBankCard).filter(OperatorBankCard.operator_id == operator.id).all()
+    cards = db.query(OperatorBankCard).options(noload("*")).filter(OperatorBankCard.operator_id == operator.id).all()
     for item in cards:
         item.is_default = False
 
@@ -113,6 +116,7 @@ def upsert_bank_card(db, operator: Operator) -> OperatorBankCard:
 def upsert_price_template(db, operator: Operator, *, name: str, rules: dict) -> PriceTemplate:
     template = (
         db.query(PriceTemplate)
+        .options(noload("*"))
         .filter(PriceTemplate.operator_id == operator.id, PriceTemplate.name == name)
         .first()
     )
@@ -141,6 +145,7 @@ def upsert_station(
 ) -> Station:
     station = (
         db.query(Station)
+        .options(noload("*"))
         .filter(Station.operator_id == operator.id, Station.name == name, Station.is_deleted.is_(False))
         .first()
     )
@@ -182,7 +187,7 @@ def upsert_charger(
     power_kw: str,
     status: int,
 ) -> Charger:
-    charger = db.query(Charger).filter(Charger.sn_code == sn_code).first()
+    charger = db.query(Charger).options(noload("*")).filter(Charger.sn_code == sn_code).first()
     if not charger:
         charger = Charger(sn_code=sn_code, station_id=station.id, type=charger_type)
         db.add(charger)
@@ -213,7 +218,7 @@ def upsert_order(
     abnormal_reason: str | None = None,
     minimum_charge_kwh: Decimal | None = None,
 ) -> Order:
-    order = db.query(Order).filter(Order.order_no == order_no).first()
+    order = db.query(Order).options(noload("*")).filter(Order.order_no == order_no).first()
     if not order:
         order = Order(
             order_no=order_no,
@@ -250,7 +255,7 @@ def upsert_order(
 
 
 def ensure_wallet_transactions(db, demo_user: User, completed_orders: list[Order]) -> None:
-    for item in db.query(WalletTransaction).filter(WalletTransaction.user_id == demo_user.id).all():
+    for item in db.query(WalletTransaction).options(noload("*")).filter(WalletTransaction.user_id == demo_user.id).all():
         db.delete(item)
     db.flush()
 
@@ -262,6 +267,7 @@ def ensure_wallet_transactions(db, demo_user: User, completed_orders: list[Order
 def ensure_invoices(db, demo_user: User, unsettled_order: Order, settled_order: Order) -> None:
     existing = (
         db.query(Invoice)
+        .options(noload("*"))
         .filter(Invoice.user_id == demo_user.id, Invoice.order_id.in_([unsettled_order.id, settled_order.id]))
         .all()
     )
@@ -302,6 +308,7 @@ def ensure_settlement_record(db, operator: Operator, settled_order: Order) -> No
     settle_date = settled_order.end_time.date()
     record = (
         db.query(OperatorSettlementRecord)
+        .options(noload("*"))
         .filter(
             OperatorSettlementRecord.operator_id == operator.id,
             OperatorSettlementRecord.settle_date == settle_date,
@@ -327,6 +334,7 @@ def ensure_settlement_record(db, operator: Operator, settled_order: Order) -> No
 
 
 def main() -> None:
+    ensure_demo_schema()
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
 

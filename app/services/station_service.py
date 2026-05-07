@@ -367,7 +367,10 @@ def get_operator_station_options(db: Session, *, operator_id: int, keyword: str 
             Station.id.label("id"),
             Station.name.label("station_name"),
             Station.status.label("status"),
+            PriceTemplate.name.label("price_template_name"),
         )
+        .select_from(Station)
+        .outerjoin(PriceTemplate, Station.template_id == PriceTemplate.id)
         .filter(Station.operator_id == operator_id, Station.is_deleted.is_(False))
         .order_by(Station.updated_at.desc(), Station.id.desc())
     )
@@ -381,6 +384,7 @@ def get_operator_station_options(db: Session, *, operator_id: int, keyword: str 
             "station_name": station.station_name,
             "status": station.status,
             "status_text": station_status_text(station.status),
+            "price_template_name": station.price_template_name or "未绑定模板",
         }
         for station in query.all()
     ]

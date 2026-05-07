@@ -8,28 +8,22 @@ import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
 import TableSkeletonBlock from '../../components/console/TableSkeletonBlock.vue'
-import { finishDemoOrder, markDemoOrderAbnormal, startDemoOrder } from '../../api/demo'
 import {
+  finishOperatorOrder,
   fetchOperatorOrderStartOptions,
   fetchOperatorRealtimeOrders,
   fetchStationChargers,
+  markOperatorOrderAbnormal,
+  startDemoCharging,
 } from '../../api/operator'
 import {
   buildRequestCacheKey,
+  clearRequestCache,
   formatCacheLabel,
   getRequestCache,
   setRequestCache,
   shouldRefreshRequestCache,
 } from '../../utils/requestCache'
-import {
-  demoStartUsers,
-  finishLocalDemoOrder,
-  getDemoOrderListPayload,
-  markLocalDemoOrderAbnormal,
-  startLocalDemoOrder,
-} from '../../utils/demoOrderAdapter'
-import { mergeChargersWithLocal } from '../../utils/chargerDemoStore'
-import { getFallbackStationOptions } from '../../utils/stationFallbacks'
 
 const router = useRouter()
 const CACHE_TTL = 12 * 1000
@@ -45,8 +39,8 @@ const startDialogVisible = ref(false)
 const startLoading = ref(false)
 const startOptionsLoading = ref(false)
 const startMode = ref('manual_demo')
-const startUsers = ref([...demoStartUsers])
-const startStations = ref(getFallbackStationOptions())
+const startUsers = ref([])
+const startStations = ref([])
 const startChargers = ref([])
 
 const pagination = reactive({ page: 1, pageSize: 10 })
@@ -129,16 +123,16 @@ const loadOrders = async ({ background = false } = {}) => {
   loading.value = !cached || !background
   try {
     const { data } = await fetchOperatorRealtimeOrders(queryParams.value)
-    const payload = data?.data || getDemoOrderListPayload('realtime')
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '实时订单加载失败')
+    }
+    const payload = data?.data || {}
     applyPayload(payload, Date.now())
     setRequestCache(listCacheKey.value, payload)
   } catch (error) {
     if (!orders.value.length) {
-      const demoPayload = getDemoOrderListPayload('realtime')
-      applyPayload({ ...demoPayload, page: 1, page_size: pagination.pageSize }, Date.now())
-      if (!demoPayload?.items?.length) {
-        ElMessage.error('实时订单加载失败')
-      }
+      applyPayload({ items: [], total: 0, page: 1, page_size: pagination.pageSize, summary: {} }, Date.now())
+      ElMessage.error(error?.message || '实时订单加载失败')
     }
   } finally {
     loading.value = false
@@ -146,8 +140,8 @@ const loadOrders = async ({ background = false } = {}) => {
 }
 
 const applyStartOptions = (payload = {}, updatedAt = Date.now()) => {
-  startUsers.value = payload.users?.length ? payload.users : [...demoStartUsers]
-  startStations.value = payload.stations?.length ? payload.stations : getFallbackStationOptions()
+  startUsers.value = payload.users?.length ? payload.users : []
+  startStations.value = payload.stations?.length ? payload.stations : []
   startForm.user_id = payload.default_user_id || startUsers.value[0]?.id || null
   startForm.station_id =
     payload.default_station_id ||
@@ -170,11 +164,15 @@ const loadChargersByStation = async (stationId) => {
 
   try {
     const { data } = await fetchStationChargers(stationId)
-    startChargers.value = mergeChargersWithLocal(stationId, data?.data || []).filter((item) => Number(item.status) === 0)
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '电桩加载失败')
+    }
+    startChargers.value = (Array.isArray(data?.data) ? data.data : []).filter((item) => Number(item.status) === 0)
     startForm.charger_id = startChargers.value[0]?.id || null
   } catch (error) {
-    startChargers.value = mergeChargersWithLocal(stationId, []).filter((item) => Number(item.status) === 0)
-    startForm.charger_id = startChargers.value[0]?.id || null
+    startChargers.value = []
+    startForm.charger_id = null
+    ElMessage.error(error?.message || '电桩加载失败')
   }
 }
 
@@ -190,6 +188,9 @@ const loadStartOptions = async ({ background = false } = {}) => {
   startOptionsLoading.value = !cached || !background
   try {
     const { data } = await fetchOperatorOrderStartOptions()
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '订单创建选项加载失败')
+    }
     const payload = data?.data || {}
     applyStartOptions(payload, Date.now())
     setRequestCache(startCacheKey.value, payload)
@@ -198,11 +199,8 @@ const loadStartOptions = async ({ background = false } = {}) => {
     }
   } catch (error) {
     if (!cached) {
-      applyStartOptions({
-        users: [...demoStartUsers],
-        stations: getFallbackStationOptions(),
-      })
-      await loadChargersByStation(startForm.station_id)
+      applyStartOptions({ users: [], stations: [], chargers: [] })
+      ElMessage.error(error?.message || '订单创建选项加载失败')
     }
   } finally {
     startOptionsLoading.value = false
@@ -228,21 +226,20 @@ const submitStartOrder = async () => {
 
   startLoading.value = true
   try {
-    const { data } = await startDemoOrder({
+    const { data } = await startDemoCharging({
       user_id: startForm.user_id,
       station_id: startForm.station_id,
       charger_id: startForm.charger_id,
       source_type: startForm.source_type,
     })
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '演示订单创建失败')
+    }
+    clearRequestCache('/operator/orders')
+    clearRequestCache('/operator/stations')
     ElMessage.success(data?.message || '演示订单创建成功')
   } catch (error) {
-    startLocalDemoOrder({
-      station,
-      charger,
-      user: user || demoStartUsers[0],
-      sourceType: startForm.source_type,
-    })
-    ElMessage.success('已切换到本地演示订单')
+    ElMessage.error(error?.message || '演示订单创建失败')
   } finally {
     startLoading.value = false
     startDialogVisible.value = false
@@ -259,11 +256,15 @@ const handleFinish = async (row) => {
 
   try {
     busyOrderId.value = row.id
-    await finishDemoOrder(row.id)
-    ElMessage.success('订单已结束并完成扣费')
+    const { data } = await finishOperatorOrder(row.id)
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '订单结束失败')
+    }
+    clearRequestCache('/operator/orders')
+    clearRequestCache('/operator/stations')
+    ElMessage.success(data?.message || '订单已结束并完成扣费')
   } catch (error) {
-    finishLocalDemoOrder(row.id)
-    ElMessage.success('订单已转入历史订单')
+    ElMessage.error(error?.message || '订单结束失败')
   } finally {
     busyOrderId.value = null
     await loadOrders()
@@ -284,11 +285,15 @@ const handleMarkAbnormal = async (row) => {
 
   try {
     busyOrderId.value = row.id
-    await markDemoOrderAbnormal(row.id, { reason })
-    ElMessage.success('订单已标记为异常')
+    const { data } = await markOperatorOrderAbnormal(row.id, reason)
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '异常订单处理失败')
+    }
+    clearRequestCache('/operator/orders')
+    clearRequestCache('/operator/stations')
+    ElMessage.success(data?.message || '订单已标记为异常')
   } catch (error) {
-    markLocalDemoOrderAbnormal(row.id, reason || '会话异常结束')
-    ElMessage.success('订单已转入异常订单')
+    ElMessage.error(error?.message || '异常订单处理失败')
   } finally {
     busyOrderId.value = null
     await loadOrders()
@@ -392,16 +397,30 @@ onActivated(() => {
         <el-form-item label="用户">
           <el-select v-model="startForm.user_id" style="width: 100%">
             <el-option v-for="item in startUsers" :key="item.id" :label="`${item.nickname} / ${item.phone}`" :value="item.id" />
+            <template #empty>
+              <div class="empty-select-tip">暂无可用演示用户，请先执行初始化脚本</div>
+            </template>
           </el-select>
         </el-form-item>
         <el-form-item label="电站">
           <el-select v-model="startForm.station_id" style="width: 100%">
             <el-option v-for="item in manualStations" :key="item.id" :label="`${item.station_name} / ${item.status_text}`" :value="item.id" />
+            <template #empty>
+              <div class="empty-select-tip">暂无已审核通过的电站，请先完成电站审核</div>
+            </template>
           </el-select>
         </el-form-item>
         <el-form-item label="电桩">
           <el-select v-model="startForm.charger_id" style="width: 100%">
-            <el-option v-for="item in startChargers" :key="item.id" :label="`${item.charger_name} / ${item.type} / ${item.power_kw}kW`" :value="item.id" />
+            <el-option
+              v-for="item in startChargers"
+              :key="item.id"
+              :label="`${item.sn_code} / ${item.charger_name} / ${item.station_name} / ${item.status_text}`"
+              :value="item.id"
+            />
+            <template #empty>
+              <div class="empty-select-tip">暂无可用空闲电桩，请先在电桩管理中新增或恢复电桩状态</div>
+            </template>
           </el-select>
         </el-form-item>
         <el-form-item label="订单来源">
@@ -428,6 +447,13 @@ onActivated(() => {
 
 .cell-stack span {
   color: var(--color-text-2);
+}
+
+.empty-select-tip {
+  padding: 12px;
+  color: var(--color-text-2);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 @media (max-width: 1280px) {

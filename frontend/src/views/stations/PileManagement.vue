@@ -15,15 +15,7 @@ import {
   fetchStationChargers,
   updateStationCharger,
 } from '../../api/operator'
-import { buildRequestCacheKey, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
-import {
-  addLocalCharger,
-  batchAddLocalChargers,
-  getFallbackChargersForStation,
-  regenerateLocalChargers,
-  updateLocalChargerStatus,
-} from '../../utils/chargerDemoStore'
-import { getFallbackStationOptions } from '../../utils/stationFallbacks'
+import { buildRequestCacheKey, clearRequestCache, formatCacheLabel, getRequestCache, setRequestCache, shouldRefreshRequestCache } from '../../utils/requestCache'
 
 const route = useRoute()
 const CACHE_TTL = 60 * 1000
@@ -124,7 +116,7 @@ const resetAddForm = () => {
 }
 
 const applyChargers = (remoteRows = [], updatedAt = Date.now()) => {
-  chargers.value = getFallbackChargersForStation(selectedStation.value, remoteRows)
+  chargers.value = remoteRows
   tableReady.value = true
   updateCacheLabel(updatedAt)
 }
@@ -132,9 +124,9 @@ const applyChargers = (remoteRows = [], updatedAt = Date.now()) => {
 const loadStations = async ({ background = false } = {}) => {
   const cached = getRequestCache(stationCacheKey.value, { ttl: CACHE_TTL, allowStale: true })
   if (cached) {
-    stations.value = Array.isArray(cached.value) && cached.value.length ? cached.value : getFallbackStationOptions()
+    stations.value = Array.isArray(cached.value) ? cached.value : []
     if (!selectedStationId.value && stations.value.length) {
-      selectedStationId.value = String(route.query.stationId || stations.value[0].id)
+      selectedStationId.value = String(route.query.stationId || stations.value.find((item) => Number(item.status) === 0)?.id || stations.value[0].id)
     }
     updateCacheLabel(cached.updatedAt)
   }
@@ -142,19 +134,23 @@ const loadStations = async ({ background = false } = {}) => {
   stationLoading.value = !cached || !background
   try {
     const { data } = await fetchOperatorStationOptions()
-    const items = Array.isArray(data?.data) && data.data.length ? data.data : getFallbackStationOptions()
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '电站列表加载失败')
+    }
+    const items = Array.isArray(data?.data) && data.data.length ? data.data : []
     stations.value = items
     if (String(route.query.stationId || '') && items.some((item) => String(item.id) === String(route.query.stationId))) {
       selectedStationId.value = String(route.query.stationId)
     } else if (!selectedStationId.value && items.length) {
-      selectedStationId.value = String(items[0].id)
+      selectedStationId.value = String(items.find((item) => Number(item.status) === 0)?.id || items[0].id)
     }
     setRequestCache(stationCacheKey.value, items)
     updateCacheLabel(Date.now())
   } catch (error) {
     if (!stations.value.length) {
-      stations.value = getFallbackStationOptions()
-      selectedStationId.value = String(route.query.stationId || stations.value[0]?.id || '')
+      stations.value = []
+      selectedStationId.value = ''
+      ElMessage.error(error?.message || '电站列表加载失败')
       updateCacheLabel(Date.now())
     }
   } finally {
@@ -177,13 +173,15 @@ const loadChargers = async ({ background = false } = {}) => {
   loading.value = !cached || !background
   try {
     const { data } = await fetchStationChargers(selectedStationId.value)
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '电桩列表加载失败')
+    }
     const remoteRows = Array.isArray(data?.data) ? data.data : []
-    const nextRows = remoteRows.length ? remoteRows : getFallbackChargersForStation(selectedStation.value, [])
-    applyChargers(nextRows, Date.now())
-    setRequestCache(chargerCacheKey.value, nextRows)
+    applyChargers(remoteRows, Date.now())
+    setRequestCache(chargerCacheKey.value, remoteRows)
   } catch (error) {
-    const fallbackRows = cached?.value?.length ? cached.value : getFallbackChargersForStation(selectedStation.value, [])
-    applyChargers(fallbackRows, Date.now())
+    applyChargers(cached?.value || [], Date.now())
+    ElMessage.error(error?.message || '电桩列表加载失败')
   } finally {
     loading.value = false
   }
@@ -194,12 +192,21 @@ const rebuildDemoChargers = async () => {
     ElMessage.warning('请先选择电站')
     return
   }
-  const demoRows = regenerateLocalChargers(selectedStation.value, {
-    count: Math.max(4, Number(selectedStation.value.planned_charger_count || 6)),
-  })
-  setRequestCache(chargerCacheKey.value, demoRows)
-  await loadChargers({ background: true })
-  ElMessage.success('演示电桩数据已重建')
+  try {
+    const { data } = await batchCreateStationChargers(selectedStation.value.id, {
+      count: Math.max(1, Number(selectedStation.value.planned_charger_count || 4)),
+      type: 'DC',
+      power_kw: 120,
+    })
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '演示电桩生成失败')
+    }
+    clearRequestCache('/operator/stations')
+    await loadChargers({ background: true })
+    ElMessage.success(data?.message || '演示电桩已写入数据库')
+  } catch (error) {
+    ElMessage.error(error?.message || '演示电桩生成失败')
+  }
 }
 
 const openAddDialog = () => {
@@ -223,17 +230,20 @@ const submitAddCharger = async () => {
 
   submitLoading.value = true
   try {
-    await createStationCharger(selectedStation.value.id, {
+    const { data } = await createStationCharger(selectedStation.value.id, {
       sn_code: addForm.sn_code.trim(),
       charger_name: addForm.charger_name.trim(),
       type: addForm.type,
       power_kw: Number(addForm.power_kw),
       status: Number(addForm.status),
     })
-    ElMessage.success('电桩新增成功')
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '电桩新增失败')
+    }
+    clearRequestCache('/operator/stations')
+    ElMessage.success(data?.message || '电桩新增成功')
   } catch (error) {
-    addLocalCharger(selectedStation.value, addForm)
-    ElMessage.success('后端暂未写入成功，已先补入当前演示电桩')
+    ElMessage.error(error?.message || '电桩新增失败')
   } finally {
     submitLoading.value = false
     addDialogVisible.value = false
@@ -258,15 +268,18 @@ const submitBatchCreate = async () => {
 
   batchSubmitting.value = true
   try {
-    await batchCreateStationChargers(selectedStation.value.id, {
+    const { data } = await batchCreateStationChargers(selectedStation.value.id, {
       count: Number(batchForm.count),
       type: batchForm.type,
       power_kw: Number(batchForm.power_kw),
     })
-    ElMessage.success('批量生成成功')
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '批量生成失败')
+    }
+    clearRequestCache('/operator/stations')
+    ElMessage.success(data?.message || '批量生成成功')
   } catch (error) {
-    batchAddLocalChargers(selectedStation.value, batchForm)
-    ElMessage.success('后端暂未写入成功，已生成演示电桩')
+    ElMessage.error(error?.message || '批量生成失败')
   } finally {
     batchSubmitting.value = false
     batchDialogVisible.value = false
@@ -276,11 +289,14 @@ const submitBatchCreate = async () => {
 
 const updateChargerStatus = async (row, status) => {
   try {
-    await updateStationCharger(selectedStationId.value, row.id, { status })
-    ElMessage.success('电桩状态已更新')
+    const { data } = await updateStationCharger(selectedStationId.value, row.id, { status })
+    if (data?.code !== 200) {
+      throw new Error(data?.message || '电桩状态更新失败')
+    }
+    clearRequestCache('/operator/stations')
+    ElMessage.success(data?.message || '电桩状态已更新')
   } catch (error) {
-    updateLocalChargerStatus(selectedStationId.value, row.id, status)
-    ElMessage.success('后端未返回成功，已更新当前演示状态')
+    ElMessage.error(error?.message || '电桩状态更新失败')
   } finally {
     await loadChargers({ background: true })
   }

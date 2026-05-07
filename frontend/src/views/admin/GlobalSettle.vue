@@ -13,7 +13,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import PageSectionHeader from '../../components/console/PageSectionHeader.vue'
 import MetricCard from '../../components/console/MetricCard.vue'
 import EmptyStateBlock from '../../components/console/EmptyStateBlock.vue'
-import { fetchDemoFlowHealth, fetchDemoSettlements, runDemoSettlement } from '../../api/demo'
+import { fetchDemoFlowHealth } from '../../api/demo'
+import http from '../../api/http'
 import { mockSettlementRows } from '../../mock/backoffice'
 
 const loading = ref(false)
@@ -246,18 +247,25 @@ const executionProgress = computed(() => {
 const fetchAllData = async () => {
   loading.value = true
   try {
-    const [settlementResp, healthResp] = await Promise.all([
-      fetchDemoSettlements(),
-      fetchDemoFlowHealth(),
-    ])
-    const operatorRows = Array.isArray(settlementResp?.data?.data)
-      ? settlementResp.data.data.map((item) => normalizeOperatorRow(item)).filter(Boolean)
+    const settlementResp = await http.get('/admin/finance/settlements')
+    if (settlementResp?.data?.code !== 200) {
+      throw new Error(settlementResp?.data?.message || '清分数据加载失败')
+    }
+    const operatorRows = Array.isArray(settlementResp?.data?.operator_records)
+      ? settlementResp.data.operator_records.map((item) => normalizeOperatorRow(item)).filter(Boolean)
       : []
     applySettlementSnapshot(operatorRows)
-    const health = healthResp?.data?.data || {}
-    stats.pendingOrderCount = Number(health.unsettled_order_count || 0)
+    try {
+      const healthResp = await fetchDemoFlowHealth()
+      if (healthResp?.data?.code === 200) {
+        const health = healthResp?.data?.data || {}
+        stats.pendingOrderCount = Number(health.unsettled_order_count || 0)
+      }
+    } catch {
+      stats.pendingOrderCount = 0
+    }
   } catch (error) {
-    applyFallbackData()
+    ElMessage.error(error?.message || '清分数据加载失败')
   } finally {
     loading.value = false
   }
@@ -286,7 +294,7 @@ const executeSettlement = async () => {
   appendLog('正在拉取目标日期订单并进行运营商分组')
 
   try {
-    const resp = await runDemoSettlement({ date: settleDate.value })
+    const resp = await http.post('/admin/finance/settle', { date: settleDate.value })
     const payload = resp?.data || {}
     if (payload.code !== 200) {
       appendLog(`执行失败：${payload.message || '未知错误'}`, 'error')
@@ -310,9 +318,8 @@ const executeSettlement = async () => {
     ElMessage.success(payload.message || '清分执行成功')
     await fetchAllData()
   } catch (error) {
-    applyFallbackData()
-    appendLog('后端执行接口未连通，已切换为演示清分结果', 'warning')
-    ElMessage.success('后端未返回结果，已切换为演示清分批次')
+    appendLog(`执行失败：${error?.message || '清分执行失败'}`, 'error')
+    ElMessage.error(error?.message || '清分执行失败')
   } finally {
     executing.value = false
   }
