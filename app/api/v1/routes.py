@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import json
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -1484,59 +1484,12 @@ async def get_admin_order_detail(
     return {"code": 200, "data": order_data}
 
 
-def build_operator_audit_metrics(
-    db: Session, operator_ids: list[int]
-) -> tuple[dict[int, list[OperatorBankCard]], dict[int, int], dict[int, int]]:
-    if not operator_ids:
-        return {}, {}, {}
-
-    cards_map: dict[int, list[OperatorBankCard]] = {operator_id: [] for operator_id in operator_ids}
-    card_rows = (
-        db.query(OperatorBankCard)
-        .filter(OperatorBankCard.operator_id.in_(operator_ids))
-        .order_by(
-            OperatorBankCard.operator_id.asc(),
-            OperatorBankCard.is_default.desc(),
-            OperatorBankCard.created_at.desc(),
-        )
-        .all()
-    )
-    for card in card_rows:
-        cards_map.setdefault(card.operator_id, []).append(card)
-
-    station_counts = dict(
-        db.query(Station.operator_id, func.count(Station.id))
-        .filter(Station.operator_id.in_(operator_ids), Station.is_deleted.is_(False))
-        .group_by(Station.operator_id)
-        .all()
-    )
-    charger_counts = dict(
-        db.query(Station.operator_id, func.count(Charger.id))
-        .join(Charger, Charger.station_id == Station.id)
-        .filter(Station.operator_id.in_(operator_ids), Charger.is_deleted.is_(False))
-        .group_by(Station.operator_id)
-        .all()
-    )
-    return cards_map, station_counts, charger_counts
-
-
-def serialize_operator_audit_record(
-    db: Session,
-    operator: Operator,
-    *,
-    cards_map: dict[int, list[OperatorBankCard]] | None = None,
-    station_counts: dict[int, int] | None = None,
-    charger_counts: dict[int, int] | None = None,
-) -> dict[str, Any]:
+def serialize_operator_audit_record(db: Session, operator: Operator) -> dict[str, Any]:
     cards = (
-        cards_map.get(operator.id, [])
-        if cards_map is not None
-        else (
-            db.query(OperatorBankCard)
-            .filter(OperatorBankCard.operator_id == operator.id)
-            .order_by(OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
-            .all()
-        )
+        db.query(OperatorBankCard)
+        .filter(OperatorBankCard.operator_id == operator.id)
+        .order_by(OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
+        .all()
     )
     bank_status, bank_status_text = resolve_bank_card_audit_status(cards)
     status = operator_audit_store.get(operator.id, {}).get("status") or ("approved" if operator.is_verified else "pending")
@@ -1559,12 +1512,8 @@ def serialize_operator_audit_record(
         "bankCardStatus": bank_status,
         "bankCardStatusText": bank_status_text,
         "bankCards": [serialize_bank_card(card) for card in cards],
-        "stationCount": (station_counts or {}).get(operator.id, 0)
-        if station_counts is not None
-        else db.query(func.count(Station.id)).filter(Station.operator_id == operator.id, Station.is_deleted.is_(False)).scalar() or 0,
-        "chargerCount": (charger_counts or {}).get(operator.id, 0)
-        if charger_counts is not None
-        else db.query(func.count(Charger.id)).join(Station, Charger.station_id == Station.id).filter(Station.operator_id == operator.id, Charger.is_deleted.is_(False)).scalar() or 0,
+        "stationCount": db.query(func.count(Station.id)).filter(Station.operator_id == operator.id, Station.is_deleted.is_(False)).scalar() or 0,
+        "chargerCount": db.query(func.count(Charger.id)).join(Station, Charger.station_id == Station.id).filter(Station.operator_id == operator.id, Charger.is_deleted.is_(False)).scalar() or 0,
         "status": status,
         "submittedAt": operator.created_at.strftime("%Y-%m-%d %H:%M:%S") if operator.created_at else "",
         "reviewedBy": "平台管理员" if reviewed_at else "",
@@ -1591,18 +1540,7 @@ async def get_operator_audits_api(
     ensure_demo_runtime_data(db)
     seed_runtime_data(db)
     operators = db.query(Operator).order_by(Operator.created_at.desc(), Operator.id.desc()).all()
-    operator_ids = [item.id for item in operators]
-    cards_map, station_counts, charger_counts = build_operator_audit_metrics(db, operator_ids)
-    records = [
-        serialize_operator_audit_record(
-            db,
-            item,
-            cards_map=cards_map,
-            station_counts=station_counts,
-            charger_counts=charger_counts,
-        )
-        for item in operators
-    ]
+    records = [serialize_operator_audit_record(db, item) for item in operators]
     return {"code": 200, "message": "success", "data": {"records": records}, "records": records}
 
 

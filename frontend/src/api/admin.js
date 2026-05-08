@@ -16,6 +16,7 @@ const getAdminUserSummary = () => ({
 
 export const fetchOperatorAudits = () => http.get('/admin/operators/audits')
 export const processOperatorAudit = (id, payload) => http.post(`/admin/operators/${id}/process`, payload)
+export const processOperatorBankCard = (id, payload) => http.post(`/admin/operators/${id}/bank-card/process`, payload)
 
 export const fetchAdminUsers = () => resolveMock(adminUsersState, { summary: getAdminUserSummary() })
 export const toggleAdminUserBlacklist = (id) => {

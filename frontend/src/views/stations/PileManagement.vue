@@ -47,6 +47,8 @@ const batchForm = reactive({
   count: 6,
   type: 'DC',
   power_kw: 120,
+  prefix: '',
+  start_no: 1,
 })
 
 const statusOptions = [
@@ -256,7 +258,7 @@ const openBatchDialog = () => {
     ElMessage.warning('请先选择电站')
     return
   }
-  Object.assign(batchForm, { count: 6, type: 'DC', power_kw: 120 })
+  Object.assign(batchForm, { count: 6, type: 'DC', power_kw: 120, prefix: selectedStation.value ? `ST${selectedStation.value.id}DC` : '', start_no: 1 })
   batchDialogVisible.value = true
 }
 
@@ -272,6 +274,8 @@ const submitBatchCreate = async () => {
       count: Number(batchForm.count),
       type: batchForm.type,
       power_kw: Number(batchForm.power_kw),
+      prefix: batchForm.prefix,
+      start_no: Number(batchForm.start_no || 1),
     })
     if (data?.code !== 200) {
       throw new Error(data?.message || '批量生成失败')
@@ -437,6 +441,12 @@ onActivated(() => {
         </el-form-item>
         <el-form-item label="默认功率(kW)">
           <el-input-number v-model="batchForm.power_kw" :min="7" :max="360" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="编号前缀">
+          <el-input v-model="batchForm.prefix" placeholder="例如 ST1DC" />
+        </el-form-item>
+        <el-form-item label="起始编号">
+          <el-input-number v-model="batchForm.start_no" :min="1" :max="999" style="width: 100%" />
         </el-form-item>
       </el-form>
       <template #footer>

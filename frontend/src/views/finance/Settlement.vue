@@ -50,7 +50,7 @@ const statCards = computed(() => [
     value: formatMoney(summary.value.platformFee),
     prefix: '¥',
     trend: '平台抽成汇总',
-    trendLabel: '用于毕业设计演示',
+    trendLabel: '按结算规则核算',
     tone: 'warning',
     icon: Tickets,
   },
