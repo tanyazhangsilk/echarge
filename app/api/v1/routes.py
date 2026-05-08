@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import json
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -128,6 +128,8 @@ template_store: list[dict[str, Any]] = []
 tag_store: list[dict[str, Any]] = []
 discount_campaign_store: list[dict[str, Any]] = []
 coupon_campaign_store: list[dict[str, Any]] = []
+last_demo_runtime_checked_at: datetime | None = None
+DEMO_RUNTIME_CHECK_INTERVAL_SECONDS = 30
 
 
 class TemplatePayload(BaseModel):
@@ -440,6 +442,14 @@ def ensure_demo_operator(db: Session) -> Operator:
 
 
 def ensure_demo_runtime_data(db: Session) -> None:
+    global last_demo_runtime_checked_at
+    now = datetime.now()
+    if (
+        last_demo_runtime_checked_at is not None
+        and (now - last_demo_runtime_checked_at).total_seconds() < DEMO_RUNTIME_CHECK_INTERVAL_SECONDS
+    ):
+        return
+
     operator = ensure_demo_operator(db)
     seed_phones = [
         "13800138000",
@@ -485,6 +495,7 @@ def ensure_demo_runtime_data(db: Session) -> None:
         and ready_card_count >= 1
         and ready_settlement_count >= 2
     ):
+        last_demo_runtime_checked_at = now
         return
 
     users = ensure_demo_users(db)
@@ -666,6 +677,7 @@ def ensure_demo_runtime_data(db: Session) -> None:
             )
         )
     db.commit()
+    last_demo_runtime_checked_at = now
 
 
 def generate_demo_order_no(db: Session) -> str:
@@ -1079,7 +1091,7 @@ def seed_runtime_data(db: Session) -> None:
             ]
         )
 
-    operators = db.query(Operator).order_by(Operator.created_at.desc()).all()
+    operators = db.query(Operator).options(noload("*")).order_by(Operator.created_at.desc()).all()
     if not operator_audit_store:
         for item in operators:
             operator_audit_store[item.id] = {
@@ -1147,9 +1159,20 @@ async def get_overview_summary(db: Session = Depends(get_db)) -> dict:
 
 @api_router.get("/overview/realtime-orders", tags=["overview"])
 async def get_realtime_orders(db: Session = Depends(get_db)) -> list[dict]:
-    realtime_orders = (
-        db.query(Order)
-        .options(joinedload(Order.user), joinedload(Order.station), joinedload(Order.charger).joinedload(Charger.station))
+    realtime_rows = (
+        db.query(
+            Order.id.label("id"),
+            Order.order_no.label("order_no"),
+            Order.start_time.label("start_time"),
+            Order.total_kwh.label("total_kwh"),
+            Order.status.label("status"),
+            User.nickname.label("user_nickname"),
+            User.phone.label("user_phone"),
+            Station.name.label("station_name"),
+        )
+        .select_from(Order)
+        .outerjoin(User, Order.user_id == User.id)
+        .outerjoin(Station, Order.station_id == Station.id)
         .filter(Order.status == 0)
         .order_by(Order.start_time.desc())
         .limit(5)
@@ -1157,15 +1180,15 @@ async def get_realtime_orders(db: Session = Depends(get_db)) -> list[dict]:
     )
     return [
         {
-            "id": order.id,
-            "order_no": order.order_no,
-            "user_name": user_display_name(order.user) if order.user else "",
-            "station_name": get_station_name(order),
-            "charged_kwh": float(order.charge_amount),
-            "charge_duration": order_duration_minutes(order),
-            "status": ORDER_STATUS_LABELS.get(order.status, "unknown"),
+            "id": row.id,
+            "order_no": row.order_no,
+            "user_name": row.user_nickname or (f"user-{str(row.user_phone)[-4:]}" if row.user_phone else ""),
+            "station_name": row.station_name or "",
+            "charged_kwh": float(row.total_kwh or 0),
+            "charge_duration": int((datetime.now() - row.start_time).total_seconds() / 60) if row.start_time else 0,
+            "status": ORDER_STATUS_LABELS.get(row.status, "unknown"),
         }
-        for order in realtime_orders
+        for row in realtime_rows
     ]
 
 class ManualSettleRequest(BaseModel):
@@ -1484,14 +1507,24 @@ async def get_admin_order_detail(
     return {"code": 200, "data": order_data}
 
 
-def serialize_operator_audit_record(db: Session, operator: Operator) -> dict[str, Any]:
-    cards = (
-        db.query(OperatorBankCard)
-        .filter(OperatorBankCard.operator_id == operator.id)
-        .order_by(OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
-        .all()
-    )
-    bank_status, bank_status_text = resolve_bank_card_audit_status(cards)
+def serialize_operator_audit_record(
+    db: Session,
+    operator: Operator,
+    *,
+    cards: list[OperatorBankCard] | None = None,
+    station_count: int | None = None,
+    charger_count: int | None = None,
+) -> dict[str, Any]:
+    resolved_cards = cards
+    if resolved_cards is None:
+        resolved_cards = (
+            db.query(OperatorBankCard)
+            .options(noload("*"))
+            .filter(OperatorBankCard.operator_id == operator.id)
+            .order_by(OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
+            .all()
+        )
+    bank_status, bank_status_text = resolve_bank_card_audit_status(resolved_cards)
     status = operator_audit_store.get(operator.id, {}).get("status") or ("approved" if operator.is_verified else "pending")
     reviewed_at = operator_audit_store.get(operator.id, {}).get("reviewed_at", "")
     remark = operator_audit_store.get(operator.id, {}).get("remark", "")
@@ -1511,9 +1544,9 @@ def serialize_operator_audit_record(db: Session, operator: Operator) -> dict[str
         "licenseUrl": operator.license_url or "营业执照/法人证件资料已提交",
         "bankCardStatus": bank_status,
         "bankCardStatusText": bank_status_text,
-        "bankCards": [serialize_bank_card(card) for card in cards],
-        "stationCount": db.query(func.count(Station.id)).filter(Station.operator_id == operator.id, Station.is_deleted.is_(False)).scalar() or 0,
-        "chargerCount": db.query(func.count(Charger.id)).join(Station, Charger.station_id == Station.id).filter(Station.operator_id == operator.id, Charger.is_deleted.is_(False)).scalar() or 0,
+        "bankCards": [serialize_bank_card(card) for card in resolved_cards],
+        "stationCount": station_count if station_count is not None else db.query(func.count(Station.id)).filter(Station.operator_id == operator.id, Station.is_deleted.is_(False)).scalar() or 0,
+        "chargerCount": charger_count if charger_count is not None else db.query(func.count(Charger.id)).join(Station, Charger.station_id == Station.id).filter(Station.operator_id == operator.id, Charger.is_deleted.is_(False)).scalar() or 0,
         "status": status,
         "submittedAt": operator.created_at.strftime("%Y-%m-%d %H:%M:%S") if operator.created_at else "",
         "reviewedBy": "平台管理员" if reviewed_at else "",
@@ -1539,8 +1572,45 @@ async def get_operator_audits_api(
 ):
     ensure_demo_runtime_data(db)
     seed_runtime_data(db)
-    operators = db.query(Operator).order_by(Operator.created_at.desc(), Operator.id.desc()).all()
-    records = [serialize_operator_audit_record(db, item) for item in operators]
+    operators = db.query(Operator).options(noload("*")).order_by(Operator.created_at.desc(), Operator.id.desc()).all()
+    operator_ids = [item.id for item in operators]
+    station_count_map = {}
+    charger_count_map = {}
+    card_map: dict[int, list[OperatorBankCard]] = {}
+    if operator_ids:
+        station_count_map = dict(
+            db.query(Station.operator_id, func.count(Station.id))
+            .filter(Station.operator_id.in_(operator_ids), Station.is_deleted.is_(False))
+            .group_by(Station.operator_id)
+            .all()
+        )
+        charger_count_map = dict(
+            db.query(Station.operator_id, func.count(Charger.id))
+            .join(Charger, Charger.station_id == Station.id)
+            .filter(Station.operator_id.in_(operator_ids), Charger.is_deleted.is_(False))
+            .group_by(Station.operator_id)
+            .all()
+        )
+        card_rows = (
+            db.query(OperatorBankCard)
+            .options(noload("*"))
+            .filter(OperatorBankCard.operator_id.in_(operator_ids))
+            .order_by(OperatorBankCard.operator_id.asc(), OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
+            .all()
+        )
+        for row in card_rows:
+            card_map.setdefault(row.operator_id, []).append(row)
+
+    records = [
+        serialize_operator_audit_record(
+            db,
+            item,
+            cards=card_map.get(item.id, []),
+            station_count=int(station_count_map.get(item.id, 0)),
+            charger_count=int(charger_count_map.get(item.id, 0)),
+        )
+        for item in operators
+    ]
     return {"code": 200, "message": "success", "data": {"records": records}, "records": records}
 
 
@@ -1551,7 +1621,7 @@ async def process_operator_audit_api(
     _context: RoleContext = Depends(require_admin_context),
     db: Session = Depends(get_db),
 ):
-    operator = db.query(Operator).filter(Operator.id == operator_id).first()
+    operator = db.query(Operator).options(noload("*")).filter(Operator.id == operator_id).first()
     if not operator:
         return {"code": 404, "message": "运营商不存在"}
     action = (payload.action or "").strip().lower()
@@ -1582,6 +1652,7 @@ async def process_operator_bank_card_api(
         return {"code": 400, "message": "action 仅支持 approve/reject"}
     card = (
         db.query(OperatorBankCard)
+        .options(noload("*"))
         .filter(OperatorBankCard.operator_id == operator_id)
         .order_by(OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
         .first()
@@ -2546,6 +2617,7 @@ async def get_operator_bank_cards(
 
     cards = (
         db.query(OperatorBankCard)
+        .options(noload("*"))
         .filter(OperatorBankCard.operator_id == operator_id)
         .order_by(OperatorBankCard.is_default.desc(), OperatorBankCard.created_at.desc())
         .all()
@@ -2595,6 +2667,7 @@ async def submit_operator_bank_card(
 
     existing_cards = (
         db.query(OperatorBankCard)
+        .options(noload("*"))
         .filter(OperatorBankCard.operator_id == operator_id)
         .order_by(OperatorBankCard.created_at.desc())
         .all()
@@ -2642,6 +2715,7 @@ async def get_operator_bank_card_audit_status(
 
     cards = (
         db.query(OperatorBankCard)
+        .options(noload("*"))
         .filter(OperatorBankCard.operator_id == operator_id)
         .order_by(OperatorBankCard.created_at.desc())
         .all()
